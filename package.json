@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Scan AI-generated projects for production readiness issues",
   "license": "MIT",
   "author": "prodlint contributors",

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2] - 2026-02-16
+
+### Changed
+- Set homepage to prodlint.com
+- Expand npm keywords for better discoverability (cursor, copilot, cli, scanner)
+- Exclude source maps from npm package (tarball 65KB → ~35KB)
+- Add GitHub Action, MCP server, and example output to README
+- Add SECURITY.md, CODE_OF_CONDUCT.md, CHANGELOG.md, PR template
+
 ## [0.2.1] - 2026-02-15
 
 ### Security
