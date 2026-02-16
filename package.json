@@ -1,0 +1,52 @@
+{
+  "name": "prodlint",
+  "version": "0.1.0",
+  "description": "Scan AI-generated projects for production readiness issues",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "prodlint": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "node dist/cli.js ."
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.57.1",
+    "@types/node": "^25.2.3",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "lint",
+    "security",
+    "ai",
+    "vibe-coding",
+    "production-readiness",
+    "next.js",
+    "react",
+    "typescript"
+  ]
+}
