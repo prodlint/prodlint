@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/prodlint/prodlint/actions/workflows/ci.yml/badge.svg)](https://github.com/prodlint/prodlint/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/prodlint.svg)](https://www.npmjs.com/package/prodlint)
+[![npm downloads](https://img.shields.io/npm/dm/prodlint.svg)](https://www.npmjs.com/package/prodlint)
 [![prodlint](https://img.shields.io/badge/prodlint-99%2F100-brightgreen)](https://prodlint.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
