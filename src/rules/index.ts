@@ -8,6 +8,8 @@ import { inputValidationRule } from './input-validation.js'
 import { rateLimitingRule } from './rate-limiting.js'
 import { corsConfigRule } from './cors-config.js'
 import { aiSmellsRule } from './ai-smells.js'
+import { unsafeHtmlRule } from './unsafe-html.js'
+import { sqlInjectionRule } from './sql-injection.js'
 
 export const rules: Rule[] = [
   secretsRule,
@@ -19,4 +21,6 @@ export const rules: Rule[] = [
   rateLimitingRule,
   corsConfigRule,
   aiSmellsRule,
+  unsafeHtmlRule,
+  sqlInjectionRule,
 ]

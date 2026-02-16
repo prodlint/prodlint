@@ -18,12 +18,15 @@ export interface FileContext {
   content: string
   lines: string[]
   ext: string
+  commentMap: boolean[]
 }
 
 export interface ProjectContext {
   root: string
   packageJson: Record<string, unknown> | null
   declaredDependencies: Set<string>
+  tsconfigPaths: Set<string>
+  hasAuthMiddleware: boolean
   gitignoreContent: string | null
   envInGitignore: boolean
   allFiles: string[]
@@ -58,6 +61,5 @@ export interface ScanResult {
 
 export interface ScanOptions {
   path: string
-  json?: boolean
   ignore?: string[]
 }

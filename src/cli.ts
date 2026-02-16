@@ -1,18 +1,7 @@
 import { parseArgs } from 'node:util'
-import { readFileSync } from 'node:fs'
 import { scan } from './scanner.js'
 import { reportPretty, reportJson } from './reporter.js'
-
-function getVersion(): string {
-  try {
-    const pkg = JSON.parse(
-      readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
-    )
-    return pkg.version ?? '0.0.0'
-  } catch {
-    return '0.0.0'
-  }
-}
+import { getVersion } from './utils/version.js'
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -39,7 +28,6 @@ async function main() {
 
   const result = await scan({
     path: targetPath,
-    json: values.json,
     ignore: values.ignore as string[],
   })
 
@@ -49,7 +37,6 @@ async function main() {
     console.log(reportPretty(result))
   }
 
-  // Exit code 1 if any critical findings
   if (result.summary.critical > 0) {
     process.exit(1)
   }

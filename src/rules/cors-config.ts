@@ -1,4 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
+import { isCommentLine } from '../utils/patterns.js'
 
 export const corsConfigRule: Rule = {
   id: 'cors-config',
@@ -12,13 +13,10 @@ export const corsConfigRule: Rule = {
     const findings: Finding[] = []
 
     for (let i = 0; i < file.lines.length; i++) {
+      if (isCommentLine(file.lines, i, file.commentMap)) continue
+
       const line = file.lines[i]
-      const trimmed = line.trim()
 
-      // Skip comments and strings in regex/test patterns
-      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
-
-      // Check for Access-Control-Allow-Origin: *
       if (/['"]Access-Control-Allow-Origin['"]\s*[,:]\s*['"]\*['"]/.test(line)) {
         findings.push({
           ruleId: 'cors-config',
@@ -31,7 +29,6 @@ export const corsConfigRule: Rule = {
         })
       }
 
-      // Check for cors() with no arguments (allows all origins)
       if (/cors\(\s*\)/.test(line)) {
         findings.push({
           ruleId: 'cors-config',
@@ -44,7 +41,6 @@ export const corsConfigRule: Rule = {
         })
       }
 
-      // Check for origin: '*' in cors config
       if (/origin\s*:\s*['"]\*['"]/.test(line)) {
         findings.push({
           ruleId: 'cors-config',
@@ -57,7 +53,6 @@ export const corsConfigRule: Rule = {
         })
       }
 
-      // Check for origin: true (mirrors any requesting origin)
       if (/origin\s*:\s*true/.test(line)) {
         findings.push({
           ruleId: 'cors-config',

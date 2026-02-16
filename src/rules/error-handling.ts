@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isApiRoute } from '../utils/patterns.js'
+import { isApiRoute, isCommentLine } from '../utils/patterns.js'
 
 export const errorHandlingRule: Rule = {
   id: 'error-handling',
@@ -35,10 +35,13 @@ export const errorHandlingRule: Rule = {
       }
     }
 
-    // Check 2: Empty catch blocks
+    // Check 2: Empty catch blocks (all files)
     for (let i = 0; i < file.lines.length; i++) {
+      if (isCommentLine(file.lines, i, file.commentMap)) continue
+
       const line = file.lines[i]
-      // catch (...) {} or catch { } on same line
+
+      // Single-line empty catch: catch (...) {} or catch {}
       if (/catch\s*(\([^)]*\))?\s*\{\s*\}/.test(line)) {
         findings.push({
           ruleId: 'error-handling',

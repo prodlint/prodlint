@@ -1,32 +1,26 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { NODE_BUILTINS } from '../utils/patterns.js'
+import { isCommentLine, NODE_BUILTINS } from '../utils/patterns.js'
 
 // Packages that are commonly available without being in package.json
 const IMPLICIT_PACKAGES = new Set([
   'react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime',
-  // Next.js sub-packages
   'next', 'next/server', 'next/image', 'next/link', 'next/font',
   'next/navigation', 'next/headers', 'next/dynamic', 'next/script',
   'next/router', 'next/head', 'next/app', 'next/document',
 ])
 
-// Line-level patterns to capture import sources (no cross-line matching)
+// Line-level patterns to capture import sources
 const LINE_IMPORT_PATTERNS = [
-  // import ... from 'pkg' (single-line)
   /from\s+['"]([^'"./][^'"]*)['"]/,
-  // require('pkg')
   /require\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/,
-  // import('pkg') — dynamic
   /import\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/,
 ]
 
 function getPackageName(importPath: string): string {
-  // @scope/pkg/sub → @scope/pkg
   if (importPath.startsWith('@')) {
     const parts = importPath.split('/')
     return parts.slice(0, 2).join('/')
   }
-  // pkg/sub → pkg
   return importPath.split('/')[0]
 }
 
@@ -35,15 +29,16 @@ function isNodeBuiltin(name: string): boolean {
   return NODE_BUILTINS.has(name)
 }
 
-/**
- * Detect TypeScript/bundler path aliases like @/, ~/, #/
- * These are project-internal imports, not npm packages
- */
-function isPathAlias(importPath: string): boolean {
-  // @/ is the most common Next.js/TS alias
+function isPathAlias(importPath: string, tsconfigPaths: Set<string>): boolean {
+  // Common convention aliases
   if (importPath.startsWith('@/') || importPath === '@') return true
-  // ~/ and #/ are also common aliases
   if (importPath.startsWith('~/') || importPath.startsWith('#/')) return true
+
+  // Check against tsconfig.json paths
+  for (const prefix of tsconfigPaths) {
+    if (importPath === prefix || importPath.startsWith(prefix + '/')) return true
+  }
+
   return false
 }
 
@@ -56,17 +51,16 @@ export const hallucinatedImportsRule: Rule = {
   fileExtensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'],
 
   check(file: FileContext, project: ProjectContext): Finding[] {
-    if (!project.packageJson) return [] // Can't check without package.json
+    if (!project.packageJson) return []
 
     const findings: Finding[] = []
-    const seen = new Set<string>() // Avoid duplicate findings per package
+    const seen = new Set<string>()
 
     for (let i = 0; i < file.lines.length; i++) {
-      const line = file.lines[i]
-      const trimmed = line.trim()
-
       // Skip comments
-      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
+      if (isCommentLine(file.lines, i, file.commentMap)) continue
+
+      const line = file.lines[i]
 
       for (const pattern of LINE_IMPORT_PATTERNS) {
         const match = pattern.exec(line)
@@ -78,7 +72,7 @@ export const hallucinatedImportsRule: Rule = {
         if (seen.has(pkgName)) continue
         seen.add(pkgName)
 
-        if (isPathAlias(importPath)) continue
+        if (isPathAlias(importPath, project.tsconfigPaths)) continue
         if (isNodeBuiltin(pkgName)) continue
         if (IMPLICIT_PACKAGES.has(importPath) || IMPLICIT_PACKAGES.has(pkgName)) continue
         if (project.declaredDependencies.has(pkgName)) continue

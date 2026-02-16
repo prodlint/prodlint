@@ -1,12 +1,11 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isApiRoute } from '../utils/patterns.js'
 
-// Patterns indicating input validation is present
 const VALIDATION_PATTERNS = [
-  /\.parse\s*\(/,       // zod .parse()
-  /\.safeParse\s*\(/,   // zod .safeParse()
-  /\.validate\s*\(/,    // yup/joi .validate()
-  /\.validateSync\s*\(/, // yup .validateSync()
+  /\.parse\s*\(/,
+  /\.safeParse\s*\(/,
+  /\.validate\s*\(/,
+  /\.validateSync\s*\(/,
   /Joi\.object/,
   /z\.object/,
   /z\.string/,
@@ -16,15 +15,13 @@ const VALIDATION_PATTERNS = [
   /ajv/i,
   /typebox/i,
   /valibot/i,
-  /typeof\s+.*body/,    // Basic typeof checks
+  /typeof\s+.*body/,
 ]
 
-// Patterns indicating request body access
 const BODY_ACCESS_PATTERNS = [
   /req\.body/,
-  /request\.json\(\)/,
-  /await\s+req\.json\(\)/,
-  /\.json\(\)\s*as\b/,
+  /request\.json\s*\(\)/,
+  /req\.json\s*\(\)/,
 ]
 
 export const inputValidationRule: Rule = {
@@ -38,15 +35,12 @@ export const inputValidationRule: Rule = {
   check(file: FileContext, _project: ProjectContext): Finding[] {
     if (!isApiRoute(file.relativePath)) return []
 
-    // Check if body is accessed
     const accessesBody = BODY_ACCESS_PATTERNS.some(p => p.test(file.content))
     if (!accessesBody) return []
 
-    // Check if validation exists
     const hasValidation = VALIDATION_PATTERNS.some(p => p.test(file.content))
     if (hasValidation) return []
 
-    // Find the line where body is accessed
     let bodyLine = 1
     for (let i = 0; i < file.lines.length; i++) {
       if (BODY_ACCESS_PATTERNS.some(p => p.test(file.lines[i]))) {

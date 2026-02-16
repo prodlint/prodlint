@@ -1,13 +1,11 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isClientComponent } from '../utils/patterns.js'
+import { isClientComponent, isCommentLine } from '../utils/patterns.js'
 
 // Server-only env vars that should never appear in client code
-const SERVER_ENV_PATTERNS = [
-  /process\.env\.(?!NEXT_PUBLIC_)([A-Z][A-Z0-9_]*)/g,
-]
+const SERVER_ENV_PATTERN = /process\.env\.(?!NEXT_PUBLIC_)([A-Z][A-Z0-9_]*)/g
 
 // Env var names that are definitely server-only sensitive
-const SENSITIVE_ENV_NAMES = [
+const SENSITIVE_ENV_NAMES = new Set([
   'DATABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
   'STRIPE_SECRET_KEY',
@@ -20,7 +18,7 @@ const SENSITIVE_ENV_NAMES = [
   'REDIS_URL',
   'SMTP_PASSWORD',
   'SENDGRID_API_KEY',
-]
+])
 
 export const envExposureRule: Rule = {
   id: 'env-exposure',
@@ -28,7 +26,7 @@ export const envExposureRule: Rule = {
   description: 'Detects server environment variables used in client components and .env files not in .gitignore',
   category: 'security',
   severity: 'critical',
-  fileExtensions: [], // Check all files
+  fileExtensions: [],
 
   check(file: FileContext, project: ProjectContext): Finding[] {
     const findings: Finding[] = []
@@ -54,30 +52,25 @@ export const envExposureRule: Rule = {
     if (!isClientComponent(file.content)) return findings
 
     for (let i = 0; i < file.lines.length; i++) {
-      const line = file.lines[i]
-      // Skip comments
-      const trimmed = line.trim()
-      if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue
+      if (isCommentLine(file.lines, i, file.commentMap)) continue
 
-      for (const pattern of SERVER_ENV_PATTERNS) {
-        const regex = new RegExp(pattern.source, pattern.flags)
-        let match: RegExpExecArray | null
-        while ((match = regex.exec(line)) !== null) {
-          const envName = match[1]
-          // Only flag known-sensitive or any non-NEXT_PUBLIC_ in client code
-          const isSensitive = SENSITIVE_ENV_NAMES.includes(envName)
-          findings.push({
-            ruleId: 'env-exposure',
-            file: file.relativePath,
-            line: i + 1,
-            column: match.index + 1,
-            message: isSensitive
-              ? `Sensitive server env var "${envName}" used in client component`
-              : `Server env var "${envName}" used in client component (will be undefined at runtime)`,
-            severity: isSensitive ? 'critical' : 'warning',
-            category: 'security',
-          })
-        }
+      const line = file.lines[i]
+      const regex = new RegExp(SERVER_ENV_PATTERN.source, SERVER_ENV_PATTERN.flags)
+      let match: RegExpExecArray | null
+      while ((match = regex.exec(line)) !== null) {
+        const envName = match[1]
+        const isSensitive = SENSITIVE_ENV_NAMES.has(envName)
+        findings.push({
+          ruleId: 'env-exposure',
+          file: file.relativePath,
+          line: i + 1,
+          column: match.index + 1,
+          message: isSensitive
+            ? `Sensitive server env var "${envName}" used in client component`
+            : `Server env var "${envName}" used in client component (will be undefined at runtime)`,
+          severity: isSensitive ? 'critical' : 'warning',
+          category: 'security',
+        })
       }
     }
 

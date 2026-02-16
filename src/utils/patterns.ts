@@ -26,6 +26,55 @@ export function isServerComponent(content: string): boolean {
 }
 
 /**
+ * Pre-compute which lines are inside block comments.
+ * Returns a boolean array where true = line is inside a block comment.
+ */
+export function buildCommentMap(lines: string[]): boolean[] {
+  const map = new Array<boolean>(lines.length).fill(false)
+  let inBlock = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    if (inBlock) {
+      map[i] = true
+      if (line.includes('*/')) {
+        inBlock = false
+      }
+      continue
+    }
+
+    // Check for block comment start (not preceded by code on the same line that matters)
+    const trimmed = line.trim()
+    if (trimmed.startsWith('/*')) {
+      map[i] = true
+      if (!trimmed.includes('*/')) {
+        inBlock = true
+      }
+      continue
+    }
+
+    // Inline /* ... */ on a line with code — don't mark the whole line
+    // But a line that's ONLY a mid-block comment continuation (starts with *)
+    if (trimmed.startsWith('*')) {
+      // Could be JSDoc or block comment continuation
+      map[i] = true
+    }
+  }
+
+  return map
+}
+
+/**
+ * Check if a line is a comment (single-line or inside block comment)
+ */
+export function isCommentLine(lines: string[], lineIndex: number, commentMap: boolean[]): boolean {
+  if (commentMap[lineIndex]) return true
+  const trimmed = lines[lineIndex]?.trim() ?? ''
+  return trimmed.startsWith('//')
+}
+
+/**
  * Check if line is suppressed by a prodlint-disable comment
  */
 export function isLineSuppressed(
@@ -37,8 +86,11 @@ export function isLineSuppressed(
   for (const line of lines) {
     const trimmed = line.trim()
     if (trimmed === '' || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
-      const match = trimmed.match(/prodlint-disable\s+(\S+)/)
-      if (match && match[1] === ruleId) return true
+      const match = trimmed.match(/prodlint-disable\s+(.+)/)
+      if (match) {
+        const ids = match[1].split(/[\s,]+/).filter(Boolean)
+        if (ids.includes(ruleId)) return true
+      }
       continue
     }
     break // Stop at first non-comment, non-empty line
@@ -47,8 +99,11 @@ export function isLineSuppressed(
   // Check line-level disable (previous line)
   if (lineIndex > 0) {
     const prevLine = lines[lineIndex - 1].trim()
-    const match = prevLine.match(/prodlint-disable-next-line\s+(\S+)/)
-    if (match && match[1] === ruleId) return true
+    const match = prevLine.match(/prodlint-disable-next-line\s+(.+)/)
+    if (match) {
+      const ids = match[1].split(/[\s,]+/).filter(Boolean)
+      if (ids.includes(ruleId)) return true
+    }
   }
 
   return false

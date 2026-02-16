@@ -19,27 +19,22 @@ const AUTH_EXEMPT_PATTERNS = [
 
 // Patterns that indicate auth is being checked
 const AUTH_PATTERNS = [
-  /getSession/,
-  /getServerSession/,
-  /getUser/,
+  /getServerSession\s*\(/,
+  /getSession\s*\(/,
+  /\.auth\.getUser\s*\(/,
   /auth\(\)/,
-  /createClient.*auth/s,
-  /supabase.*auth\.getUser/s,
-  /session/i,
-  /authenticate/i,
-  /isAuthenticated/i,
-  /requireAuth/i,
-  /withAuth/i,
+  /authenticate\s*\(/,
+  /isAuthenticated/,
+  /requireAuth/,
+  /withAuth/,
   /NextAuth/,
-  /getToken/,
-  /verifyToken/,
-  /jwt\.verify/,
-  /cookies\(\)/,
-  /headers\(\)/,
-  /authorization/i,
-  /bearer/i,
+  /getToken\s*\(/,
+  /verifyToken\s*\(/,
+  /jwt\.verify\s*\(/,
   /createRouteHandlerClient/,
   /createServerComponentClient/,
+  /authorization/i,
+  /bearer/i,
 ]
 
 export const authChecksRule: Rule = {
@@ -50,13 +45,16 @@ export const authChecksRule: Rule = {
   severity: 'critical',
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
-  check(file: FileContext, _project: ProjectContext): Finding[] {
+  check(file: FileContext, project: ProjectContext): Finding[] {
     if (!isApiRoute(file.relativePath)) return []
 
     // Check if route is exempt
     for (const pattern of AUTH_EXEMPT_PATTERNS) {
       if (pattern.test(file.relativePath)) return []
     }
+
+    // If project uses middleware-based auth, downgrade to info
+    const severity = project.hasAuthMiddleware ? 'info' as const : 'critical' as const
 
     // Check if any auth pattern exists in the file
     for (const pattern of AUTH_PATTERNS) {
@@ -72,13 +70,17 @@ export const authChecksRule: Rule = {
       }
     }
 
+    const message = project.hasAuthMiddleware
+      ? 'API route has no inline auth check (middleware auth detected — verify coverage)'
+      : 'API route has no authentication check'
+
     return [{
       ruleId: 'auth-checks',
       file: file.relativePath,
       line: handlerLine,
       column: 1,
-      message: 'API route has no authentication check',
-      severity: 'critical',
+      message,
+      severity,
       category: 'security',
     }]
   },
