@@ -64,6 +64,6 @@ function printHelp() {
 }
 
 main().catch((err) => {
-  console.error(err)
+  console.error('prodlint error:', err instanceof Error ? err.message : 'Unknown error')
   process.exit(2)
 })

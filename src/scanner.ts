@@ -42,7 +42,7 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
 
   return {
     version: getVersion(),
-    scannedPath: root,
+    scannedPath: options.path,
     filesScanned: filePaths.length,
     scanDurationMs: Math.round(performance.now() - start),
     findings,

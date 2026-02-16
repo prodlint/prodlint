@@ -1,6 +1,6 @@
 import fg from 'fast-glob'
-import { readFile, stat } from 'node:fs/promises'
-import { resolve, extname } from 'node:path'
+import { readFile, stat, realpath } from 'node:fs/promises'
+import { resolve, extname, sep } from 'node:path'
 import { buildCommentMap } from './patterns.js'
 import type { FileContext, ProjectContext } from '../types.js'
 
@@ -43,6 +43,7 @@ export async function walkFiles(
     ignore: [...DEFAULT_IGNORES, ...extraIgnores],
     absolute: false,
     dot: true,
+    followSymbolicLinks: false,
   })
 
   return files.sort()
@@ -55,12 +56,17 @@ export async function readFileContext(
   try {
     const absolutePath = resolve(root, relativePath)
 
+    // Verify the resolved path stays within the project root
+    const realRoot = await realpath(root)
+    const realFile = await realpath(absolutePath)
+    if (!realFile.startsWith(realRoot + sep) && realFile !== realRoot) return null
+
     // Skip files over 1MB
     const fileStats = await stat(absolutePath)
     if (fileStats.size > MAX_FILE_SIZE) return null
 
     const content = await readFile(absolutePath, 'utf-8')
-    const lines = content.split('\n')
+    const lines = content.split(/\r?\n|\r/)
     return {
       absolutePath,
       relativePath,

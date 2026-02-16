@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-// prodlint-disable-next-line hallucinated-imports
 import { z } from 'zod'
+import { stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
 
@@ -18,7 +19,24 @@ server.tool(
     ignore: z.array(z.string()).optional().describe('Glob patterns to ignore'),
   },
   async ({ path, ignore }) => {
-    const result = await scan({ path, ignore })
+    // Validate the path exists and is a directory
+    const resolved = resolve(path)
+    try {
+      const stats = await stat(resolved)
+      if (!stats.isDirectory()) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: ${path} is not a directory` }],
+          isError: true,
+        }
+      }
+    } catch {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${path} does not exist or is not accessible` }],
+        isError: true,
+      }
+    }
+
+    const result = await scan({ path: resolved, ignore })
 
     const summary = [
       `## Production Readiness Score: ${result.overallScore}/100`,
@@ -57,6 +75,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Prodlint MCP server error:', err)
+  console.error('Prodlint MCP server error:', err instanceof Error ? err.message : 'Unknown error')
   process.exit(1)
 })

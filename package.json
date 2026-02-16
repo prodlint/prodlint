@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Scan AI-generated projects for production readiness issues",
   "license": "MIT",
   "author": "prodlint contributors",
@@ -40,7 +40,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "fast-glob": "^3.3.3",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
