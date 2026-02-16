@@ -20,6 +20,33 @@ prodlint catches what TypeScript and ESLint miss: **production readiness gaps**.
 npx prodlint
 ```
 
+## Example Output
+
+```
+  prodlint v0.2.1
+  Scanned 142 files in 87ms
+
+  src/app/api/users/route.ts
+    8:1  CRIT  API route has no authentication check              auth-checks
+    8:1  WARN  API route has no rate limiting                     rate-limiting
+
+  src/components/chat.tsx
+   24:5  CRIT  Hardcoded Stripe secret key detected               secrets
+
+  src/lib/db.ts
+   15:1  CRIT  SQL query built with template literal interpolation sql-injection
+
+  Scores
+  security        40 ████████░░░░░░░░░░░░
+  reliability     70 ██████████████░░░░░░
+  performance     95 ███████████████████░
+  ai-quality      88 ██████████████████░░
+
+  Overall: 73/100
+
+  3 critical · 4 warnings · 2 info
+```
+
 ## Usage
 
 ```bash
@@ -31,7 +58,7 @@ npx prodlint --ignore "*.test.ts" # Ignore patterns
 
 ## What It Checks
 
-prodlint runs **11 rules** across 4 categories:
+prodlint runs **11 rules** across 3 categories:
 
 ### Security
 | Rule | Severity | What it detects |
@@ -64,9 +91,7 @@ Each category starts at 100 points. Deductions:
 - **Warning**: -3 points
 - **Info**: -1 point
 
-Overall score = average of all 4 categories (security, reliability, performance, ai-quality).
-
-Exit code is `1` if any critical findings exist, `0` otherwise.
+Overall score = average of all category scores. Exit code is `1` if any critical findings exist, `0` otherwise.
 
 ## Smart Detection
 
@@ -76,6 +101,63 @@ prodlint avoids common false positives:
 - **Middleware auth detection** — if your project uses Clerk/NextAuth/Supabase middleware, auth findings are downgraded to info
 - **TypeScript path aliases** — `@/`, `~/`, and custom tsconfig paths aren't flagged as hallucinated imports
 - **Route exemptions** — auth, webhook, health, and cron routes are exempt from auth/rate-limit checks
+
+## GitHub Action
+
+Add prodlint to your CI pipeline. It posts a score summary as a PR comment and can fail builds below a threshold.
+
+```yaml
+- uses: prodlint/prodlint@v1
+  with:
+    threshold: 70    # Fail if score < 70 (optional)
+    comment: true    # Post PR comment (default: true)
+    ignore: '*.test.ts, __mocks__/**'  # Ignore patterns (optional)
+```
+
+**Inputs:**
+| Input | Default | Description |
+|-------|---------|-------------|
+| `path` | `.` | Path to scan |
+| `threshold` | `0` | Minimum score to pass (0-100) |
+| `ignore` | `''` | Comma-separated glob patterns to ignore |
+| `comment` | `true` | Post a PR comment with results |
+
+**Outputs:**
+| Output | Description |
+|--------|-------------|
+| `score` | Overall score (0-100) |
+| `critical` | Number of critical findings |
+
+## MCP Server
+
+prodlint ships an MCP server for AI coding tools (Cursor, Claude Code, Windsurf, etc.).
+
+```bash
+npx prodlint-mcp
+```
+
+### Claude Code
+
+```bash
+claude mcp add prodlint npx prodlint-mcp
+```
+
+### Cursor / Windsurf
+
+Add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "prodlint": {
+      "command": "npx",
+      "args": ["prodlint-mcp"]
+    }
+  }
+}
+```
+
+The MCP server exposes a single `scan` tool that accepts a project path and returns the full score breakdown with findings.
 
 ## Suppressing Findings
 

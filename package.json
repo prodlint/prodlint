@@ -12,7 +12,7 @@
   "bugs": {
     "url": "https://github.com/prodlint/prodlint/issues"
   },
-  "homepage": "https://github.com/prodlint/prodlint#readme",
+  "homepage": "https://prodlint.com",
   "bin": {
     "prodlint": "./dist/cli.js",
     "prodlint-mcp": "./dist/mcp.js"
@@ -26,7 +26,8 @@
     }
   },
   "files": [
-    "dist",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
     "action.yml"
   ],
   "scripts": {
@@ -57,14 +58,21 @@
     "linter",
     "security",
     "ai",
+    "ai-code",
     "vibe-coding",
     "production-readiness",
     "code-quality",
+    "code-scanner",
     "next.js",
     "react",
     "typescript",
     "static-analysis",
+    "cli",
+    "scanner",
     "mcp",
-    "mcp-server"
+    "mcp-server",
+    "cursor",
+    "copilot",
+    "devtools"
   ]
 }
