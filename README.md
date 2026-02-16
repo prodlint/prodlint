@@ -23,7 +23,7 @@ npx prodlint
 ## Example Output
 
 ```
-  prodlint v0.2.1
+  prodlint v0.2.2
   Scanned 142 files in 87ms
 
   src/app/api/users/route.ts
