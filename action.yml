@@ -1,0 +1,138 @@
+name: 'Prodlint'
+description: 'Scan AI-generated projects for production readiness issues'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  path:
+    description: 'Path to scan (default: current directory)'
+    required: false
+    default: '.'
+  threshold:
+    description: 'Minimum score to pass (0-100). Fails the check if score is below this.'
+    required: false
+    default: '0'
+  ignore:
+    description: 'Glob patterns to ignore (comma-separated)'
+    required: false
+    default: ''
+  comment:
+    description: 'Post a PR comment with results (true/false)'
+    required: false
+    default: 'true'
+
+outputs:
+  score:
+    description: 'Overall production readiness score (0-100)'
+    value: ${{ steps.scan.outputs.score }}
+  critical:
+    description: 'Number of critical findings'
+    value: ${{ steps.scan.outputs.critical }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run prodlint
+      id: scan
+      shell: bash
+      run: |
+        ARGS="${{ inputs.path }}"
+        if [ -n "${{ inputs.ignore }}" ]; then
+          IFS=',' read -ra PATTERNS <<< "${{ inputs.ignore }}"
+          for p in "${PATTERNS[@]}"; do
+            ARGS="$ARGS --ignore \"$(echo $p | xargs)\""
+          done
+        fi
+
+        OUTPUT=$(npx -y prodlint@latest $ARGS --json 2>&1) || true
+
+        SCORE=$(echo "$OUTPUT" | node -e "
+          const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+          console.log(d.overallScore);
+        " 2>/dev/null || echo "0")
+
+        CRITICAL=$(echo "$OUTPUT" | node -e "
+          const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+          console.log(d.summary.critical);
+        " 2>/dev/null || echo "0")
+
+        echo "score=$SCORE" >> $GITHUB_OUTPUT
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "$OUTPUT" > /tmp/prodlint-result.json
+
+    - name: Generate comment body
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      id: comment
+      shell: bash
+      run: |
+        SCORE="${{ steps.scan.outputs.score }}"
+        THRESHOLD="${{ inputs.threshold }}"
+
+        if [ "$SCORE" -ge 80 ]; then
+          EMOJI="✅"
+          COLOR="brightgreen"
+        elif [ "$SCORE" -ge 60 ]; then
+          EMOJI="⚠️"
+          COLOR="yellow"
+        else
+          EMOJI="🚨"
+          COLOR="red"
+        fi
+
+        # Build comment from JSON
+        BODY=$(node -e "
+          const fs = require('fs');
+          const d = JSON.parse(fs.readFileSync('/tmp/prodlint-result.json', 'utf8'));
+          const lines = [];
+          lines.push('## ' + '$EMOJI' + ' Prodlint Score: **' + d.overallScore + '/100**');
+          lines.push('');
+          lines.push('| Category | Score | Issues |');
+          lines.push('|----------|-------|--------|');
+          for (const c of d.categoryScores) {
+            const icon = c.score >= 80 ? '🟢' : c.score >= 60 ? '🟡' : '🔴';
+            lines.push('| ' + icon + ' ' + c.category + ' | ' + c.score + '/100 | ' + c.findingCount + ' |');
+          }
+          if (d.summary.critical > 0) {
+            lines.push('');
+            lines.push('### Critical Issues');
+            lines.push('');
+            const crits = d.findings.filter(f => f.severity === 'critical');
+            for (const f of crits.slice(0, 10)) {
+              lines.push('- **' + f.ruleId + '** ' + f.file + ':' + f.line + ' — ' + f.message);
+            }
+            if (crits.length > 10) {
+              lines.push('- ...and ' + (crits.length - 10) + ' more');
+            }
+          }
+          lines.push('');
+          lines.push('---');
+          lines.push('*Scanned ' + d.filesScanned + ' files in ' + d.scanDurationMs + 'ms · [prodlint](https://prodlint.com)*');
+          console.log(lines.join('\n'));
+        ")
+
+        # Write to file for the comment step
+        echo "$BODY" > /tmp/prodlint-comment.md
+
+    - name: Post PR comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: prodlint
+        path: /tmp/prodlint-comment.md
+
+    - name: Check threshold
+      if: inputs.threshold != '0'
+      shell: bash
+      run: |
+        SCORE="${{ steps.scan.outputs.score }}"
+        THRESHOLD="${{ inputs.threshold }}"
+        if [ "$SCORE" -lt "$THRESHOLD" ]; then
+          echo "::error::Prodlint score ($SCORE) is below threshold ($THRESHOLD)"
+          exit 1
+        fi

@@ -80,6 +80,13 @@ export function reportPretty(result: ScanResult): string {
   }
   lines.push('')
 
+  // Badge
+  const badgeColor = result.overallScore >= 80 ? 'brightgreen' : result.overallScore >= 60 ? 'yellow' : 'red'
+  const badgeUrl = `https://img.shields.io/badge/prodlint-${result.overallScore}%2F100-${badgeColor}`
+  lines.push(pc.dim('  Add to your README:'))
+  lines.push(pc.dim(`  [![prodlint](${badgeUrl})](https://prodlint.com)`))
+  lines.push('')
+
   return lines.join('\n')
 }
 

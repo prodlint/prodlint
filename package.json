@@ -14,7 +14,8 @@
   },
   "homepage": "https://github.com/prodlint/prodlint#readme",
   "bin": {
-    "prodlint": "./dist/cli.js"
+    "prodlint": "./dist/cli.js",
+    "prodlint-mcp": "./dist/mcp.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +26,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "action.yml"
   ],
   "scripts": {
     "build": "tsup",
@@ -36,6 +38,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1"
   },
@@ -59,6 +62,8 @@
     "next.js",
     "react",
     "typescript",
-    "static-analysis"
+    "static-analysis",
+    "mcp",
+    "mcp-server"
   ]
 }
