@@ -67,4 +67,41 @@ describe('error-handling rule', () => {
     const routeFinding = findings.find(f => f.message.includes('no try/catch'))
     expect(routeFinding?.line).toBe(3)
   })
+
+  it('passes API route using Inngest serve()', () => {
+    const file = makeFile(
+      `import { serve } from 'inngest/next'\nimport { inngest } from '@/inngest'\nexport const { GET, POST } = serve({ client: inngest, functions: [] })`,
+      { relativePath: 'app/api/inngest/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+  })
+
+  it('passes API route using tRPC handler', () => {
+    const file = makeFile(
+      `import { fetchRequestHandler } from '@trpc/server/adapters/fetch'\nexport function GET(req) { return fetchRequestHandler({ req, router }) }`,
+      { relativePath: 'app/api/trpc/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+  })
+
+  it('still flags custom handler without try/catch', () => {
+    const file = makeFile(
+      `export async function POST(req) {\n  const data = await req.json()\n  await db.insert(data)\n  return Response.json({ ok: true })\n}`,
+      { relativePath: 'app/api/custom/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(true)
+  })
+
+  it('still flags empty catch in serve() file', () => {
+    const file = makeFile(
+      `import { serve } from 'inngest/next'\nexport const { GET, POST } = serve({ client: inngest, functions: [] })\nfunction helper() { try { x() } catch (e) {} }`,
+      { relativePath: 'app/api/inngest/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(true)
+    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+  })
 })

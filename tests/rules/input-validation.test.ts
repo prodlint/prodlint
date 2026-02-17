@@ -68,4 +68,49 @@ describe('input-validation rule', () => {
     const findings = inputValidationRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('passes with inline guard clause on body', () => {
+    const file = makeFile(
+      `export async function POST(req) {\n  const body = await req.json()\n  if (!body.name) return Response.json({ error: 'missing' }, { status: 400 })\n}`,
+      { relativePath: 'app/api/submit/route.ts' },
+    )
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('passes with optional chain comparison', () => {
+    const file = makeFile(
+      `export async function DELETE(req) {\n  const body = await req.json()\n  if (body?.confirmation !== 'DELETE') return Response.json({ error: 'confirm' }, { status: 400 })\n}`,
+      { relativePath: 'app/api/account/route.ts' },
+    )
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('passes with data guard clause after request.json()', () => {
+    const file = makeFile(
+      `export async function POST(request) {\n  const data = await request.json()\n  if (!data.email) throw new Error('missing email')\n}`,
+      { relativePath: 'app/api/signup/route.ts' },
+    )
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('still flags when body accessed with zero validation', () => {
+    const file = makeFile(
+      `export async function POST(req) {\n  const body = await req.json()\n  await db.insert(body)\n}`,
+      { relativePath: 'app/api/create/route.ts' },
+    )
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('does not treat metadata/database as body/data validation', () => {
+    const file = makeFile(
+      `export async function POST(req) {\n  const body = await req.json()\n  if (!metadata.field) return\n  if (metadata?.type === 'premium') return\n  await db.insert(body)\n}`,
+      { relativePath: 'app/api/create/route.ts' },
+    )
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

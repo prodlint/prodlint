@@ -20,6 +20,19 @@ export const unsafeHtmlRule: Rule = {
       // Only match dangerouslySetInnerHTML in JSX attribute position (after = or with {)
       // Avoids matching inside string literals, variable names, or regex patterns
       if (/dangerouslySetInnerHTML\s*=/.test(line) || /dangerouslySetInnerHTML\s*:/.test(line)) {
+        // JSON-LD exception: JSON.stringify in the __html value is provably safe
+        // Check current line and the next 2 lines, but only if they're part of the same JSX expression
+        // (i.e. no closing tag or new statement in between)
+        const context: string[] = [line]
+        for (let j = 1; j <= 2 && i + j < file.lines.length; j++) {
+          const nextLine = file.lines[i + j]
+          // Stop if we hit a line that looks like a new statement or JSX element
+          if (/^\s*<[^/]|^\s*(const|let|var|return|export|import)\s/.test(nextLine)) break
+          context.push(nextLine)
+        }
+        const expr = context.join(' ')
+        if (/__html\s*:\s*JSON\.stringify/.test(expr)) continue
+
         findings.push({
           ruleId: 'unsafe-html',
           file: file.relativePath,

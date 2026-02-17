@@ -48,4 +48,49 @@ describe('unsafe-html rule', () => {
     const findings = unsafeHtmlRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('skips dangerouslySetInnerHTML with JSON.stringify (same line)', () => {
+    const file = makeFile(
+      `<script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />`,
+      { ext: 'tsx' },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('skips dangerouslySetInnerHTML with JSON.stringify (multi-line)', () => {
+    const file = makeFile(
+      `<script\n  type="application/ld+json"\n  dangerouslySetInnerHTML={{\n    __html: JSON.stringify(jsonLd)\n  }}\n/>`,
+      { ext: 'tsx' },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('still flags dangerouslySetInnerHTML with variable content', () => {
+    const file = makeFile(
+      `<div dangerouslySetInnerHTML={{ __html: userContent }} />`,
+      { ext: 'tsx' },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('still flags when unrelated JSON.stringify is nearby', () => {
+    const file = makeFile(
+      `<div dangerouslySetInnerHTML={{ __html: userInput }} />\nconst debug = JSON.stringify(state)`,
+      { ext: 'tsx' },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('skips JSON-LD with __html: JSON.stringify split across lines', () => {
+    const file = makeFile(
+      `<script type="application/ld+json"\n  dangerouslySetInnerHTML={{ __html:\n    JSON.stringify(schema)\n  }} />`,
+      { ext: 'tsx' },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

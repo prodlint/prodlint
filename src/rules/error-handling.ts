@@ -14,8 +14,13 @@ export const errorHandlingRule: Rule = {
 
     // Check 1: API routes without try/catch
     if (isApiRoute(file.relativePath)) {
+      // Framework serve() patterns handle errors internally — skip only the try/catch check
+      const hasFrameworkServe = /\bserve\s*\(/.test(file.content)
+        || /createTRPCHandle/.test(file.content)
+        || /fetchRequestHandler/.test(file.content)
+
       const hasTryCatch = /try\s*\{/.test(file.content)
-      if (!hasTryCatch) {
+      if (!hasTryCatch && !hasFrameworkServe) {
         let handlerLine = 1
         for (let i = 0; i < file.lines.length; i++) {
           if (/export\s+(async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|handler)/i.test(file.lines[i])) {

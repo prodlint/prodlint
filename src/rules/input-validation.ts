@@ -16,6 +16,10 @@ const VALIDATION_PATTERNS = [
   /typebox/i,
   /valibot/i,
   /typeof\s+.*body/,
+  // Inline guard clauses on parsed body/data (\b prevents matching inside metadata, database, etc.)
+  /if\s*\(\s*!\b(body|data)\b\./,
+  /\b(body|data)\b\?\.\w+\s*(!==|===)/,
+  /typeof\s+\b(body|data)\b/,
 ]
 
 const BODY_ACCESS_PATTERNS = [
