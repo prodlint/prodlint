@@ -140,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: prodlint/prodlint@v0
+      - uses: prodlint/prodlint@v1
         with:
           threshold: 50
 ```
