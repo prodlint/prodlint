@@ -1,130 +1,159 @@
 # prodlint
 
-[![CI](https://github.com/prodlint/prodlint/actions/workflows/ci.yml/badge.svg)](https://github.com/prodlint/prodlint/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/prodlint.svg)](https://www.npmjs.com/package/prodlint)
 [![npm downloads](https://img.shields.io/npm/dm/prodlint.svg)](https://www.npmjs.com/package/prodlint)
-[![prodlint](https://img.shields.io/badge/prodlint-99%2F100-brightgreen)](https://prodlint.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Scan AI-generated projects for production readiness issues.
+Catch the bugs AI leaves behind.
 
-prodlint is a deterministic, zero-config CLI that checks your codebase for common problems in AI-generated and vibe-coded projects. No LLM required — just pattern matching against known anti-patterns.
-
-## Why?
-
-AI code generators (Cursor, Copilot, v0, Bolt) ship code that works in demos but breaks in production. Hardcoded secrets, hallucinated packages, missing auth checks, XSS vectors — these issues slip through because they're syntactically valid and pass type-checks.
-
-prodlint catches what TypeScript and ESLint miss: **production readiness gaps**.
-
-## Quick Start
+prodlint scans AI-generated JavaScript and TypeScript projects for production readiness issues — hallucinated imports, missing auth, exposed secrets, N+1 queries, and more. No LLM required, just pattern matching against known failure modes.
 
 ```bash
 npx prodlint
 ```
 
-## Example Output
-
 ```
-  prodlint v0.2.2
-  Scanned 142 files in 87ms
+  prodlint v0.3.0
+  Scanned 148 files in 92ms
 
-  src/app/api/users/route.ts
-    8:1  CRIT  API route has no authentication check              auth-checks
-    8:1  WARN  API route has no rate limiting                     rate-limiting
-
-  src/components/chat.tsx
-   24:5  CRIT  Hardcoded Stripe secret key detected               secrets
+  src/app/api/checkout/route.ts
+    12:1  CRIT  No rate limiting — anyone could spam this endpoint and run up your API costs  rate-limiting
+    28:5  WARN  Empty catch block silently swallows error  shallow-catch
 
   src/lib/db.ts
-   15:1  CRIT  SQL query built with template literal interpolation sql-injection
+    1:1   CRIT  Package "drizzle-orm" is imported but not in package.json  hallucinated-imports
 
   Scores
-  security        40 ████████░░░░░░░░░░░░
-  reliability     70 ██████████████░░░░░░
-  performance     95 ███████████████████░
-  ai-quality      88 ██████████████████░░
+  security        72 ████████████████░░░░  (8 issues)
+  reliability     85 █████████████████░░░  (4 issues)
+  performance     95 ███████████████████░  (1 issue)
+  ai-quality      90 ██████████████████░░  (3 issues)
 
-  Overall: 73/100
+  Overall: 85/100
 
-  3 critical · 4 warnings · 2 info
+  8 critical · 5 warnings · 3 info
 ```
 
-## Usage
+## Why?
+
+AI code generators (Cursor, Copilot, v0, Bolt, Claude) write code that works in demos but breaks in production. Hardcoded secrets, hallucinated packages, missing auth, XSS vectors — these pass type-checks and look correct but aren't.
+
+prodlint catches what TypeScript and ESLint miss: **production readiness gaps**.
+
+## Install
 
 ```bash
-npx prodlint                      # Scan current directory
+npx prodlint                      # Run directly (no install)
 npx prodlint ./my-app             # Scan specific path
-npx prodlint --json               # JSON output
+npx prodlint --json               # JSON output for CI
 npx prodlint --ignore "*.test.ts" # Ignore patterns
 ```
 
-## What It Checks
+Or install it:
 
-prodlint runs **11 rules** across 3 categories:
+```bash
+npm i -D prodlint     # Project dependency
+npm i -g prodlint     # Global install
+```
 
-### Security
-| Rule | Severity | What it detects |
-|------|----------|----------------|
-| `secrets` | critical | Hardcoded API keys (Stripe, AWS, Supabase, OpenAI, GitHub, SendGrid) |
-| `env-exposure` | critical | Server env vars in client components, `.env` not in `.gitignore` |
-| `auth-checks` | critical | API routes without authentication (middleware-aware) |
-| `unsafe-html` | critical | `dangerouslySetInnerHTML`, direct `innerHTML` assignment |
-| `sql-injection` | critical | SQL queries built with template literals or string concatenation |
-| `input-validation` | warning | API routes accessing request body without validation |
-| `rate-limiting` | warning | API routes without rate limiting |
-| `cors-config` | warning | `Access-Control-Allow-Origin: *`, `cors()` with no config |
+## 27 Rules across 4 Categories
 
-### Reliability
-| Rule | Severity | What it detects |
-|------|----------|----------------|
-| `hallucinated-imports` | critical | Imports of packages not in `package.json` and not Node built-ins |
-| `error-handling` | warning | API routes without try/catch, empty catch blocks |
+### Security (10 rules)
 
-### AI Quality
-| Rule | Severity | What it detects |
-|------|----------|----------------|
-| `ai-smells` | mixed | TODOs, placeholder functions, console.log spam, excessive `any`, commented-out code |
+| Rule | What it catches |
+|------|----------------|
+| `secrets` | API keys, tokens, passwords hardcoded in source |
+| `auth-checks` | API routes with no authentication |
+| `env-exposure` | `NEXT_PUBLIC_` on server-only secrets |
+| `input-validation` | Request body used without validation |
+| `cors-config` | `Access-Control-Allow-Origin: *` |
+| `unsafe-html` | `dangerouslySetInnerHTML` with user data |
+| `sql-injection` | String-interpolated SQL queries |
+| `open-redirect` | User input passed to `redirect()` |
+| `rate-limiting` | API routes with no rate limiter |
+| `phantom-dependency` | Packages in node_modules but missing from package.json |
 
-## Scoring
+### Reliability (6 rules)
 
-Each category starts at 100 points. Deductions:
+| Rule | What it catches |
+|------|----------------|
+| `hallucinated-imports` | Imports of packages not in package.json |
+| `error-handling` | Async operations without try/catch |
+| `unhandled-promise` | Floating promises with no await or .catch |
+| `shallow-catch` | Empty catch blocks that swallow errors |
+| `missing-loading-state` | Client components that fetch without a loading state |
+| `missing-error-boundary` | Route layouts without a matching error.tsx |
 
-- **Critical**: -10 points
-- **Warning**: -3 points
-- **Info**: -1 point
+### Performance (4 rules)
 
-Overall score = average of all category scores. Exit code is `1` if any critical findings exist, `0` otherwise.
+| Rule | What it catches |
+|------|----------------|
+| `no-sync-fs` | `readFileSync` in API routes |
+| `no-n-plus-one` | Database calls inside loops |
+| `no-unbounded-query` | `.findMany()` / `.select('*')` with no limit |
+| `no-dynamic-import-loop` | `import()` inside loops |
+
+### AI Quality (7 rules)
+
+| Rule | What it catches |
+|------|----------------|
+| `ai-smells` | `any` types, `console.log`, TODO comments piling up |
+| `placeholder-content` | Lorem ipsum, example emails, "your-api-key-here" left in production code |
+| `hallucinated-api` | `.flatten()`, `.contains()`, `.substr()` — methods AI invents |
+| `stale-fallback` | `localhost:3000` hardcoded in production code |
+| `comprehension-debt` | Functions over 80 lines, deep nesting, too many parameters |
+| `codebase-consistency` | Mixed naming conventions across the project |
+| `dead-exports` | Exported functions that nothing imports |
 
 ## Smart Detection
 
 prodlint avoids common false positives:
 
-- **Block comment awareness** — patterns inside `/* */` comments are ignored
-- **Middleware auth detection** — if your project uses Clerk/NextAuth/Supabase middleware, auth findings are downgraded to info
-- **TypeScript path aliases** — `@/`, `~/`, and custom tsconfig paths aren't flagged as hallucinated imports
+- **Block comment awareness** — patterns inside `/* */` are ignored
+- **Middleware detection** — if your project uses Clerk/NextAuth/Supabase middleware, auth findings are downgraded
+- **Path alias support** — `@/`, `~/`, and tsconfig paths aren't flagged as hallucinated imports
 - **Route exemptions** — auth, webhook, health, and cron routes are exempt from auth/rate-limit checks
+- **Test/script file awareness** — lower severity for non-production files
+
+## Scoring
+
+Each category starts at 100. Deductions per finding:
+
+| Severity | Deduction |
+|----------|-----------|
+| critical | -10 |
+| warning | -3 |
+| info | -1 |
+
+Overall score = average of the 4 category scores (floor 0). Exit code `1` if any critical findings exist.
 
 ## GitHub Action
 
-Add prodlint to your CI pipeline. It posts a score summary as a PR comment and can fail builds below a threshold.
+Add to `.github/workflows/prodlint.yml`:
 
 ```yaml
-- uses: prodlint/prodlint@v1
-  with:
-    threshold: 70    # Fail if score < 70 (optional)
-    comment: true    # Post PR comment (default: true)
-    ignore: '*.test.ts, __mocks__/**'  # Ignore patterns (optional)
+name: Prodlint
+on: [pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prodlint/prodlint@v0
+        with:
+          threshold: 50
 ```
 
-**Inputs:**
+Posts a score breakdown as a PR comment and fails the build if below threshold.
+
 | Input | Default | Description |
 |-------|---------|-------------|
 | `path` | `.` | Path to scan |
 | `threshold` | `0` | Minimum score to pass (0-100) |
-| `ignore` | `''` | Comma-separated glob patterns to ignore |
-| `comment` | `true` | Post a PR comment with results |
+| `ignore` | | Comma-separated glob patterns to ignore |
+| `comment` | `true` | Post PR comment with results |
 
-**Outputs:**
 | Output | Description |
 |--------|-------------|
 | `score` | Overall score (0-100) |
@@ -132,46 +161,33 @@ Add prodlint to your CI pipeline. It posts a score summary as a PR comment and c
 
 ## MCP Server
 
-prodlint ships an MCP server for AI coding tools (Cursor, Claude Code, Windsurf, etc.).
+Use prodlint inside Cursor, Claude Code, or any MCP-compatible editor:
 
-```bash
-npx prodlint-mcp
-```
-
-### Claude Code
-
+**Claude Code:**
 ```bash
 claude mcp add prodlint npx prodlint-mcp
 ```
 
-### Cursor / Windsurf
-
-Add to your MCP config:
-
+**Cursor / Windsurf:**
 ```json
 {
   "mcpServers": {
     "prodlint": {
       "command": "npx",
-      "args": ["prodlint-mcp"]
+      "args": ["-y", "prodlint-mcp"]
     }
   }
 }
 ```
 
-The MCP server exposes a single `scan` tool that accepts a project path and returns the full score breakdown with findings.
+Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
 
-## Suppressing Findings
+## Suppression
 
 Suppress a single line:
 ```ts
 // prodlint-disable-next-line secrets
-const key = "sk_test_example_for_documentation"
-```
-
-Suppress multiple rules:
-```ts
-// prodlint-disable-next-line secrets, auth-checks
+const key = "sk_test_example_for_docs"
 ```
 
 Suppress an entire file (place at top):
@@ -189,9 +205,11 @@ console.log(result.overallScore) // 0-100
 console.log(result.findings)     // Finding[]
 ```
 
-## Contributing
+## Badge
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and how to add new rules.
+```md
+[![prodlint](https://img.shields.io/badge/prodlint-85%2F100-brightgreen)](https://prodlint.com)
+```
 
 ## License
 
