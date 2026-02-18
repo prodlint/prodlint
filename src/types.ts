@@ -40,6 +40,8 @@ export interface Rule {
   severity: Severity
   fileExtensions: string[]
   check(file: FileContext, project: ProjectContext): Finding[]
+  /** Optional project-level analysis after all per-file checks complete */
+  checkProject?(files: FileContext[], project: ProjectContext): Finding[]
 }
 
 export interface CategoryScore {

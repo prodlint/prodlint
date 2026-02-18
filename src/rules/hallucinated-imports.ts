@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isCommentLine, NODE_BUILTINS } from '../utils/patterns.js'
+import { isCommentLine, NODE_BUILTINS, isTestFile, isScriptFile } from '../utils/patterns.js'
 
 // Packages that are commonly available without being in package.json
 const IMPLICIT_PACKAGES = new Set([
@@ -55,6 +55,7 @@ export const hallucinatedImportsRule: Rule = {
 
     const findings: Finding[] = []
     const seen = new Set<string>()
+    const isNonProd = isTestFile(file.relativePath) || isScriptFile(file.relativePath)
 
     for (let i = 0; i < file.lines.length; i++) {
       // Skip comments
@@ -83,7 +84,7 @@ export const hallucinatedImportsRule: Rule = {
           line: i + 1,
           column: match.index + 1,
           message: `Package "${pkgName}" is imported but not in package.json`,
-          severity: 'critical',
+          severity: isNonProd ? 'warning' : 'critical',
           category: 'reliability',
         })
       }

@@ -11,8 +11,8 @@ describe('error-handling rule', () => {
       { relativePath: 'app/api/data/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    const routeFinding = findings.find(f => f.message.includes('no try/catch'))
-    expect(routeFinding).toBeDefined()
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('no try/catch')
   })
 
   it('passes API route with try/catch', () => {
@@ -21,41 +21,16 @@ describe('error-handling rule', () => {
       { relativePath: 'app/api/data/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    const routeFinding = findings.find(f => f.message.includes('no try/catch'))
-    expect(routeFinding).toBeUndefined()
+    expect(findings).toHaveLength(0)
   })
 
-  it('flags single-line empty catch', () => {
-    const file = makeFile(`try { doThing() } catch (e) {}`)
-    const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(true)
-  })
-
-  it('flags multi-line empty catch', () => {
-    const file = makeFile(`try {\n  doThing()\n} catch (e) {\n}`)
-    const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(true)
-  })
-
-  it('passes catch with content', () => {
-    const file = makeFile(`try {\n  doThing()\n} catch (e) {\n  console.error(e)\n}`)
-    const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(false)
-  })
-
-  it('skips empty catch in comments', () => {
-    const file = makeFile(`// try { doThing() } catch (e) {}`)
-    const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(false)
-  })
-
-  it('skips non-API files for missing try/catch', () => {
+  it('skips non-API files', () => {
     const file = makeFile(
       `export function doThing() {\n  return 42\n}`,
       { relativePath: 'src/utils/helper.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+    expect(findings).toHaveLength(0)
   })
 
   it('reports correct handler line', () => {
@@ -64,8 +39,7 @@ describe('error-handling rule', () => {
       { relativePath: 'app/api/submit/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    const routeFinding = findings.find(f => f.message.includes('no try/catch'))
-    expect(routeFinding?.line).toBe(3)
+    expect(findings[0].line).toBe(3)
   })
 
   it('passes API route using Inngest serve()', () => {
@@ -74,7 +48,7 @@ describe('error-handling rule', () => {
       { relativePath: 'app/api/inngest/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+    expect(findings).toHaveLength(0)
   })
 
   it('passes API route using tRPC handler', () => {
@@ -83,25 +57,34 @@ describe('error-handling rule', () => {
       { relativePath: 'app/api/trpc/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+    expect(findings).toHaveLength(0)
   })
 
-  it('still flags custom handler without try/catch', () => {
+  it('flags custom handler without try/catch', () => {
     const file = makeFile(
       `export async function POST(req) {\n  const data = await req.json()\n  await db.insert(data)\n  return Response.json({ ok: true })\n}`,
       { relativePath: 'app/api/custom/route.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(true)
+    expect(findings).toHaveLength(1)
   })
 
-  it('still flags empty catch in serve() file', () => {
+  it('passes API route with try/catch even if catch is empty', () => {
     const file = makeFile(
-      `import { serve } from 'inngest/next'\nexport const { GET, POST } = serve({ client: inngest, functions: [] })\nfunction helper() { try { x() } catch (e) {} }`,
-      { relativePath: 'app/api/inngest/route.ts' },
+      `export async function GET() {\n  try { doThing() } catch (e) {}\n}`,
+      { relativePath: 'app/api/data/route.ts' },
+    )
+    // error-handling only checks try/catch exists; shallow-catch handles catch quality
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('flags pages/api route without try/catch', () => {
+    const file = makeFile(
+      `export default function handler(req, res) {\n  res.json({ ok: true })\n}`,
+      { relativePath: 'pages/api/data.ts' },
     )
     const findings = errorHandlingRule.check(file, project)
-    expect(findings.some(f => f.message.includes('Empty catch'))).toBe(true)
-    expect(findings.some(f => f.message.includes('no try/catch'))).toBe(false)
+    expect(findings).toHaveLength(1)
   })
 })

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (136 tests)
+npm run test         # vitest run (272 tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -40,10 +40,32 @@ cli.ts (parseArgs) → scanner.ts (scan)
 Each rule in `src/rules/` implements:
 
 ```typescript
-{ id, name, description, category, severity, fileExtensions, check(file: FileContext, project: ProjectContext): Finding[] }
+{
+  id, name, description, category, severity, fileExtensions,
+  check(file: FileContext, project: ProjectContext): Finding[],
+  checkProject?(files: FileContext[], project: ProjectContext): Finding[]  // optional, for cross-file analysis
+}
 ```
 
-Rules are registered in `src/rules/index.ts`. Currently 11 rules across 3 categories (security, reliability, ai-quality). Performance category exists but has no rules yet.
+Rules are registered in `src/rules/index.ts`. Currently 27 rules across all 4 categories (security: 10, reliability: 6, performance: 4, ai-quality: 7).
+
+### Two-Phase Scanning
+
+- **Phase 1**: Per-file rules — `rule.check(file, project)` called for each file
+- **Phase 2**: Project-level rules — `rule.checkProject(allFiles, project)` called once with all FileContexts
+
+Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency`
+
+### Shared Utilities (`src/utils/patterns.ts`)
+
+- `isApiRoute(path)` — Next.js API route detection
+- `isClientComponent(content)` / `isServerComponent(content)` — "use client" detection
+- `buildCommentMap(lines)` / `isCommentLine()` — comment handling
+- `isLineSuppressed()` — prodlint-disable support
+- `isTestFile(path)` — test/spec/\_\_tests\_\_ detection
+- `isScriptFile(path)` — scripts/ directory detection
+- `isConfigFile(path)` — *.config.*, .env*, next.config detection
+- `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting
 
 ### Key Patterns
 

@@ -110,6 +110,99 @@ export function isLineSuppressed(
 }
 
 /**
+ * Check if a file path looks like a test/spec file
+ */
+export function isTestFile(relativePath: string): boolean {
+  return /\.(test|spec)\.[jt]sx?$/.test(relativePath) ||
+    /(?:^|\/)__tests__\//.test(relativePath) ||
+    /(?:^|\/)tests?\//.test(relativePath) ||
+    /(?:^|\/)fixtures?\//.test(relativePath) ||
+    /(?:^|\/)mocks?\//.test(relativePath)
+}
+
+/**
+ * Check if a file path looks like a script (not application code)
+ */
+export function isScriptFile(relativePath: string): boolean {
+  return /(?:^|\/)scripts?\//.test(relativePath)
+}
+
+/**
+ * Check if a file path looks like a config file
+ */
+export function isConfigFile(relativePath: string): boolean {
+  const name = relativePath.split('/').pop() ?? ''
+  return /\.config\.[jt]sx?$/.test(name) ||
+    /\.config\.(mjs|cjs)$/.test(name) ||
+    name.startsWith('.env') ||
+    name === 'next.config.js' ||
+    name === 'next.config.ts' ||
+    name === 'next.config.mjs' ||
+    name === 'tailwind.config.ts' ||
+    name === 'tailwind.config.js' ||
+    name === 'postcss.config.js' ||
+    name === 'postcss.config.mjs' ||
+    name === 'tsconfig.json' ||
+    name === 'jest.config.ts' ||
+    name === 'jest.config.js' ||
+    name === 'vitest.config.ts' ||
+    name === 'vitest.config.mts'
+}
+
+/**
+ * Find loop bodies in source lines via brace counting.
+ * Returns array of { loopLine, bodyStart, bodyEnd } (0-indexed).
+ */
+export function findLoopBodies(
+  lines: string[],
+  commentMap: boolean[],
+): { loopLine: number; bodyStart: number; bodyEnd: number }[] {
+  const results: { loopLine: number; bodyStart: number; bodyEnd: number }[] = []
+
+  for (let i = 0; i < lines.length; i++) {
+    if (commentMap[i]) continue
+    const trimmed = lines[i].trim()
+    // Match for/forEach/map/while/for...of/for...in
+    const isLoop = /^\s*(for\s*\(|for\s+await\s*\(|while\s*\()/.test(lines[i]) ||
+      /\.(forEach|map)\s*\(/.test(trimmed)
+
+    if (!isLoop) continue
+
+    // Find the opening brace
+    let braceCount = 0
+    let bodyStart = -1
+    let foundOpen = false
+
+    for (let j = i; j < lines.length; j++) {
+      if (commentMap[j]) continue
+      const line = lines[j]
+      for (let k = 0; k < line.length; k++) {
+        const ch = line[k]
+        if (ch === '{') {
+          if (!foundOpen) {
+            bodyStart = j
+            foundOpen = true
+          }
+          braceCount++
+        } else if (ch === '}') {
+          braceCount--
+          if (foundOpen && braceCount === 0) {
+            results.push({ loopLine: i, bodyStart, bodyEnd: j })
+            // Jump outer loop past the end of this loop body
+            i = j
+            // Use a label-free approach: set j to lines.length to break inner
+            j = lines.length
+            break
+          }
+        }
+      }
+    }
+  }
+
+  return results
+}
+
+/**
  * Known Node.js built-in modules
  */
 export const NODE_BUILTINS = new Set([

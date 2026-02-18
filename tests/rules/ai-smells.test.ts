@@ -119,6 +119,20 @@ describe('ai-smells rule', () => {
     })
   })
 
+  it('skips test files', () => {
+    const lines = Array.from({ length: 7 }, (_, i) => `console.log("debug ${i}")`)
+    const file = makeFile(lines.join('\n'), { relativePath: 'tests/utils.test.ts' })
+    const findings = aiSmellsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('skips script files', () => {
+    const lines = Array.from({ length: 7 }, (_, i) => `console.log("step ${i}")`)
+    const file = makeFile(lines.join('\n'), { relativePath: 'scripts/seed.ts' })
+    const findings = aiSmellsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('returns empty for clean code', () => {
     const file = makeFile(`export function add(a: number, b: number): number {\n  return a + b\n}`)
     const findings = aiSmellsRule.check(file, project)

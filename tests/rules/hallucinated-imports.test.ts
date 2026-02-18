@@ -118,4 +118,28 @@ describe('hallucinated-imports rule', () => {
     const findings = hallucinatedImportsRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  it('downgrades severity to warning for test files', () => {
+    const file = makeFile(`import { foo } from 'missing-pkg'`, { relativePath: 'tests/foo.test.ts' })
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+  })
+
+  it('downgrades severity to warning for script files', () => {
+    const file = makeFile(`import { foo } from 'missing-pkg'`, { relativePath: 'scripts/seed.ts' })
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+  })
+
+  it('keeps critical severity for production code', () => {
+    const file = makeFile(`import { foo } from 'missing-pkg'`)
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
 })

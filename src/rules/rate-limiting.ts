@@ -61,7 +61,7 @@ export const rateLimitingRule: Rule = {
       file: file.relativePath,
       line: handlerLine,
       column: 1,
-      message: 'API route has no rate limiting',
+      message: 'No rate limiting — anyone could spam this endpoint and run up your API costs',
       severity: 'warning',
       category: 'security',
     }]

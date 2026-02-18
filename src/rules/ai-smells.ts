@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isCommentLine } from '../utils/patterns.js'
+import { isCommentLine, isTestFile, isScriptFile } from '../utils/patterns.js'
 
 const CONSOLE_LOG_THRESHOLD = 5
 const ANY_TYPE_THRESHOLD = 5
@@ -14,6 +14,9 @@ export const aiSmellsRule: Rule = {
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
   check(file: FileContext, _project: ProjectContext): Finding[] {
+    if (isTestFile(file.relativePath)) return []
+    if (isScriptFile(file.relativePath)) return []
+
     const findings: Finding[] = []
 
     let consoleLogCount = 0

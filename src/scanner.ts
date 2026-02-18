@@ -3,7 +3,7 @@ import { isLineSuppressed } from './utils/patterns.js'
 import { getVersion } from './utils/version.js'
 import { calculateScores, summarizeFindings } from './scorer.js'
 import { rules } from './rules/index.js'
-import type { Finding, ScanOptions, ScanResult } from './types.js'
+import type { Finding, FileContext, ScanOptions, ScanResult } from './types.js'
 import { resolve } from 'node:path'
 
 export async function scan(options: ScanOptions): Promise<ScanResult> {
@@ -14,10 +14,14 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
   const project = await buildProjectContext(root, filePaths)
 
   const findings: Finding[] = []
+  const allFiles: FileContext[] = []
 
+  // Phase 1: Per-file rules
   for (const relativePath of filePaths) {
     const file = await readFileContext(root, relativePath)
     if (!file) continue
+
+    allFiles.push(file)
 
     for (const rule of rules) {
       if (
@@ -34,6 +38,14 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
           findings.push(finding)
         }
       }
+    }
+  }
+
+  // Phase 2: Project-level rules (cross-file analysis)
+  for (const rule of rules) {
+    if (rule.checkProject) {
+      const projectFindings = rule.checkProject(allFiles, project)
+      findings.push(...projectFindings)
     }
   }
 
