@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Scan AI-generated projects for production readiness issues",
   "license": "MIT",
   "author": "prodlint contributors",
@@ -23,6 +23,9 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./mcp": {
+      "import": "./dist/mcp.js"
     }
   },
   "files": [
