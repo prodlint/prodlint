@@ -13,7 +13,7 @@ npx prodlint
 ```
 
 ```
-  prodlint v0.6.0
+  prodlint v0.7.0
   Scanned 148 files · 3 critical · 5 warnings
 
   src/app/api/checkout/route.ts
@@ -140,7 +140,7 @@ npm i -g prodlint     # Global install
 
 prodlint avoids common false positives:
 
-- **AST parsing** — Babel-based analysis for loops, imports, and SQL templates with regex fallback
+- **AST parsing** — Babel-based analysis for 11 rules (catch blocks, redirects, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
 - **Middleware detection** — Clerk, NextAuth, Supabase middleware detected — auth findings downgraded
 - **Block comment awareness** — patterns inside `/* */` are ignored

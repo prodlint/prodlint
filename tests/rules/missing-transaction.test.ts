@@ -74,4 +74,29 @@ describe('missing-transaction rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].message).toContain('3 Prisma write')
   })
+
+  // AST improvement: 2 writes in separate functions → 0 findings
+  it('AST: allows writes in separate functions (different scopes)', () => {
+    const file = makeFile([
+      'async function createUser(name: string) {',
+      '  await prisma.user.create({ data: { name } })',
+      '}',
+      '',
+      'async function logAction(action: string) {',
+      '  await prisma.log.create({ data: { action } })',
+      '}',
+    ].join('\n'), { relativePath: 'src/users.ts' })
+    const findings = missingTransactionRule.check(file, prismaProject)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile([
+      'await prisma.user.create({ data: { name } })',
+      'await prisma.log.create({ data: { action: "signup" } })',
+    ].join('\n'), { relativePath: 'src/auth.ts', withAst: false })
+    const findings = missingTransactionRule.check(file, prismaProject)
+    expect(findings).toHaveLength(1)
+  })
 })

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (405+ tests)
+npm run test         # vitest run (548+ tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -51,6 +51,8 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 11 (including `sql-injection`, `no-n-plus-one`).
+
 ### Two-Phase Scanning
 
 - **Phase 1**: Per-file rules — `rule.check(file, project)` called for each file
@@ -67,12 +69,16 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isTestFile(path)`, `isScriptFile(path)`, `isConfigFile(path)`
 - `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
 
-**`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+):
+**`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+, expanded v0.7.0):
 - `parseFile(content, fileName)` — parses JS/TS/JSX/TSX into Babel AST, returns null on failure
 - `walkAST(ast, visitor)` — simple recursive depth-first walker (no @babel/traverse dependency)
 - `isTaggedTemplateSql(node)` — detects `sql\`...\`` and `Prisma.sql\`...\`` tags
 - `findLoopsAST(ast)` — accurate loop body ranges using AST (replaces brace counting)
 - `getImportSources(ast)` — extracts import/require sources
+- `isUserInputNode(node)` — detects `req.query.x`, `searchParams.get()`, `formData.get()` (v0.7.0)
+- `isStaticString(node)` — detects StringLiteral and zero-expression TemplateLiteral (v0.7.0)
+- `findUseEffectRanges(ast)` — precise useEffect callback body line ranges (v0.7.0)
+- `subtreeContains(node, predicate)` — recursive subtree search helper (v0.7.0)
 
 **`src/utils/frameworks.ts`** — framework detection + whitelists:
 - `DEPENDENCY_TO_FRAMEWORK` — maps npm packages to framework identifiers

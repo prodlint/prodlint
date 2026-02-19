@@ -12,6 +12,8 @@ import type {
   TaggedTemplateExpression,
   ImportDeclaration,
   StringLiteral,
+  MemberExpression,
+  TemplateLiteral,
 } from '@babel/types'
 
 export type { ParseResult }
@@ -177,5 +179,107 @@ export function getImportSources(ast: ParseResult<File>): string[] {
   })
 
   return sources
+}
+
+/**
+ * Check if a node represents user input (request params, search params, form data).
+ * Matches: req.query.x, req.body.x, req.params.x, searchParams.get(),
+ *          formData.get(), request.nextUrl.searchParams.get()
+ */
+export function isUserInputNode(node: Node): boolean {
+  // req.query.x, req.body.x, req.params.x, request.query.x, etc.
+  if (node.type === 'MemberExpression') {
+    const mem = node as MemberExpression
+    if (mem.object.type === 'MemberExpression') {
+      const inner = mem.object as MemberExpression
+      if (inner.object.type === 'Identifier') {
+        const objName = inner.object.name
+        if (objName === 'req' || objName === 'request') {
+          if (inner.property.type === 'Identifier') {
+            const prop = inner.property.name
+            if (prop === 'query' || prop === 'body' || prop === 'params') return true
+          }
+        }
+      }
+    }
+  }
+
+  // searchParams.get(), formData.get()
+  if (node.type === 'CallExpression') {
+    const call = node as CallExpression
+    if (call.callee.type === 'MemberExpression') {
+      const callee = call.callee as MemberExpression
+      if (callee.property.type === 'Identifier' && callee.property.name === 'get') {
+        // searchParams.get()
+        if (callee.object.type === 'Identifier') {
+          const name = callee.object.name
+          if (name === 'searchParams' || name === 'formData') return true
+        }
+        // request.nextUrl.searchParams.get()
+        if (callee.object.type === 'MemberExpression') {
+          const inner = callee.object as MemberExpression
+          if (inner.property.type === 'Identifier' && inner.property.name === 'searchParams') {
+            return true
+          }
+        }
+      }
+    }
+  }
+
+  return false
+}
+
+/**
+ * Check if a node is a static string (StringLiteral or TemplateLiteral with 0 expressions).
+ */
+export function isStaticString(node: Node): boolean {
+  if (node.type === 'StringLiteral') return true
+  if (node.type === 'TemplateLiteral') {
+    return (node as TemplateLiteral).expressions.length === 0
+  }
+  return false
+}
+
+/**
+ * Find useEffect callback body line ranges (0-indexed).
+ * Returns array of {start, end} for each useEffect's callback body.
+ */
+export function findUseEffectRanges(ast: ParseResult<File>): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+
+  walkAST(ast.program, (node) => {
+    if (node.type !== 'CallExpression') return
+    const call = node as CallExpression
+    if (call.callee.type !== 'Identifier' || call.callee.name !== 'useEffect') return
+    const callback = call.arguments[0]
+    if (!callback || !callback.loc) return
+    ranges.push({
+      start: callback.loc.start.line - 1,
+      end: callback.loc.end.line - 1,
+    })
+  })
+
+  return ranges
+}
+
+/**
+ * Check if any node in a subtree matches a predicate.
+ */
+export function subtreeContains(node: Node, predicate: (n: Node) => boolean): boolean {
+  if (predicate(node)) return true
+  for (const key of Object.keys(node)) {
+    if (key === 'start' || key === 'end' || key === 'loc' || key === 'type') continue
+    const val = (node as any)[key]
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item && typeof item === 'object' && item.type) {
+          if (subtreeContains(item, predicate)) return true
+        }
+      }
+    } else if (val && typeof val === 'object' && val.type) {
+      if (subtreeContains(val, predicate)) return true
+    }
+  }
+  return false
 }
 

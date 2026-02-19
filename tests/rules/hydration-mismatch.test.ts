@@ -63,4 +63,33 @@ export default function Page() {
     const findings = hydrationMismatchRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  // AST improvement: precise useEffect range detection
+  it('AST: skips window.innerWidth inside complex useEffect', () => {
+    const file = makeFile([
+      'export default function Page() {',
+      '  useEffect(() => {',
+      '    const handleResize = () => {',
+      '      const width = window.innerWidth',
+      '      setState(width)',
+      '    }',
+      '    window.addEventListener("resize", handleResize)',
+      '    return () => window.removeEventListener("resize", handleResize)',
+      '  }, [])',
+      '  return <div>hello</div>',
+      '}',
+    ].join('\n'), { relativePath: 'app/page.tsx' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile(`export default function Page() {
+  const width = window.innerWidth
+  return <div>{width}</div>
+}`, { relativePath: 'app/page.tsx', withAst: false })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

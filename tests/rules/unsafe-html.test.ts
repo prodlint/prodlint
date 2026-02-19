@@ -93,4 +93,31 @@ describe('unsafe-html rule', () => {
     const findings = unsafeHtmlRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  // AST improvement: multi-line dangerouslySetInnerHTML with JSON.stringify beyond 2-line window
+  it('AST: skips dangerouslySetInnerHTML with JSON.stringify beyond 2-line window', () => {
+    const file = makeFile([
+      '<script',
+      '  type="application/ld+json"',
+      '  dangerouslySetInnerHTML={{',
+      '    __html:',
+      '      JSON.stringify(',
+      '        schema',
+      '      )',
+      '  }}',
+      '/>',
+    ].join('\n'), { ext: 'tsx' })
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile(
+      `<div dangerouslySetInnerHTML={{ __html: content }} />`,
+      { ext: 'tsx', withAst: false },
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

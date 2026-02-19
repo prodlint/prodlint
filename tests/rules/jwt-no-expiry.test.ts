@@ -45,4 +45,30 @@ describe('jwt-no-expiry rule', () => {
     const findings = jwtNoExpiryRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  // AST improvement: multi-line options beyond 5-line context window
+  it('AST: allows jwt.sign with expiresIn beyond 5-line window', () => {
+    const file = makeFile([
+      'const token = jwt.sign(',
+      '  {',
+      '    userId: user.id,',
+      '    email: user.email,',
+      '    name: user.name,',
+      '    role: user.role,',
+      '    permissions: user.permissions,',
+      '  },',
+      '  secret,',
+      '  { expiresIn: "24h" }',
+      ')',
+    ].join('\n'))
+    const findings = jwtNoExpiryRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile(`const token = jwt.sign({ userId: user.id }, secret)`, { withAst: false })
+    const findings = jwtNoExpiryRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

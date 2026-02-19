@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-02-19
+
+### Changed
+- Migrated 9 rules from regex-only to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`
+- Total AST-based rules: 11 of 52
+
+### Added
+- 4 new AST helpers: `isUserInputNode()`, `isStaticString()`, `findUseEffectRanges()`, `subtreeContains()`
+- 23 new tests validating AST improvements (548 total)
+
+### Fixed
+- `open-redirect`: `redirect("/dashboard")` no longer flagged (static string is safe)
+- `ssrf-risk`: `fetch("https://api.example.com")` no longer flagged; "allowlist" in comments no longer suppresses direct user input findings
+- `path-traversal`: "sanitize" in comments no longer suppresses direct user input findings
+- `jwt-no-expiry`: multi-line options beyond 5-line window now correctly detected
+- `unsafe-html`: multi-line `JSON.stringify` beyond 2-line window now detected; `dangerouslySetInnerHTML` in object literals now detected
+- `hydration-mismatch`: complex nested useEffect callbacks now precisely excluded via AST ranges
+- `missing-transaction`: writes in separate functions no longer flagged (scoped by enclosing function)
+- `leaked-env-in-logs`: `console.log("process.env.FOO is set")` no longer flagged (string literal, not actual env access)
+- `shallow-catch`: `}` inside template literal expressions no longer breaks catch body detection
+
 ## [0.2.2] - 2026-02-16
 
 ### Changed

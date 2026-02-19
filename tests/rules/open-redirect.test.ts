@@ -76,4 +76,35 @@ describe('open-redirect rule', () => {
     const findings = openRedirectRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  // AST improvement: static string arg is safe
+  it('AST: skips redirect("/dashboard") — static string is safe', () => {
+    const file = makeFile(`redirect("/dashboard")`)
+    const findings = openRedirectRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST improvement: template literal without expressions is safe
+  it('AST: skips redirect with static template literal', () => {
+    const file = makeFile('redirect(`/home`)')
+    const findings = openRedirectRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST improvement: still flags variable even if assigned to safe value (can't trace)
+  it('AST: still flags redirect(url) even when url is a safe-looking variable', () => {
+    const file = makeFile([
+      'const url = "/safe"',
+      'redirect(url)',
+    ].join('\n'))
+    const findings = openRedirectRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  // AST improvement: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile(`redirect(returnUrl)`, { withAst: false })
+    const findings = openRedirectRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

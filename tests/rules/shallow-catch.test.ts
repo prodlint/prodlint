@@ -108,4 +108,25 @@ describe('shallow-catch rule', () => {
     const findings = shallowCatchRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  // AST improvement: handles } inside template literal expression
+  it('AST: handles } inside template literal expression in catch body', () => {
+    const file = makeFile([
+      'try {',
+      '  doStuff()',
+      '} catch (e) {',
+      '  throw new Error(`Failed with ${JSON.stringify({ key: "}" })}`)',
+      '}',
+    ].join('\n'))
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST improvement: regex fallback still works
+  it('falls back to regex when AST is unavailable', () => {
+    const file = makeFile(`try { doStuff() } catch (e) {}`, { withAst: false })
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Empty catch')
+  })
 })

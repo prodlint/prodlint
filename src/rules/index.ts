@@ -31,7 +31,7 @@ import { leakedEnvInLogsRule } from './leaked-env-in-logs.js'
 import { insecureRandomRule } from './insecure-random.js'
 import { nextServerActionValidationRule } from './next-server-action-validation.js'
 import { missingTransactionRule } from './missing-transaction.js'
-// New rules (v0.6.0)
+// New rules (v0.6.0) — AST-upgraded in v0.7.0: shallow-catch, open-redirect, ssrf-risk, path-traversal, jwt-no-expiry, unsafe-html, hydration-mismatch, missing-transaction, leaked-env-in-logs
 import { redirectInTryCatchRule } from './redirect-in-try-catch.js'
 import { missingRevalidationRule } from './missing-revalidation.js'
 import { useClientOveruseRule } from './use-client-overuse.js'

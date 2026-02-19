@@ -1,5 +1,7 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine, isTestFile, isScriptFile } from '../utils/patterns.js'
+import { walkAST } from '../utils/ast.js'
+import type { Node } from '@babel/types'
 
 /**
  * Score a catch block body on error handling depth:
@@ -52,6 +54,43 @@ export const shallowCatchRule: Rule = {
 
     const findings: Finding[] = []
 
+    // AST path: walk for CatchClause nodes
+    if (file.ast) {
+      try {
+        walkAST(file.ast.program, (node: Node) => {
+          if (node.type !== 'CatchClause') return
+          if (!node.loc) return
+
+          const catchLine = node.loc.start.line - 1 // 0-indexed
+          const body = (node as any).body // BlockStatement
+          if (!body || !body.loc) return
+
+          const bodyStart = body.loc.start.line - 1
+          const bodyEnd = body.loc.end.line - 1
+          const bodyLines = file.lines.slice(bodyStart + 1, bodyEnd)
+          const { score, label } = scoreCatchBody(bodyLines)
+
+          if (score <= 1) {
+            findings.push({
+              ruleId: 'shallow-catch',
+              file: file.relativePath,
+              line: catchLine + 1,
+              column: file.lines[catchLine].indexOf('catch') + 1,
+              message: score === 0
+                ? 'Empty catch block — errors are silently swallowed'
+                : `Decorative error handler: ${label}`,
+              severity: score === 0 ? 'warning' : 'info',
+              category: 'reliability',
+            })
+          }
+        })
+        return findings
+      } catch {
+        // AST walk failed, fall through to regex
+      }
+    }
+
+    // Regex fallback
     for (let i = 0; i < file.lines.length; i++) {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
       const trimmed = file.lines[i].trim()
@@ -70,7 +109,6 @@ export const shallowCatchRule: Rule = {
       if (braceStart === -1) continue
 
       // Count braces to find catch body end (string-aware)
-      // On braceStart line, start from the '{' to avoid counting try's closing '}'
       let depth = 0
       let bodyEnd = braceStart
       let inSingle = false

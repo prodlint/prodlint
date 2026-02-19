@@ -1,5 +1,6 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isClientComponent, isCommentLine, isTestFile } from '../utils/patterns.js'
+import { findUseEffectRanges } from '../utils/ast.js'
 
 const BROWSER_ONLY_PATTERNS = [
   { pattern: /\bwindow\./, msg: 'window access in server-rendered code — will differ between server and client' },
@@ -27,32 +28,49 @@ export const hydrationMismatchRule: Rule = {
     if (isTestFile(file.relativePath)) return []
 
     // Only flag in server components (no "use client")
-    // These APIs are fine in "use client" files since they only run in the browser
     if (isClientComponent(file.content)) return []
 
     // Must be in app/ directory to be a server component
     if (!/(?:^|\/)(?:src\/)?app\//.test(file.relativePath)) return []
 
-    // Skip route.ts (API routes), layout/page are the targets
+    // Skip route.ts (API routes)
     if (/route\.[jt]sx?$/.test(file.relativePath)) return []
 
     const findings: Finding[] = []
+
+    // Build useEffect line ranges (AST-based if available)
+    let useEffectRanges: Array<{ start: number; end: number }> = []
+    if (file.ast) {
+      try {
+        useEffectRanges = findUseEffectRanges(file.ast)
+      } catch {
+        // Fall through to regex-based tracking
+      }
+    }
+
+    const hasAstRanges = useEffectRanges.length > 0 || (file.ast != null)
     let insideUseEffect = false
 
     for (let i = 0; i < file.lines.length; i++) {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
       const line = file.lines[i]
 
-      // Skip patterns inside useEffect (only runs client-side)
-      if (/\buseEffect\s*\(/.test(line)) {
-        insideUseEffect = true
-      }
-      if (insideUseEffect) {
-        // Rough tracking: if we see a top-level closing, stop skipping
-        if (/^\s*\}\s*,\s*\[/.test(line) || /^\s*\}\s*\)\s*;?\s*$/.test(line)) {
-          insideUseEffect = false
+      // Check if line is inside a useEffect callback
+      if (hasAstRanges) {
+        // AST path: use precise ranges
+        const inEffect = useEffectRanges.some(r => i >= r.start && i <= r.end)
+        if (inEffect) continue
+      } else {
+        // Regex fallback: rough tracking
+        if (/\buseEffect\s*\(/.test(line)) {
+          insideUseEffect = true
         }
-        continue
+        if (insideUseEffect) {
+          if (/^\s*\}\s*,\s*\[/.test(line) || /^\s*\}\s*\)\s*;?\s*$/.test(line)) {
+            insideUseEffect = false
+          }
+          continue
+        }
       }
 
       for (const { pattern, msg } of [...BROWSER_ONLY_PATTERNS, ...NONDETERMINISTIC_PATTERNS]) {
