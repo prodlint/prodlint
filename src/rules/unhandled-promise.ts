@@ -20,6 +20,12 @@ const HANDLED_PATTERNS = [
   /Promise\.race/,
 ]
 
+// Supabase/ORM chain starters that are always part of a larger expression
+const CHAIN_START_PATTERNS = [
+  /\.from\s*\(/,
+  /\.rpc\s*\(/,
+]
+
 export const unhandledPromiseRule: Rule = {
   id: 'unhandled-promise',
   name: 'Unhandled Promise',
@@ -48,6 +54,22 @@ export const unhandledPromiseRule: Rule = {
       // Check if the promise is handled on this line
       const isHandled = HANDLED_PATTERNS.some(p => p.test(trimmed))
       if (isHandled) continue
+
+      // Check if this line is part of a Supabase/ORM chain that's handled above
+      const isChainContinuation = CHAIN_START_PATTERNS.some(p => p.test(trimmed))
+      if (isChainContinuation) {
+        // Look upward for the chain start with await/assignment
+        let chainHandled = false
+        for (let j = i - 1; j >= Math.max(0, i - 10); j--) {
+          const prevTrimmed = file.lines[j].trim()
+          if (prevTrimmed === '' || prevTrimmed.endsWith(';')) break
+          if (/\bawait\b/.test(prevTrimmed) || /\bconst\s+\w/.test(prevTrimmed) || /\blet\s+\w/.test(prevTrimmed) || /=\s*await\b/.test(prevTrimmed) || /\breturn\b/.test(prevTrimmed)) {
+            chainHandled = true
+            break
+          }
+        }
+        if (chainHandled) continue
+      }
 
       // Check previous lines for multiline chain (await supabase\n  .from(...)\n  .update(...))
       let handledAbove = false

@@ -29,12 +29,23 @@ function groupByFile(findings: Finding[]): Map<string, Finding[]> {
   return map
 }
 
-export function reportPretty(result: ScanResult): string {
+export interface ReportOptions {
+  quiet?: boolean
+}
+
+export function reportPretty(result: ScanResult, opts: ReportOptions = {}): string {
   const lines: string[] = []
+  const { critical, warning, info } = result.summary
 
   lines.push('')
   lines.push(pc.bold('  prodlint') + pc.dim(` v${result.version}`))
-  lines.push(pc.dim(`  Scanned ${result.filesScanned} files in ${result.scanDurationMs}ms`))
+
+  // Summary counts in header
+  const headerParts: string[] = [`Scanned ${result.filesScanned} files`]
+  if (critical > 0) headerParts.push(`${critical} critical`)
+  if (warning > 0) headerParts.push(`${warning} warnings`)
+  if (info > 0) headerParts.push(`${info} info`)
+  lines.push(pc.dim(`  ${headerParts.join(' · ')}`))
   lines.push('')
 
   // Findings grouped by file
@@ -48,6 +59,9 @@ export function reportPretty(result: ScanResult): string {
         lines.push(
           `  ${pc.dim(`${f.line}:${f.column}`)}  ${color(label)}  ${f.message}  ${pc.dim(f.ruleId)}`,
         )
+        if (f.fix) {
+          lines.push(`  ${pc.dim(`      ↳ ${f.fix}`)}`)
+        }
       }
       lines.push('')
     }
@@ -68,24 +82,25 @@ export function reportPretty(result: ScanResult): string {
   lines.push('')
 
   // Summary line
-  const { critical, warning, info } = result.summary
-  const parts: string[] = []
-  if (critical > 0) parts.push(pc.red(`${critical} critical`))
-  if (warning > 0) parts.push(pc.yellow(`${warning} warnings`))
-  if (info > 0) parts.push(pc.blue(`${info} info`))
-  if (parts.length === 0) {
+  const summaryParts: string[] = []
+  if (critical > 0) summaryParts.push(pc.red(`${critical} critical`))
+  if (warning > 0) summaryParts.push(pc.yellow(`${warning} warnings`))
+  if (info > 0) summaryParts.push(pc.blue(`${info} info`))
+  if (summaryParts.length === 0) {
     lines.push(pc.green('  No issues found!'))
   } else {
-    lines.push(`  ${parts.join(pc.dim(' · '))}`)
+    lines.push(`  ${summaryParts.join(pc.dim(' · '))}`)
   }
   lines.push('')
 
-  // Badge
-  const badgeColor = result.overallScore >= 80 ? 'brightgreen' : result.overallScore >= 60 ? 'yellow' : 'red'
-  const badgeUrl = `https://img.shields.io/badge/prodlint-${result.overallScore}%2F100-${badgeColor}`
-  lines.push(pc.dim('  Add to your README:'))
-  lines.push(pc.dim(`  [![prodlint](${badgeUrl})](https://prodlint.com)`))
-  lines.push('')
+  // Badge (skip in quiet mode)
+  if (!opts.quiet) {
+    const badgeColor = result.overallScore >= 80 ? 'brightgreen' : result.overallScore >= 60 ? 'yellow' : 'red'
+    const badgeUrl = `https://img.shields.io/badge/prodlint-${result.overallScore}%2F100-${badgeColor}`
+    lines.push(pc.dim('  Add to your README:'))
+    lines.push(pc.dim(`  [![prodlint](${badgeUrl})](https://prodlint.com)`))
+    lines.push('')
+  }
 
   return lines.join('\n')
 }

@@ -2,6 +2,8 @@ import fg from 'fast-glob'
 import { readFile, stat, realpath } from 'node:fs/promises'
 import { resolve, extname, sep } from 'node:path'
 import { buildCommentMap } from './patterns.js'
+import { parseFile } from './ast.js'
+import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
 import type { FileContext, ProjectContext } from '../types.js'
 
 const DEFAULT_IGNORES = [
@@ -25,6 +27,8 @@ const SCAN_EXTENSIONS = [
   'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
   'json',
 ]
+
+const AST_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'])
 
 const MAX_FILE_SIZE = 1024 * 1024 // 1MB
 
@@ -67,13 +71,26 @@ export async function readFileContext(
 
     const content = await readFile(absolutePath, 'utf-8')
     const lines = content.split(/\r?\n|\r/)
+    const ext = extname(relativePath).slice(1) // remove leading dot
+
+    // Parse AST for JS/TS files (non-fatal on failure)
+    let ast: FileContext['ast'] = undefined
+    if (AST_EXTENSIONS.has(ext)) {
+      try {
+        ast = parseFile(content, relativePath)
+      } catch {
+        ast = null
+      }
+    }
+
     return {
       absolutePath,
       relativePath,
       content,
       lines,
-      ext: extname(relativePath).slice(1), // remove leading dot
+      ext,
       commentMap: buildCommentMap(lines),
+      ast,
     }
   } catch {
     return null
@@ -88,6 +105,8 @@ export async function buildProjectContext(
   let declaredDependencies = new Set<string>()
   let tsconfigPaths = new Set<string>()
   let hasAuthMiddleware = false
+  let hasRateLimiting = false
+  const detectedFrameworks = new Set<string>()
   let gitignoreContent: string | null = null
   let envInGitignore = false
 
@@ -101,6 +120,22 @@ export async function buildProjectContext(
       ...(packageJson?.peerDependencies as Record<string, string> ?? {}),
     }
     declaredDependencies = new Set(Object.keys(deps))
+
+    // Detect frameworks from dependencies
+    for (const dep of declaredDependencies) {
+      const framework = DEPENDENCY_TO_FRAMEWORK[dep]
+      if (framework) {
+        detectedFrameworks.add(framework)
+      }
+    }
+
+    // Check for centralized rate limiting
+    for (const framework of detectedFrameworks) {
+      if (RATE_LIMIT_FRAMEWORKS.has(framework)) {
+        hasRateLimiting = true
+        break
+      }
+    }
   } catch {
     // No package.json or invalid JSON
   }
@@ -147,6 +182,21 @@ export async function buildProjectContext(
     // No middleware
   }
 
+  // Also check for rate limiting in middleware files if not already detected from deps
+  if (!hasRateLimiting) {
+    for (const name of ['middleware.ts', 'middleware.js', 'src/middleware.ts', 'src/middleware.js']) {
+      try {
+        const content = await readFile(resolve(root, name), 'utf-8')
+        if (/rateLimit/i.test(content) || /throttle/i.test(content)) {
+          hasRateLimiting = true
+          break
+        }
+      } catch {
+        // File doesn't exist
+      }
+    }
+  }
+
   // Read .gitignore
   try {
     gitignoreContent = await readFile(resolve(root, '.gitignore'), 'utf-8')
@@ -164,6 +214,8 @@ export async function buildProjectContext(
     declaredDependencies,
     tsconfigPaths,
     hasAuthMiddleware,
+    hasRateLimiting,
+    detectedFrameworks,
     gitignoreContent,
     envInGitignore,
     allFiles: files,

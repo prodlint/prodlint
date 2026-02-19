@@ -26,6 +26,11 @@ import { deadExportsRule } from './dead-exports.js'
 import { shallowCatchRule } from './shallow-catch.js'
 import { comprehensionDebtRule } from './comprehension-debt.js'
 import { phantomDependencyRule } from './phantom-dependency.js'
+import { insecureCookieRule } from './insecure-cookie.js'
+import { leakedEnvInLogsRule } from './leaked-env-in-logs.js'
+import { insecureRandomRule } from './insecure-random.js'
+import { nextServerActionValidationRule } from './next-server-action-validation.js'
+import { missingTransactionRule } from './missing-transaction.js'
 
 export const rules: Rule[] = [
   // Security
@@ -39,6 +44,10 @@ export const rules: Rule[] = [
   openRedirectRule,
   rateLimitingRule,
   phantomDependencyRule,
+  insecureCookieRule,
+  leakedEnvInLogsRule,
+  insecureRandomRule,
+  nextServerActionValidationRule,
   // Reliability
   hallucinatedImportsRule,
   errorHandlingRule,
@@ -46,6 +55,7 @@ export const rules: Rule[] = [
   shallowCatchRule,
   missingLoadingStateRule,
   missingErrorBoundaryRule,
+  missingTransactionRule,
   // Performance
   noSyncFsRule,
   noNPlusOneRule,

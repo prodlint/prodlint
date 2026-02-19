@@ -1,16 +1,17 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
+import { isFrameworkSafeMethod } from '../utils/frameworks.js'
 
-const HALLUCINATED_APIS: { pattern: RegExp; fix: string }[] = [
-  { pattern: /\.flatten\s*\(/, fix: 'Use .flat() instead of .flatten()' },
-  { pattern: /\.contains\s*\(/, fix: 'Use .includes() instead of .contains()' },
-  { pattern: /\.substr\s*\(/, fix: 'Use .substring() or .slice() instead of deprecated .substr()' },
-  { pattern: /\.trimLeft\s*\(/, fix: 'Use .trimStart() instead of deprecated .trimLeft()' },
-  { pattern: /\.trimRight\s*\(/, fix: 'Use .trimEnd() instead of deprecated .trimRight()' },
-  { pattern: /response\.body\.json\s*\(/, fix: 'Use response.json() instead of response.body.json()' },
-  { pattern: /fetch\.abort\s*\(/, fix: 'Use AbortController instead of fetch.abort()' },
-  { pattern: /\.isArray\s*\(\s*\)/, fix: 'Array.isArray() is static — use Array.isArray(value)' },
-  { pattern: /\.hasOwnProperty\s*\(/, fix: 'Use Object.hasOwn() instead of .hasOwnProperty()' },
+const HALLUCINATED_APIS: { pattern: RegExp; fix: string; methodName: string }[] = [
+  { pattern: /\.flatten\s*\(/, fix: 'Use .flat() instead of .flatten()', methodName: 'flatten' },
+  { pattern: /\.contains\s*\(/, fix: 'Use .includes() instead of .contains()', methodName: 'contains' },
+  { pattern: /\.substr\s*\(/, fix: 'Use .substring() or .slice() instead of deprecated .substr()', methodName: 'substr' },
+  { pattern: /\.trimLeft\s*\(/, fix: 'Use .trimStart() instead of deprecated .trimLeft()', methodName: 'trimLeft' },
+  { pattern: /\.trimRight\s*\(/, fix: 'Use .trimEnd() instead of deprecated .trimRight()', methodName: 'trimRight' },
+  { pattern: /response\.body\.json\s*\(/, fix: 'Use response.json() instead of response.body.json()', methodName: 'json' },
+  { pattern: /fetch\.abort\s*\(/, fix: 'Use AbortController instead of fetch.abort()', methodName: 'abort' },
+  { pattern: /\.isArray\s*\(\s*\)/, fix: 'Array.isArray() is static — use Array.isArray(value)', methodName: 'isArray' },
+  { pattern: /(?<!Object\.prototype)\.hasOwnProperty\s*\(/, fix: 'Use Object.hasOwn() instead of .hasOwnProperty()', methodName: 'hasOwnProperty' },
 ]
 
 export const hallucinatedApiRule: Rule = {
@@ -21,16 +22,20 @@ export const hallucinatedApiRule: Rule = {
   severity: 'warning',
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
-  check(file: FileContext, _project: ProjectContext): Finding[] {
+  check(file: FileContext, project: ProjectContext): Finding[] {
     const findings: Finding[] = []
+    const frameworks = project.detectedFrameworks
 
     for (let i = 0; i < file.lines.length; i++) {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
       const line = file.lines[i]
 
-      for (const { pattern, fix } of HALLUCINATED_APIS) {
+      for (const { pattern, fix, methodName } of HALLUCINATED_APIS) {
         const match = pattern.exec(line)
         if (match) {
+          // Skip if this method is legitimate for a detected framework
+          if (isFrameworkSafeMethod(methodName, frameworks)) continue
+
           findings.push({
             ruleId: 'hallucinated-api',
             file: file.relativePath,

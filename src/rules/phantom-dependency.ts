@@ -24,6 +24,11 @@ const PHANTOM_PACKAGES = new Set([
   'gpt-tokenizer',         // exists but often confused
 ])
 
+// Legitimate short package names (2 chars) that should not be flagged
+const KNOWN_SHORT_PACKAGES = new Set([
+  'pg', 'ws', 'ms', 'qs', 'ip', 'is', 'he', 'ky', 'bl', 'rc', 'io', 'db', 'fp', 'rx',
+])
+
 // Suspicious patterns in package names (typosquatting indicators)
 const SUSPICIOUS_PATTERNS = [
   /^[a-z]{1,2}$/, // 1-2 char names
@@ -66,7 +71,7 @@ export const phantomDependencyRule: Rule = {
       }
 
       for (const pattern of SUSPICIOUS_PATTERNS) {
-        if (pattern.test(name) && !name.startsWith('@')) {
+        if (pattern.test(name) && !name.startsWith('@') && !KNOWN_SHORT_PACKAGES.has(name)) {
           findings.push({
             ruleId: 'phantom-dependency',
             file: 'package.json',

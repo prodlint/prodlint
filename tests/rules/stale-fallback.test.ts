@@ -41,4 +41,23 @@ describe('stale-fallback rule', () => {
     const findings = staleFallbackRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('detects 127.0.0.1 with path', () => {
+    const file = makeFile(`const url = "http://127.0.0.1/api/v1"`, { relativePath: 'src/lib/api.ts' })
+    const findings = staleFallbackRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('127.0.0.1')
+  })
+
+  it('detects postgresql://localhost/mydb', () => {
+    const file = makeFile(`const db = "postgresql://localhost/mydb"`, { relativePath: 'src/db.ts' })
+    const findings = staleFallbackRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects redis://localhost/0', () => {
+    const file = makeFile(`const redis = "redis://localhost/0"`, { relativePath: 'src/lib/cache.ts' })
+    const findings = staleFallbackRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

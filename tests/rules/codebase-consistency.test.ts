@@ -71,4 +71,36 @@ describe('codebase-consistency rule', () => {
     // 1 single, 4 double = 80% consistent = below 90% threshold
     expect(quoteFindings.length).toBeGreaterThan(0)
   })
+
+  it('flags mixed camelCase and snake_case naming', () => {
+    const files = [
+      makeFile('export function getUserData() {}', { relativePath: 'src/a.ts' }),
+      makeFile('export function fetchItems() {}', { relativePath: 'src/b.ts' }),
+      makeFile('export const get_user_data = () => {}', { relativePath: 'src/c.ts' }),
+      makeFile('export const fetch_items = () => {}', { relativePath: 'src/d.ts' }),
+    ]
+    const findings = codebaseConsistencyRule.checkProject!(files, project)
+    expect(findings.some(f => f.message.includes('Naming'))).toBe(true)
+  })
+
+  it('allows consistent camelCase naming', () => {
+    const files = [
+      makeFile('export function getUserData() {}', { relativePath: 'src/a.ts' }),
+      makeFile('export function fetchItems() {}', { relativePath: 'src/b.ts' }),
+      makeFile('export function processOrder() {}', { relativePath: 'src/c.ts' }),
+    ]
+    const findings = codebaseConsistencyRule.checkProject!(files, project)
+    expect(findings.some(f => f.message.includes('Naming'))).toBe(false)
+  })
+
+  it('flags mixed HTTP clients', () => {
+    const files = [
+      makeFile(`import axios from 'axios'\naxios.get('/api')`, { relativePath: 'src/a.ts' }),
+      makeFile(`fetch('/api/data')`, { relativePath: 'src/b.ts' }),
+      makeFile(`fetch('/api/users')`, { relativePath: 'src/c.ts' }),
+      makeFile(`import axios from 'axios'\naxios.post('/api')`, { relativePath: 'src/d.ts' }),
+    ]
+    const findings = codebaseConsistencyRule.checkProject!(files, project)
+    expect(findings.some(f => f.message.includes('HTTP client'))).toBe(true)
+  })
 })

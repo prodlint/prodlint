@@ -40,8 +40,10 @@ export const deadExportsRule: Rule = {
 
     // Collect all exported symbols with their locations
     const exports = new Map<string, { file: string; line: number }>()
-    // Collect all imported symbols
-    const imports = new Set<string>()
+    // Collect imports keyed by from-clause basename → Set of symbol names
+    const imports = new Map<string, Set<string>>()
+    // Flat set of all imported symbol names (for files with no from-clause info)
+    const allImportedSymbols = new Set<string>()
     // Track which files are imported (for default imports and dynamic imports)
     const importedFiles = new Set<string>()
 
@@ -75,15 +77,31 @@ export const deadExportsRule: Rule = {
       for (const line of file.lines) {
         let match
 
+        // Extract from-clause for source tracking
+        const fromMatch = line.match(/from\s+['"]([^'"]+)['"]/)
+        const fromBasename = fromMatch ? fromMatch[1].split('/').pop()?.replace(/\.\w+$/, '') ?? '' : ''
+
         const bracesRe = /import\s*(?:type\s*)?\{([^}]+)\}\s*from/g
         while ((match = bracesRe.exec(line)) !== null) {
           const symbols = match[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean)
-          for (const sym of symbols) imports.add(sym)
+          for (const sym of symbols) {
+            allImportedSymbols.add(sym)
+            if (fromBasename) {
+              const set = imports.get(fromBasename) ?? new Set()
+              set.add(sym)
+              imports.set(fromBasename, set)
+            }
+          }
         }
 
         const defaultRe = /import\s+(\w+)\s+from/g
         while ((match = defaultRe.exec(line)) !== null) {
-          imports.add(match[1])
+          allImportedSymbols.add(match[1])
+          if (fromBasename) {
+            const set = imports.get(fromBasename) ?? new Set()
+            set.add(match[1])
+            imports.set(fromBasename, set)
+          }
         }
 
         // Track file imports for re-export detection
@@ -94,11 +112,18 @@ export const deadExportsRule: Rule = {
       }
     }
 
-    // Find dead exports
+    // Find dead exports — match import source basename against export file basename
     const deadByFile = new Map<string, number>()
     for (const [key, loc] of exports) {
       const symbolName = key.split('::')[1]
-      if (!imports.has(symbolName)) {
+      const exportFileBasename = loc.file.split('/').pop()?.replace(/\.\w+$/, '') ?? ''
+
+      // Check if any import from a matching basename includes this symbol
+      const importSet = imports.get(exportFileBasename)
+      const isImported = importSet?.has(symbolName) ?? false
+
+      // Fallback: if symbol was imported without a traceable from-clause, count it
+      if (!isImported && !allImportedSymbols.has(symbolName)) {
         deadByFile.set(loc.file, (deadByFile.get(loc.file) ?? 0) + 1)
       }
     }

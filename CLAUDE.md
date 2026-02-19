@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (272 tests)
+npm run test         # vitest run (405+ tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -27,11 +27,11 @@ Prodlint is a static analysis CLI that scans AI-generated JS/TS projects for pro
 ```
 cli.ts (parseArgs) → scanner.ts (scan)
   → file-walker.ts (fast-glob + default ignores)
-  → readFileContext() per file (content, lines, commentMap)
-  → buildProjectContext() once (package.json deps, tsconfig paths, middleware detection)
+  → readFileContext() per file (content, lines, commentMap, AST)
+  → buildProjectContext() once (package.json deps, tsconfig paths, middleware, framework detection)
   → for each file × each rule: rule.check(file, project) → Finding[]
   → isLineSuppressed() filters suppressed findings
-  → scorer.ts (per-category 100 minus deductions, overall = average)
+  → scorer.ts (per-rule caps + diminishing returns, overall = average)
   → reporter.ts (pretty terminal or JSON)
 ```
 
@@ -47,7 +47,9 @@ Each rule in `src/rules/` implements:
 }
 ```
 
-Rules are registered in `src/rules/index.ts`. Currently 27 rules across all 4 categories (security: 10, reliability: 6, performance: 4, ai-quality: 7).
+Rules are registered in `src/rules/index.ts`. Currently 32 rules across all 4 categories (security: 14, reliability: 7, performance: 4, ai-quality: 7).
+
+**v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
 ### Two-Phase Scanning
 
@@ -56,16 +58,27 @@ Rules are registered in `src/rules/index.ts`. Currently 27 rules across all 4 ca
 
 Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency`
 
-### Shared Utilities (`src/utils/patterns.ts`)
+### Shared Utilities
 
-- `isApiRoute(path)` — Next.js API route detection
-- `isClientComponent(content)` / `isServerComponent(content)` — "use client" detection
+**`src/utils/patterns.ts`** — regex-based helpers:
+- `isApiRoute(path)`, `isClientComponent(content)`, `isServerComponent(content)`
 - `buildCommentMap(lines)` / `isCommentLine()` — comment handling
 - `isLineSuppressed()` — prodlint-disable support
-- `isTestFile(path)` — test/spec/\_\_tests\_\_ detection
-- `isScriptFile(path)` — scripts/ directory detection
-- `isConfigFile(path)` — *.config.*, .env*, next.config detection
-- `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting
+- `isTestFile(path)`, `isScriptFile(path)`, `isConfigFile(path)`
+- `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
+
+**`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+):
+- `parseFile(content, fileName)` — parses JS/TS/JSX/TSX into Babel AST, returns null on failure
+- `walkAST(ast, visitor)` — simple recursive depth-first walker (no @babel/traverse dependency)
+- `isTaggedTemplateSql(node)` — detects `sql\`...\`` and `Prisma.sql\`...\`` tags
+- `findLoopsAST(ast)` — accurate loop body ranges using AST (replaces brace counting)
+- `getImportSources(ast)` — extracts import/require sources
+
+**`src/utils/frameworks.ts`** — framework detection + whitelists:
+- `DEPENDENCY_TO_FRAMEWORK` — maps npm packages to framework identifiers
+- `FRAMEWORK_SAFE_METHODS` — methods safe per framework (e.g., Prisma `.contains()`)
+- `isFrameworkSafeMethod(method, frameworks)` — whitelist check
+- `SQL_SAFE_ORMS`, `RATE_LIMIT_FRAMEWORKS` — categorized framework sets
 
 ### Key Patterns
 
@@ -76,9 +89,23 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Line/column numbering**: 1-indexed throughout
 
-### Scoring
+### Scoring (v0.5.0)
 
-Each category starts at 100. Deductions: critical -10, warning -3, info -1 (floor 0). Overall = average of all category scores.
+Per-category scoring with three protections against false-positive damage:
+1. **Per-rule cap**: Max 1 critical, 2 warning, 3 info deductions per rule
+2. **Adjusted deductions**: critical -8, warning -2, info -0.5
+3. **Diminishing returns**: After 30 points deducted in a category, halved; after 50, quartered
+
+Overall = **weighted** average: security 40%, reliability 30%, performance 15%, ai-quality 15%. Floor at 0.
+
+### Finding Interface (v0.5.0)
+
+`Finding` now has an optional `fix?: string` field for actionable remediation hints. New rules include fix suggestions.
+
+### CLI Flags (v0.5.0)
+
+- `--min-severity <level>` — Filter findings to only show critical, warning, or info and above
+- `--quiet` — Suppress the README badge output
 
 ### Exit Codes
 

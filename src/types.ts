@@ -10,6 +10,7 @@ export interface Finding {
   message: string
   severity: Severity
   category: Category
+  fix?: string
 }
 
 export interface FileContext {
@@ -19,6 +20,7 @@ export interface FileContext {
   lines: string[]
   ext: string
   commentMap: boolean[]
+  ast?: import('@babel/parser').ParseResult<import('@babel/types').File> | null
 }
 
 export interface ProjectContext {
@@ -27,6 +29,8 @@ export interface ProjectContext {
   declaredDependencies: Set<string>
   tsconfigPaths: Set<string>
   hasAuthMiddleware: boolean
+  hasRateLimiting: boolean
+  detectedFrameworks: Set<string>
   gitignoreContent: string | null
   envInGitignore: boolean
   allFiles: string[]

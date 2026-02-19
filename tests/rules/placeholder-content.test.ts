@@ -43,4 +43,46 @@ describe('placeholder-content rule', () => {
     const findings = placeholderContentRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('detects user@example.com', () => {
+    const file = makeFile(`const email = "user@example.com"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects test@test.com', () => {
+    const file = makeFile(`const email = "test@test.com"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects Jane Doe', () => {
+    const file = makeFile(`const name = "Jane Doe"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects changeme', () => {
+    const file = makeFile(`const pass = "changeme"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects your-api-key-here', () => {
+    const file = makeFile(`const key = "your-api-key-here"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects replace-with- prefix', () => {
+    const file = makeFile(`const url = "replace-with-real-url"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects xxx placeholder', () => {
+    const file = makeFile(`const key = "xxxxxxx"`)
+    const findings = placeholderContentRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

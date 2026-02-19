@@ -110,4 +110,27 @@ describe('dead-exports rule', () => {
     const findings = deadExportsRule.checkProject!([exporter], project)
     expect(findings).toHaveLength(0)
   })
+
+  it('does not collide symbols across files with same name', () => {
+    // Two files both export 'format', only one is imported
+    const fileA = makeFile('export const format = (x: string) => x.trim()', { relativePath: 'src/string-utils.ts' })
+    const fileB = makeFile('export const format = (d: Date) => d.toISOString()', { relativePath: 'src/date-utils.ts' })
+
+    // Many more exports to cross threshold
+    const fileC = makeFile([
+      'export const a1 = 1',
+      'export const a2 = 2',
+      'export const a3 = 3',
+      'export const a4 = 4',
+      'export const a5 = 5',
+    ].join('\n'), { relativePath: 'src/extra.ts' })
+
+    // Only imports format from string-utils, not date-utils
+    const consumer = makeFile(`import { format } from './string-utils'`, { relativePath: 'src/app.ts' })
+
+    const findings = deadExportsRule.checkProject!([fileA, fileB, fileC, consumer], project)
+    // fileB's format should be counted as dead, plus all 5 from fileC = 6 dead
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('exported symbols never imported')
+  })
 })

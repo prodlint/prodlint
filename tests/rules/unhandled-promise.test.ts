@@ -57,4 +57,28 @@ describe('unhandled-promise rule', () => {
     const findings = unhandledPromiseRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('allows void fetch() (explicit discard)', () => {
+    const file = makeFile(`void fetch('/api/track')`)
+    const findings = unhandledPromiseRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('flags standalone prisma delete without handling', () => {
+    const file = makeFile(`prisma.event.delete({ where: { id } })`)
+    const findings = unhandledPromiseRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('allows .then().catch() chain', () => {
+    const file = makeFile(`fetch('/api/data').then(r => r.json()).catch(console.error)`)
+    const findings = unhandledPromiseRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows return fetch()', () => {
+    const file = makeFile(`return fetch('/api/data')`)
+    const findings = unhandledPromiseRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

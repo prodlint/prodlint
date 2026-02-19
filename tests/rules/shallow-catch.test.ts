@@ -83,4 +83,29 @@ describe('shallow-catch rule', () => {
     const findings = shallowCatchRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('handles braces inside template literals in catch body', () => {
+    const file = makeFile([
+      'try {',
+      '  doStuff()',
+      '} catch (e) {',
+      '  throw new Error(`Failed: ${"}"}`)',
+      '}',
+    ].join('\n'))
+    const findings = shallowCatchRule.check(file, project)
+    // re-throw should score 3, not flag
+    expect(findings).toHaveLength(0)
+  })
+
+  it('handles braces inside string literals in catch body', () => {
+    const file = makeFile([
+      'try {',
+      '  doStuff()',
+      '} catch (e) {',
+      '  throw new Error("closing } brace")',
+      '}',
+    ].join('\n'))
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

@@ -3,7 +3,40 @@ import { authChecksRule } from '../../src/rules/auth-checks.js'
 import { makeFile, makeProject } from '../helpers.js'
 
 describe('auth-checks rule', () => {
-  it('flags API route without auth', () => {
+  it('flags POST API route without auth as critical (mutation)', () => {
+    const file = makeFile(
+      `export async function POST() {\n  return Response.json({ ok: true })\n}`,
+      { relativePath: 'app/api/users/route.ts' },
+    )
+    const project = makeProject()
+    const findings = authChecksRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('flags DELETE API route without auth as critical (mutation)', () => {
+    const file = makeFile(
+      `export async function DELETE() {\n  return Response.json({ ok: true })\n}`,
+      { relativePath: 'app/api/users/route.ts' },
+    )
+    const project = makeProject()
+    const findings = authChecksRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('flags PUT API route without auth as critical (mutation)', () => {
+    const file = makeFile(
+      `export async function PUT() {\n  return Response.json({ ok: true })\n}`,
+      { relativePath: 'app/api/users/route.ts' },
+    )
+    const project = makeProject()
+    const findings = authChecksRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('flags GET API route without auth as info (read-only)', () => {
     const file = makeFile(
       `export async function GET() {\n  return Response.json({ ok: true })\n}`,
       { relativePath: 'app/api/users/route.ts' },
@@ -11,7 +44,7 @@ describe('auth-checks rule', () => {
     const project = makeProject()
     const findings = authChecksRule.check(file, project)
     expect(findings).toHaveLength(1)
-    expect(findings[0].severity).toBe('critical')
+    expect(findings[0].severity).toBe('info')
   })
 
   it('passes when getServerSession is used', () => {
@@ -26,6 +59,15 @@ describe('auth-checks rule', () => {
   it('passes when auth() is used', () => {
     const file = makeFile(
       `export async function GET() {\n  const session = await auth()\n}`,
+      { relativePath: 'app/api/users/route.ts' },
+    )
+    const findings = authChecksRule.check(file, makeProject())
+    expect(findings).toHaveLength(0)
+  })
+
+  it('passes when getAuth() (Clerk) is used', () => {
+    const file = makeFile(
+      `export async function GET() {\n  const { userId } = getAuth(req)\n}`,
       { relativePath: 'app/api/users/route.ts' },
     )
     const findings = authChecksRule.check(file, makeProject())
@@ -70,7 +112,7 @@ describe('auth-checks rule', () => {
 
   it('downgrades to info when middleware auth detected', () => {
     const file = makeFile(
-      `export async function GET() {\n  return Response.json({ ok: true })\n}`,
+      `export async function POST() {\n  return Response.json({ ok: true })\n}`,
       { relativePath: 'app/api/users/route.ts' },
     )
     const project = makeProject({ hasAuthMiddleware: true })
@@ -102,6 +144,15 @@ describe('auth-checks rule', () => {
     const file = makeFile(
       `export default function handler(req, res) {\n  res.json({ ok: true })\n}`,
       { relativePath: 'pages/api/users.ts' },
+    )
+    const findings = authChecksRule.check(file, makeProject())
+    expect(findings).toHaveLength(1)
+  })
+
+  it('does not suppress auth check when bearer is in an error string', () => {
+    const file = makeFile(
+      `export async function POST() {\n  return Response.json({ error: "Missing bearer token" })\n}`,
+      { relativePath: 'app/api/data/route.ts' },
     )
     const findings = authChecksRule.check(file, makeProject())
     expect(findings).toHaveLength(1)

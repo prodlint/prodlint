@@ -62,4 +62,59 @@ describe('no-n-plus-one rule', () => {
     const findings = noNPlusOneRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('skips Promise.all(items.map(...)) batching pattern', () => {
+    const file = makeFile([
+      'const results = await Promise.all(items.map(async (item) => {',
+      '  return await fetch(`/api/${item.id}`)',
+      '}))',
+    ].join('\n'))
+    const findings = noNPlusOneRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('skips Promise.allSettled(items.map(...)) batching pattern', () => {
+    const file = makeFile([
+      'const results = await Promise.allSettled(items.map(async (item) => {',
+      '  return await prisma.user.findUnique({ where: { id: item.id } })',
+      '}))',
+    ].join('\n'))
+    const findings = noNPlusOneRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // AST-based loop detection
+  it('detects fetch inside for loop via AST (ast populated)', () => {
+    const file = makeFile([
+      'for (const id of ids) {',
+      '  const res = await fetch(`/api/${id}`)',
+      '}',
+    ].join('\n'))
+    expect(file.ast).not.toBeNull()
+    const findings = noNPlusOneRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects fetch inside while loop via AST', () => {
+    const file = makeFile([
+      'while (hasMore) {',
+      '  const res = await fetch(`/api/next`)',
+      '  hasMore = res.hasMore',
+      '}',
+    ].join('\n'))
+    expect(file.ast).not.toBeNull()
+    const findings = noNPlusOneRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('falls back to regex when AST is absent', () => {
+    const file = makeFile([
+      'for (const id of ids) {',
+      '  const res = await fetch(`/api/${id}`)',
+      '}',
+    ].join('\n'), { withAst: false })
+    expect(file.ast).toBeUndefined()
+    const findings = noNPlusOneRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
 })

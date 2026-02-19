@@ -9,11 +9,11 @@ export const missingErrorBoundaryRule: Rule = {
   fileExtensions: ['tsx', 'jsx', 'ts', 'js'],
 
   check(file: FileContext, project: ProjectContext): Finding[] {
-    // Only check layout files inside app/ (not the root layout)
-    const match = file.relativePath.match(/^app\/(.+\/)layout\.(tsx?|jsx?)$/)
+    // Only check layout files inside app/ or src/app/ (not the root layout)
+    const match = file.relativePath.match(/^((?:src\/)?app\/)(.+\/)layout\.(tsx?|jsx?)$/)
     if (!match) return []
 
-    const dir = 'app/' + match[1]
+    const dir = match[1] + match[2]
 
     // Check if error.tsx/error.jsx/error.ts/error.js exists in same directory
     const hasErrorBoundary = project.allFiles.some(f =>

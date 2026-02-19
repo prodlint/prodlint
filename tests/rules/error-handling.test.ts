@@ -87,4 +87,23 @@ describe('error-handling rule', () => {
     const findings = errorHandlingRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  // New error handling pattern recognition
+  it('passes API route with .catch() chain', () => {
+    const file = makeFile(
+      `export async function GET() {\n  const data = await fetchData().catch(err => null)\n  return Response.json(data)\n}`,
+      { relativePath: 'app/api/data/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('passes API route with onError callback', () => {
+    const file = makeFile(
+      `export async function GET() {\n  const data = await query({ onError: (err) => console.error(err) })\n  return Response.json(data)\n}`,
+      { relativePath: 'app/api/data/route.ts' },
+    )
+    const findings = errorHandlingRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

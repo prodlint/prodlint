@@ -31,11 +31,14 @@ export const rateLimitingRule: Rule = {
   name: 'Missing Rate Limiting',
   description: 'Detects API routes without rate limiting',
   category: 'security',
-  severity: 'warning',
+  severity: 'info',
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
-  check(file: FileContext, _project: ProjectContext): Finding[] {
+  check(file: FileContext, project: ProjectContext): Finding[] {
     if (!isApiRoute(file.relativePath)) return []
+
+    // If project has centralized rate limiting, skip all per-route checks
+    if (project.hasRateLimiting) return []
 
     // Check if route is exempt
     for (const pattern of EXEMPT_PATTERNS) {
@@ -62,7 +65,7 @@ export const rateLimitingRule: Rule = {
       line: handlerLine,
       column: 1,
       message: 'No rate limiting — anyone could spam this endpoint and run up your API costs',
-      severity: 'warning',
+      severity: 'info',
       category: 'security',
     }]
   },

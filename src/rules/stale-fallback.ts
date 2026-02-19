@@ -3,13 +3,13 @@ import { isCommentLine, isTestFile, isConfigFile, isScriptFile } from '../utils/
 
 const STALE_PATTERNS: { pattern: RegExp; label: string }[] = [
   { pattern: /['"]http:\/\/localhost:\d+['"]/, label: 'Hardcoded localhost URL' },
-  { pattern: /['"]https?:\/\/127\.0\.0\.1[:'"]/, label: 'Hardcoded 127.0.0.1 URL' },
-  { pattern: /['"]redis:\/\/localhost['"]/, label: 'Hardcoded Redis localhost URL' },
-  { pattern: /['"]mongodb:\/\/localhost['"]/, label: 'Hardcoded MongoDB localhost URL' },
-  { pattern: /['"]mongodb\+srv:\/\/localhost['"]/, label: 'Hardcoded MongoDB localhost URL' },
-  { pattern: /['"]postgres:\/\/localhost['"]/, label: 'Hardcoded Postgres localhost URL' },
-  { pattern: /['"]postgresql:\/\/localhost['"]/, label: 'Hardcoded Postgres localhost URL' },
-  { pattern: /['"]amqp:\/\/localhost['"]/, label: 'Hardcoded AMQP localhost URL' },
+  { pattern: /['"]https?:\/\/127\.0\.0\.1[/:'"]/, label: 'Hardcoded 127.0.0.1 URL' },
+  { pattern: /['"]redis:\/\/localhost[/'"]/, label: 'Hardcoded Redis localhost URL' },
+  { pattern: /['"]mongodb:\/\/localhost[/'"]/, label: 'Hardcoded MongoDB localhost URL' },
+  { pattern: /['"]mongodb\+srv:\/\/localhost[/'"]/, label: 'Hardcoded MongoDB localhost URL' },
+  { pattern: /['"]postgres:\/\/localhost[/'"]/, label: 'Hardcoded Postgres localhost URL' },
+  { pattern: /['"]postgresql:\/\/localhost[/'"]/, label: 'Hardcoded Postgres localhost URL' },
+  { pattern: /['"]amqp:\/\/localhost[/'"]/, label: 'Hardcoded AMQP localhost URL' },
 ]
 
 export const staleFallbackRule: Rule = {

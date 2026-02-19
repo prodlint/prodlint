@@ -18,7 +18,13 @@ export const errorHandlingRule: Rule = {
       || /fetchRequestHandler/.test(file.content)
 
     const hasTryCatch = /try\s*\{/.test(file.content)
-    if (hasTryCatch || hasFrameworkServe) return []
+
+    // Additional error handling patterns
+    const hasCatchChain = /\.catch\s*\(/.test(file.content)
+    const hasOnError = /onError\s*[:(]/.test(file.content)
+    const hasNextResponseError = /NextResponse\.json\s*\([^)]*(?:error|status:\s*[45]\d{2})/.test(file.content)
+
+    if (hasTryCatch || hasFrameworkServe || hasCatchChain || hasOnError || hasNextResponseError) return []
 
     let handlerLine = 1
     for (let i = 0; i < file.lines.length; i++) {

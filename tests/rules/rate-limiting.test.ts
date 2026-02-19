@@ -5,13 +5,14 @@ import { makeFile, makeProject } from '../helpers.js'
 const project = makeProject()
 
 describe('rate-limiting rule', () => {
-  it('flags API route without rate limiting', () => {
+  it('flags API route without rate limiting as info', () => {
     const file = makeFile(
       `export async function POST() {\n  return Response.json({ ok: true })\n}`,
       { relativePath: 'app/api/submit/route.ts' },
     )
     const findings = rateLimitingRule.check(file, project)
     expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('info')
   })
 
   it('passes when rateLimit is present', () => {
@@ -38,6 +39,16 @@ describe('rate-limiting rule', () => {
       { relativePath: 'app/api/submit/route.ts' },
     )
     const findings = rateLimitingRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('skips all routes when project has centralized rate limiting', () => {
+    const file = makeFile(
+      `export async function POST() {\n  return Response.json({ ok: true })\n}`,
+      { relativePath: 'app/api/submit/route.ts' },
+    )
+    const projectWithRL = makeProject({ hasRateLimiting: true })
+    const findings = rateLimitingRule.check(file, projectWithRL)
     expect(findings).toHaveLength(0)
   })
 

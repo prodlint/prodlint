@@ -69,16 +69,31 @@ export const shallowCatchRule: Rule = {
       }
       if (braceStart === -1) continue
 
-      // Count braces to find catch body end
+      // Count braces to find catch body end (string-aware)
       // On braceStart line, start from the '{' to avoid counting try's closing '}'
       let depth = 0
       let bodyEnd = braceStart
+      let inSingle = false
+      let inDouble = false
+      let inTemplate = false
       for (let j = braceStart; j < file.lines.length; j++) {
         const line = file.lines[j]
         const startPos = (j === braceStart) ? line.indexOf('{') : 0
         for (let k = startPos; k < line.length; k++) {
-          if (line[k] === '{') depth++
-          if (line[k] === '}') {
+          const ch = line[k]
+          const prev = k > 0 ? line[k - 1] : ''
+          const escaped = prev === '\\' && (k < 2 || line[k - 2] !== '\\')
+
+          if (!escaped) {
+            if (ch === "'" && !inDouble && !inTemplate) { inSingle = !inSingle; continue }
+            if (ch === '"' && !inSingle && !inTemplate) { inDouble = !inDouble; continue }
+            if (ch === '`' && !inSingle && !inDouble) { inTemplate = !inTemplate; continue }
+          }
+
+          if (inSingle || inDouble || inTemplate) continue
+
+          if (ch === '{') depth++
+          if (ch === '}') {
             depth--
             if (depth === 0) {
               bodyEnd = j

@@ -73,4 +73,29 @@ describe('missing-error-boundary rule', () => {
     const findings = missingErrorBoundaryRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('detects src/app/ layout without error.tsx', () => {
+    const project = makeProject({
+      allFiles: ['src/app/dashboard/layout.tsx', 'src/app/dashboard/page.tsx'],
+    })
+    const file = makeFile('export default function Layout({ children }) { return children }', {
+      relativePath: 'src/app/dashboard/layout.tsx',
+      ext: 'tsx',
+    })
+    const findings = missingErrorBoundaryRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('error.tsx')
+  })
+
+  it('ignores src/app/ layout with matching error.tsx', () => {
+    const project = makeProject({
+      allFiles: ['src/app/dashboard/layout.tsx', 'src/app/dashboard/error.tsx'],
+    })
+    const file = makeFile('export default function Layout({ children }) { return children }', {
+      relativePath: 'src/app/dashboard/layout.tsx',
+      ext: 'tsx',
+    })
+    const findings = missingErrorBoundaryRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

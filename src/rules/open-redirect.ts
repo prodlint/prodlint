@@ -1,8 +1,8 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 
-// Direct user input → critical
-const CRITICAL_PATTERNS: RegExp[] = [
+// Direct user input → warning (was critical — regex can't reliably distinguish)
+const DIRECT_INPUT_PATTERNS: RegExp[] = [
   // redirect(searchParams.get(...)) or redirect(searchParams.get('x')!)
   /redirect\s*\(\s*(?:searchParams|query|params)\s*\.get\s*\(/,
   // redirect(req.query.x) or redirect(request.nextUrl.searchParams.get(...))
@@ -13,7 +13,7 @@ const CRITICAL_PATTERNS: RegExp[] = [
 
 // Variable names that could be user input → warning (may be validated upstream)
 const WARNING_PATTERNS: RegExp[] = [
-  /redirect\s*\(\s*(?:url|returnUrl|returnTo|redirectUrl|redirectTo|next|callbackUrl|destination)\s*[,)]/,
+  /redirect\s*\(\s*(?:url|returnUrl|returnTo|redirectUrl|redirectTo|next|callbackUrl|destination|redirect|goto|to|target|uri|href)\s*[,)]/,
 ]
 
 export const openRedirectRule: Rule = {
@@ -21,7 +21,7 @@ export const openRedirectRule: Rule = {
   name: 'Open Redirect',
   description: 'Detects user-controlled input passed directly to redirect functions',
   category: 'security',
-  severity: 'critical',
+  severity: 'warning',
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
   check(file: FileContext, _project: ProjectContext): Finding[] {
@@ -31,7 +31,7 @@ export const openRedirectRule: Rule = {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
       const line = file.lines[i]
 
-      for (const pattern of CRITICAL_PATTERNS) {
+      for (const pattern of DIRECT_INPUT_PATTERNS) {
         const match = pattern.exec(line)
         if (match) {
           findings.push({
@@ -40,7 +40,7 @@ export const openRedirectRule: Rule = {
             line: i + 1,
             column: match.index + 1,
             message: 'User input in redirect — validate against an allowlist to prevent open redirect',
-            severity: 'critical',
+            severity: 'warning',
             category: 'security',
           })
           break
@@ -50,7 +50,7 @@ export const openRedirectRule: Rule = {
       for (const pattern of WARNING_PATTERNS) {
         const match = pattern.exec(line)
         if (match) {
-          // Don't double-report if a critical pattern already matched
+          // Don't double-report if a direct input pattern already matched
           if (findings.some(f => f.line === i + 1)) break
           findings.push({
             ruleId: 'open-redirect',

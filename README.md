@@ -6,19 +6,23 @@
 
 Catch the bugs AI leaves behind.
 
-prodlint scans AI-generated JavaScript and TypeScript projects for production readiness issues — hallucinated imports, missing auth, exposed secrets, N+1 queries, and more. No LLM required, just pattern matching against known failure modes.
+prodlint scans AI-generated JavaScript and TypeScript projects for production readiness issues — hallucinated imports, missing auth, exposed secrets, N+1 queries, and more. No LLM required, just fast static analysis against known failure modes.
 
 ```bash
 npx prodlint
 ```
 
 ```
-  prodlint v0.3.1
-  Scanned 148 files in 92ms
+  prodlint v0.5.0
+  Scanned 148 files · 3 critical · 5 warnings
 
   src/app/api/checkout/route.ts
     12:1  CRIT  No rate limiting — anyone could spam this endpoint and run up your API costs  rate-limiting
     28:5  WARN  Empty catch block silently swallows error  shallow-catch
+
+  src/actions/submit.ts
+    5:3   CRIT  Server action uses formData without validation  next-server-action-validation
+      ↳ Validate with Zod: const data = schema.safeParse(Object.fromEntries(formData))
 
   src/lib/db.ts
     1:1   CRIT  Package "drizzle-orm" is imported but not in package.json  hallucinated-imports
@@ -29,9 +33,9 @@ npx prodlint
   performance     95 ███████████████████░  (1 issue)
   ai-quality      90 ██████████████████░░  (3 issues)
 
-  Overall: 85/100
+  Overall: 82/100 (weighted)
 
-  8 critical · 5 warnings · 3 info
+  3 critical · 5 warnings · 3 info
 ```
 
 ## Why?
@@ -43,10 +47,12 @@ prodlint catches what TypeScript and ESLint miss: **production readiness gaps**.
 ## Install
 
 ```bash
-npx prodlint                      # Run directly (no install)
-npx prodlint ./my-app             # Scan specific path
-npx prodlint --json               # JSON output for CI
-npx prodlint --ignore "*.test.ts" # Ignore patterns
+npx prodlint                              # Run directly (no install)
+npx prodlint ./my-app                     # Scan specific path
+npx prodlint --json                       # JSON output for CI
+npx prodlint --ignore "*.test.ts"         # Ignore patterns
+npx prodlint --min-severity warning       # Only warnings and criticals
+npx prodlint --quiet                      # Suppress badge output
 ```
 
 Or install it:
@@ -56,9 +62,9 @@ npm i -D prodlint     # Project dependency
 npm i -g prodlint     # Global install
 ```
 
-## 27 Rules across 4 Categories
+## 32 Rules across 4 Categories
 
-### Security (10 rules)
+### Security (14 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -68,12 +74,16 @@ npm i -g prodlint     # Global install
 | `input-validation` | Request body used without validation |
 | `cors-config` | `Access-Control-Allow-Origin: *` |
 | `unsafe-html` | `dangerouslySetInnerHTML` with user data |
-| `sql-injection` | String-interpolated SQL queries |
+| `sql-injection` | String-interpolated SQL queries (ORM-aware) |
 | `open-redirect` | User input passed to `redirect()` |
 | `rate-limiting` | API routes with no rate limiter |
 | `phantom-dependency` | Packages in node_modules but missing from package.json |
+| `insecure-cookie` | Session cookies missing httpOnly/secure/sameSite |
+| `leaked-env-in-logs` | `process.env.*` inside console.log calls |
+| `insecure-random` | `Math.random()` used for tokens, secrets, or session IDs |
+| `next-server-action-validation` | Server actions using formData without Zod/schema validation |
 
-### Reliability (6 rules)
+### Reliability (7 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -83,6 +93,7 @@ npm i -g prodlint     # Global install
 | `shallow-catch` | Empty catch blocks that swallow errors |
 | `missing-loading-state` | Client components that fetch without a loading state |
 | `missing-error-boundary` | Route layouts without a matching error.tsx |
+| `missing-transaction` | Multiple Prisma writes without `$transaction` |
 
 ### Performance (4 rules)
 
@@ -109,23 +120,28 @@ npm i -g prodlint     # Global install
 
 prodlint avoids common false positives:
 
+- **AST parsing** — Babel-based analysis for loops, imports, and SQL templates with regex fallback
+- **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
+- **Middleware detection** — Clerk, NextAuth, Supabase middleware detected — auth findings downgraded
 - **Block comment awareness** — patterns inside `/* */` are ignored
-- **Middleware detection** — if your project uses Clerk/NextAuth/Supabase middleware, auth findings are downgraded
 - **Path alias support** — `@/`, `~/`, and tsconfig paths aren't flagged as hallucinated imports
 - **Route exemptions** — auth, webhook, health, and cron routes are exempt from auth/rate-limit checks
 - **Test/script file awareness** — lower severity for non-production files
+- **Fix suggestions** — findings include actionable `fix` hints with remediation code
 
 ## Scoring
 
 Each category starts at 100. Deductions per finding:
 
-| Severity | Deduction |
-|----------|-----------|
-| critical | -10 |
-| warning | -3 |
-| info | -1 |
+| Severity | Deduction | Per-rule cap |
+|----------|-----------|--------------|
+| critical | -8 | max 1 |
+| warning | -2 | max 2 |
+| info | -0.5 | max 3 |
 
-Overall score = average of the 4 category scores (floor 0). Exit code `1` if any critical findings exist.
+**Diminishing returns**: after 30 points deducted in a category, further deductions are halved; after 50, quartered.
+
+**Weighted overall**: security 40%, reliability 30%, performance 15%, ai-quality 15%. Floor at 0. Exit code `1` if any critical findings exist.
 
 ## GitHub Action
 

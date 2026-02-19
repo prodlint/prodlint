@@ -22,5 +22,5 @@ This policy covers the `prodlint` npm package, the GitHub Action (`action.yml`),
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | Yes       |
-| < 0.2   | No        |
+| 0.5.x   | Yes       |
+| < 0.5   | No        |

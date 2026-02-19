@@ -11,7 +11,7 @@ const PLACEHOLDERS: { pattern: RegExp; label: string }[] = [
   { pattern: /['"]password123['"]/, label: 'Placeholder password "password123"' },
   { pattern: /['"]changeme['"]/, label: 'Placeholder value "changeme"' },
   { pattern: /['"]your-api-key-here['"]/, label: 'Placeholder API key' },
-  { pattern: /['"]replace-with-['"]/, label: 'Placeholder "replace-with-" value' },
+  { pattern: /['"]replace-with-[^'"]*['"]/, label: 'Placeholder "replace-with-" value' },
   { pattern: /['"]xxx+['"]/, label: 'Placeholder "xxx" value' },
   { pattern: /['"]TODO:?\s*replace['"/]/i, label: 'TODO replace placeholder' },
 ]

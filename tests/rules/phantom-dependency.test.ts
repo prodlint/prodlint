@@ -76,4 +76,14 @@ describe('phantom-dependency rule', () => {
     const findings = phantomDependencyRule.checkProject!([], project)
     expect(findings).toHaveLength(0)
   })
+
+  it('does not flag known short packages like pg and ws', () => {
+    const project = makeProject({
+      packageJson: {
+        dependencies: { 'pg': '^8.0.0', 'ws': '^8.0.0', 'ms': '^2.0.0', 'qs': '^6.0.0' },
+      },
+    })
+    const findings = phantomDependencyRule.checkProject!([], project)
+    expect(findings).toHaveLength(0)
+  })
 })
