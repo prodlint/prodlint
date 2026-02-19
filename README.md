@@ -4,9 +4,9 @@
 [![npm downloads](https://img.shields.io/npm/dm/prodlint.svg)](https://www.npmjs.com/package/prodlint)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Catch the bugs AI leaves behind.
+The linter for vibe-coded apps.
 
-prodlint scans AI-generated JavaScript and TypeScript projects for production readiness issues — hallucinated imports, missing auth, exposed secrets, N+1 queries, and more. No LLM required, just fast static analysis against known failure modes.
+Cursor, v0, Bolt, and Copilot build fast. prodlint catches what they miss — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and the other production bugs that compile just fine. Zero config, no LLM, fast static analysis.
 
 ```bash
 npx prodlint
@@ -40,9 +40,9 @@ npx prodlint
 
 ## Why?
 
-AI code generators (Cursor, Copilot, v0, Bolt, Claude) write code that works in demos but breaks in production. Hardcoded secrets, hallucinated packages, missing auth, XSS vectors — these pass type-checks and look correct but aren't.
+Vibe coding is the fastest way to build. It's also the fastest way to ship hardcoded secrets, hallucinated packages, missing auth, and XSS vectors to production. These pass type-checks and look correct — but they aren't.
 
-prodlint catches what TypeScript and ESLint miss: **production readiness gaps**.
+prodlint catches what TypeScript and ESLint miss: **the bugs AI coding tools consistently write**.
 
 ## Install
 
@@ -62,9 +62,9 @@ npm i -D prodlint     # Project dependency
 npm i -g prodlint     # Global install
 ```
 
-## 32 Rules across 4 Categories
+## 52 Rules across 4 Categories
 
-### Security (14 rules)
+### Security (27 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -82,8 +82,21 @@ npm i -g prodlint     # Global install
 | `leaked-env-in-logs` | `process.env.*` inside console.log calls |
 | `insecure-random` | `Math.random()` used for tokens, secrets, or session IDs |
 | `next-server-action-validation` | Server actions using formData without Zod/schema validation |
+| `env-fallback-secret` | Security-sensitive env vars with hardcoded fallback values |
+| `verbose-error-response` | Error stack traces or messages leaked in API responses |
+| `missing-webhook-verification` | Webhook routes without signature verification |
+| `server-action-auth` | Server actions with mutations but no auth check |
+| `eval-injection` | `eval()`, `new Function()`, dynamic code execution |
+| `next-public-sensitive` | `NEXT_PUBLIC_` prefix on secret env vars |
+| `ssrf-risk` | User-controlled URLs passed to fetch in server code |
+| `path-traversal` | File system operations with unsanitized user input |
+| `unsafe-file-upload` | File upload handlers without type or size validation |
+| `supabase-missing-rls` | `CREATE TABLE` in migrations without enabling RLS |
+| `deprecated-oauth-flow` | OAuth Implicit Grant (response_type=token) |
+| `jwt-no-expiry` | JWT tokens signed without an expiration |
+| `client-side-auth-only` | Password comparisons or auth logic in client components |
 
-### Reliability (7 rules)
+### Reliability (11 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -94,8 +107,12 @@ npm i -g prodlint     # Global install
 | `missing-loading-state` | Client components that fetch without a loading state |
 | `missing-error-boundary` | Route layouts without a matching error.tsx |
 | `missing-transaction` | Multiple Prisma writes without `$transaction` |
+| `redirect-in-try-catch` | `redirect()` inside try/catch — Next.js redirect throws, catch swallows it |
+| `missing-revalidation` | Server actions with DB mutations but no `revalidatePath` |
+| `missing-useeffect-cleanup` | useEffect with subscriptions/timers but no cleanup return |
+| `hydration-mismatch` | `window`/`Date.now()`/`Math.random()` in server component render path |
 
-### Performance (4 rules)
+### Performance (6 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -103,8 +120,10 @@ npm i -g prodlint     # Global install
 | `no-n-plus-one` | Database calls inside loops |
 | `no-unbounded-query` | `.findMany()` / `.select('*')` with no limit |
 | `no-dynamic-import-loop` | `import()` inside loops |
+| `server-component-fetch-self` | Server components fetching their own API routes |
+| `missing-abort-controller` | Fetch calls without timeout or AbortController |
 
-### AI Quality (7 rules)
+### AI Quality (8 rules)
 
 | Rule | What it catches |
 |------|----------------|
@@ -115,6 +134,7 @@ npm i -g prodlint     # Global install
 | `comprehension-debt` | Functions over 80 lines, deep nesting, too many parameters |
 | `codebase-consistency` | Mixed naming conventions across the project |
 | `dead-exports` | Exported functions that nothing imports |
+| `use-client-overuse` | `"use client"` on files that don't use any client-side APIs |
 
 ## Smart Detection
 

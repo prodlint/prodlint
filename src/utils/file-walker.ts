@@ -25,7 +25,7 @@ const DEFAULT_IGNORES = [
 
 const SCAN_EXTENSIONS = [
   'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
-  'json',
+  'json', 'sql',
 ]
 
 const AST_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'])

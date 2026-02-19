@@ -16,7 +16,7 @@ Run a single test file: `npx vitest run tests/rules/secrets.test.ts`
 
 ## Architecture
 
-Prodlint is a static analysis CLI that scans AI-generated JS/TS projects for production readiness issues. Three entry points built by tsup:
+Prodlint is the linter for vibe-coded apps — a static analysis CLI that catches the production bugs AI coding tools consistently create in JS/TS projects. Three entry points built by tsup:
 
 - **`src/cli.ts`** → `dist/cli.js` (shebang) — CLI via `npx prodlint`
 - **`src/mcp.ts`** → `dist/mcp.js` (shebang) — MCP server via `npx prodlint-mcp`
@@ -47,7 +47,7 @@ Each rule in `src/rules/` implements:
 }
 ```
 
-Rules are registered in `src/rules/index.ts`. Currently 32 rules across all 4 categories (security: 14, reliability: 7, performance: 4, ai-quality: 7).
+Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 categories (security: 27, reliability: 11, performance: 6, ai-quality: 8).
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 

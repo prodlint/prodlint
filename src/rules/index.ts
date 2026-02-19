@@ -31,6 +31,27 @@ import { leakedEnvInLogsRule } from './leaked-env-in-logs.js'
 import { insecureRandomRule } from './insecure-random.js'
 import { nextServerActionValidationRule } from './next-server-action-validation.js'
 import { missingTransactionRule } from './missing-transaction.js'
+// New rules (v0.6.0)
+import { redirectInTryCatchRule } from './redirect-in-try-catch.js'
+import { missingRevalidationRule } from './missing-revalidation.js'
+import { useClientOveruseRule } from './use-client-overuse.js'
+import { envFallbackSecretRule } from './env-fallback-secret.js'
+import { verboseErrorResponseRule } from './verbose-error-response.js'
+import { missingWebhookVerificationRule } from './missing-webhook-verification.js'
+import { serverActionAuthRule } from './server-action-auth.js'
+import { evalInjectionRule } from './eval-injection.js'
+import { missingUseEffectCleanupRule } from './missing-useeffect-cleanup.js'
+import { nextPublicSensitiveRule } from './next-public-sensitive.js'
+import { ssrfRiskRule } from './ssrf-risk.js'
+import { pathTraversalRule } from './path-traversal.js'
+import { hydrationMismatchRule } from './hydration-mismatch.js'
+import { serverComponentFetchSelfRule } from './server-component-fetch-self.js'
+import { unsafeFileUploadRule } from './unsafe-file-upload.js'
+import { supabaseMissingRlsRule } from './supabase-missing-rls.js'
+import { deprecatedOauthFlowRule } from './deprecated-oauth-flow.js'
+import { jwtNoExpiryRule } from './jwt-no-expiry.js'
+import { clientSideAuthOnlyRule } from './client-side-auth-only.js'
+import { missingAbortControllerRule } from './missing-abort-controller.js'
 
 export const rules: Rule[] = [
   // Security
@@ -48,6 +69,19 @@ export const rules: Rule[] = [
   leakedEnvInLogsRule,
   insecureRandomRule,
   nextServerActionValidationRule,
+  envFallbackSecretRule,
+  verboseErrorResponseRule,
+  missingWebhookVerificationRule,
+  serverActionAuthRule,
+  evalInjectionRule,
+  nextPublicSensitiveRule,
+  ssrfRiskRule,
+  pathTraversalRule,
+  unsafeFileUploadRule,
+  supabaseMissingRlsRule,
+  deprecatedOauthFlowRule,
+  jwtNoExpiryRule,
+  clientSideAuthOnlyRule,
   // Reliability
   hallucinatedImportsRule,
   errorHandlingRule,
@@ -56,11 +90,17 @@ export const rules: Rule[] = [
   missingLoadingStateRule,
   missingErrorBoundaryRule,
   missingTransactionRule,
+  redirectInTryCatchRule,
+  missingRevalidationRule,
+  missingUseEffectCleanupRule,
+  hydrationMismatchRule,
   // Performance
   noSyncFsRule,
   noNPlusOneRule,
   noUnboundedQueryRule,
   noDynamicImportLoopRule,
+  serverComponentFetchSelfRule,
+  missingAbortControllerRule,
   // AI Quality
   aiSmellsRule,
   placeholderContentRule,
@@ -69,4 +109,5 @@ export const rules: Rule[] = [
   comprehensionDebtRule,
   codebaseConsistencyRule,
   deadExportsRule,
+  useClientOveruseRule,
 ]

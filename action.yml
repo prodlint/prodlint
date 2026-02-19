@@ -1,5 +1,5 @@
 name: 'Prodlint'
-description: 'Scan AI-generated projects for production readiness issues'
+description: 'The linter for vibe-coded apps — catch what AI coding tools miss'
 branding:
   icon: 'shield'
   color: 'green'
@@ -24,7 +24,7 @@ inputs:
 
 outputs:
   score:
-    description: 'Overall production readiness score (0-100)'
+    description: 'Overall prodlint score (0-100)'
     value: ${{ steps.scan.outputs.score }}
   critical:
     description: 'Number of critical findings'

@@ -1,7 +1,7 @@
 {
   "name": "prodlint",
   "version": "0.5.0",
-  "description": "Scan AI-generated projects for production readiness issues",
+  "description": "The linter for vibe-coded apps — catch what AI coding tools miss",
   "license": "MIT",
   "author": "prodlint contributors",
   "type": "module",

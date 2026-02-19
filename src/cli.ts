@@ -54,7 +54,7 @@ async function main() {
 
 function printHelp() {
   console.log(`
-  prodlint - Scan AI-generated projects for production readiness issues
+  prodlint - The linter for vibe-coded apps
 
   Usage:
     npx prodlint [path] [options]
