@@ -90,24 +90,35 @@ describe('findLoopsAST', () => {
 })
 
 describe('getImportSources', () => {
-  it('extracts import sources', () => {
+  it('extracts import sources with line numbers', () => {
     const ast = parseFile([
       `import { foo } from 'bar'`,
       `import React from 'react'`,
     ].join('\n'), 'test.ts')!
     const sources = getImportSources(ast)
-    expect(sources).toContain('bar')
-    expect(sources).toContain('react')
+    expect(sources).toHaveLength(2)
+    expect(sources[0]).toEqual({ source: 'bar', line: 1 })
+    expect(sources[1]).toEqual({ source: 'react', line: 2 })
   })
 
-  it('extracts require sources', () => {
+  it('extracts require sources with line numbers', () => {
     const ast = parseFile([
       `const fs = require('fs')`,
       `const path = require('path')`,
     ].join('\n'), 'test.js')!
     const sources = getImportSources(ast)
-    expect(sources).toContain('fs')
-    expect(sources).toContain('path')
+    expect(sources).toHaveLength(2)
+    expect(sources[0]).toEqual({ source: 'fs', line: 1 })
+    expect(sources[1]).toEqual({ source: 'path', line: 2 })
+  })
+
+  it('extracts dynamic import() sources', () => {
+    const ast = parseFile([
+      `const mod = await import('some-pkg')`,
+    ].join('\n'), 'test.ts')!
+    const sources = getImportSources(ast)
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toEqual({ source: 'some-pkg', line: 1 })
   })
 })
 

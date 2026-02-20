@@ -1,5 +1,6 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine, NODE_BUILTINS, isTestFile, isScriptFile } from '../utils/patterns.js'
+import { getImportSources } from '../utils/ast.js'
 
 // Packages that are commonly available without being in package.json
 const IMPLICIT_PACKAGES = new Set([
@@ -57,6 +58,41 @@ export const hallucinatedImportsRule: Rule = {
     const seen = new Set<string>()
     const isNonProd = isTestFile(file.relativePath) || isScriptFile(file.relativePath)
 
+    // AST-first path: precise import extraction (no template literal false positives)
+    if (file.ast) {
+      try {
+        const imports = getImportSources(file.ast)
+        for (const { source: importPath, line } of imports) {
+          // Skip relative imports
+          if (importPath.startsWith('.') || importPath.startsWith('/')) continue
+
+          const pkgName = getPackageName(importPath)
+
+          if (seen.has(pkgName)) continue
+          seen.add(pkgName)
+
+          if (isPathAlias(importPath, project.tsconfigPaths)) continue
+          if (isNodeBuiltin(pkgName)) continue
+          if (IMPLICIT_PACKAGES.has(importPath) || IMPLICIT_PACKAGES.has(pkgName)) continue
+          if (project.declaredDependencies.has(pkgName)) continue
+
+          findings.push({
+            ruleId: 'hallucinated-imports',
+            file: file.relativePath,
+            line,
+            column: 1,
+            message: `Package "${pkgName}" is imported but not in package.json`,
+            severity: isNonProd ? 'warning' : 'critical',
+            category: 'reliability',
+          })
+        }
+        return findings
+      } catch {
+        // AST extraction failed, fall through to regex
+      }
+    }
+
+    // Regex fallback when AST unavailable
     for (let i = 0; i < file.lines.length; i++) {
       // Skip comments
       if (isCommentLine(file.lines, i, file.commentMap)) continue

@@ -140,7 +140,8 @@ npm i -g prodlint     # Global install
 
 prodlint avoids common false positives:
 
-- **AST parsing** — Babel-based analysis for 11 rules (catch blocks, redirects, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
+- **AST parsing** — Babel-based analysis for 12 rules (imports, catch blocks, redirects, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
+- **Monorepo support** — npm/yarn/pnpm workspace dependencies resolved automatically
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
 - **Middleware detection** — Clerk, NextAuth, Supabase middleware detected — auth findings downgraded
 - **Block comment awareness** — patterns inside `/* */` are ignored

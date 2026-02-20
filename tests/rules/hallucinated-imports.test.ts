@@ -142,4 +142,39 @@ describe('hallucinated-imports rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].severity).toBe('critical')
   })
+
+  it('does not flag import-like string inside template literal (AST path)', () => {
+    const file = makeFile([
+      `const msg = \`Use import { x } from 'fake-pkg' for this\``,
+    ].join('\n'))
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('flags dynamic import() of missing package (AST path)', () => {
+    const file = makeFile(`const mod = await import('missing-dynamic-pkg')`)
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('missing-dynamic-pkg')
+  })
+
+  it('falls back to regex when AST unavailable', () => {
+    const file = makeFile(`import { foo } from 'missing-pkg'`, { withAst: false })
+    const project = makeProject({ packageJson: {} })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('missing-pkg')
+  })
+
+  it('allows workspace package name as declared dependency', () => {
+    const file = makeFile(`import { utils } from '@myorg/shared'`)
+    const project = makeProject({
+      packageJson: {},
+      declaredDependencies: new Set(['@myorg/shared']),
+    })
+    const findings = hallucinatedImportsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

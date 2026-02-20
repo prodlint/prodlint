@@ -124,7 +124,11 @@ export function isTestFile(relativePath: string): boolean {
  * Check if a file path looks like a script (not application code)
  */
 export function isScriptFile(relativePath: string): boolean {
-  return /(?:^|\/)scripts?\//.test(relativePath)
+  if (/(?:^|\/)scripts?\//.test(relativePath)) return true
+  // Common standalone script filenames
+  const name = relativePath.split('/').pop() ?? ''
+  const base = name.replace(/\.[^.]+$/, '')
+  return /^(seed|migrate|setup|bootstrap|generate|codegen|sync|deploy|cleanup|reset)$/.test(base)
 }
 
 /**

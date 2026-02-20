@@ -129,4 +129,60 @@ describe('shallow-catch rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].message).toContain('Empty catch')
   })
+
+  // Expanded error handler recognition
+  it('allows catch with toast.error()', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  toast.error("Something went wrong")\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with toast object form', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  toast({ title: "Error", variant: "destructive" })\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with Sentry.captureException()', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  Sentry.captureException(e)\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with captureException() (no Sentry prefix)', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  captureException(e)\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with logger.error()', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  logger.error("Failed", e)\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with handleError()', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (e) {\n  handleError(e)\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows catch with next(err) (Express middleware)', () => {
+    const file = makeFile(`try {\n  doStuff()\n} catch (err) {\n  next(err)\n}`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows single-line catch with toast.error()', () => {
+    const file = makeFile(`try { doStuff() } catch { toast.error('Something went wrong') } finally { cleanup() }`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('flags single-line catch that is truly empty', () => {
+    const file = makeFile(`try { doStuff() } catch {} finally { cleanup() }`)
+    const findings = shallowCatchRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Empty catch')
+  })
 })

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (548+ tests)
+npm run test         # vitest run (562+ tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -28,7 +28,7 @@ Prodlint is the linter for vibe-coded apps — a static analysis CLI that catche
 cli.ts (parseArgs) → scanner.ts (scan)
   → file-walker.ts (fast-glob + default ignores)
   → readFileContext() per file (content, lines, commentMap, AST)
-  → buildProjectContext() once (package.json deps, tsconfig paths, middleware, framework detection)
+  → buildProjectContext() once (package.json deps, workspace deps, tsconfig paths, middleware, framework detection)
   → for each file × each rule: rule.check(file, project) → Finding[]
   → isLineSuppressed() filters suppressed findings
   → scorer.ts (per-rule caps + diminishing returns, overall = average)
@@ -51,7 +51,7 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
-**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 11 (including `sql-injection`, `no-n-plus-one`).
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 12 (including `sql-injection`, `no-n-plus-one`, `hallucinated-imports`).
 
 ### Two-Phase Scanning
 
@@ -66,7 +66,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isApiRoute(path)`, `isClientComponent(content)`, `isServerComponent(content)`
 - `buildCommentMap(lines)` / `isCommentLine()` — comment handling
 - `isLineSuppressed()` — prodlint-disable support
-- `isTestFile(path)`, `isScriptFile(path)`, `isConfigFile(path)`
+- `isTestFile(path)`, `isScriptFile(path)` (matches `scripts/` dir + standalone names like `seed.ts`, `migrate.ts`), `isConfigFile(path)`
 - `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
 
 **`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+, expanded v0.7.0):
@@ -74,7 +74,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `walkAST(ast, visitor)` — simple recursive depth-first walker (no @babel/traverse dependency)
 - `isTaggedTemplateSql(node)` — detects `sql\`...\`` and `Prisma.sql\`...\`` tags
 - `findLoopsAST(ast)` — accurate loop body ranges using AST (replaces brace counting)
-- `getImportSources(ast)` — extracts import/require sources
+- `getImportSources(ast)` — extracts import/require/dynamic-import sources as `{ source, line }[]`
 - `isUserInputNode(node)` — detects `req.query.x`, `searchParams.get()`, `formData.get()` (v0.7.0)
 - `isStaticString(node)` — detects StringLiteral and zero-expression TemplateLiteral (v0.7.0)
 - `findUseEffectRanges(ast)` — precise useEffect callback body line ranges (v0.7.0)
@@ -93,6 +93,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Context-aware severity**: Some rules downgrade severity based on project context (e.g., auth-checks → info if middleware detected)
 - **Threshold aggregation**: Rules like ai-smells count occurrences across a file, report once at line 1 if threshold exceeded
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
+- **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
 - **Line/column numbering**: 1-indexed throughout
 
 ### Scoring (v0.5.0)

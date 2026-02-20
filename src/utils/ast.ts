@@ -152,19 +152,25 @@ export function findLoopsAST(ast: ParseResult<File>): LoopRange[] {
   return loops
 }
 
+export interface ImportSource {
+  source: string
+  line: number
+}
+
 /**
- * Extract all import/require sources from AST.
+ * Extract all import/require sources from AST with line numbers.
  */
-export function getImportSources(ast: ParseResult<File>): string[] {
-  const sources: string[] = []
+export function getImportSources(ast: ParseResult<File>): ImportSource[] {
+  const sources: ImportSource[] = []
 
   walkAST(ast.program, (node) => {
     // import ... from 'x'
     if (node.type === 'ImportDeclaration') {
-      sources.push((node as ImportDeclaration).source.value)
+      const decl = node as ImportDeclaration
+      sources.push({ source: decl.source.value, line: decl.loc?.start.line ?? 1 })
     }
 
-    // const x = require('y')
+    // const x = require('y') or dynamic import('x')
     if (node.type === 'CallExpression') {
       const call = node as CallExpression
       if (
@@ -173,7 +179,15 @@ export function getImportSources(ast: ParseResult<File>): string[] {
         call.arguments.length === 1 &&
         call.arguments[0].type === 'StringLiteral'
       ) {
-        sources.push((call.arguments[0] as StringLiteral).value)
+        sources.push({ source: (call.arguments[0] as StringLiteral).value, line: node.loc?.start.line ?? 1 })
+      }
+      // dynamic import('x') — Babel parses as CallExpression with callee.type === 'Import'
+      if (
+        (call.callee as any).type === 'Import' &&
+        call.arguments.length >= 1 &&
+        call.arguments[0].type === 'StringLiteral'
+      ) {
+        sources.push({ source: (call.arguments[0] as StringLiteral).value, line: node.loc?.start.line ?? 1 })
       }
     }
   })

@@ -21,12 +21,27 @@ function scoreCatchBody(bodyLines: string[]): { score: number; label: string } {
   // Logs at all?
   if (/console\.(log|warn|error|info)\s*\(/.test(body)) score = 1
   // Logs the error object specifically?
-  if (/console\.(error|warn)\s*\(/.test(body) && /\b(err|error|e)\b/.test(body)) score = 2
-  // Re-throws, returns error response, or sets error state?
+  if ((/console\.(error|warn)\s*\(/.test(body) ||
+       /\b(logger|log)\.(error|warn)\s*\(/.test(body)) && /\b(err|error|e)\b/.test(body)) score = 2
+  // Re-throws, returns error response, sets error state, or uses proper error handling?
   if (/\bthrow\b/.test(body) ||
       /\breturn\b.*(?:error|err|status|Response|NextResponse|json)/.test(body) ||
       /\bset\w*Error\s*\(/.test(body) ||
-      /\bres\.\w+\s*\(/.test(body)) {
+      /\bres\.\w+\s*\(/.test(body) ||
+      // Toast notifications (react-toastify, sonner, shadcn)
+      /\btoast\.(error|warn|warning)\s*\(/.test(body) ||
+      /\btoast\s*\(\s*\{/.test(body) ||
+      // Error monitoring (Sentry, etc.)
+      /\b(Sentry\.)?captureException\s*\(/.test(body) ||
+      /\b(Sentry\.)?captureMessage\s*\(/.test(body) ||
+      // Structured loggers
+      /\b(logger|log)\.(error|fatal)\s*\(/.test(body) ||
+      // Error handler utilities
+      /\b(handleError|reportError|logError|notifyError|showError|onError|trackError)\s*\(/.test(body) ||
+      // Express middleware: next(err)
+      /\bnext\s*\(\s*(err|error|e)\s*\)/.test(body) ||
+      // Next.js notFound()
+      /\bnotFound\s*\(/.test(body)) {
     score = 3
   }
 
@@ -67,7 +82,10 @@ export const shallowCatchRule: Rule = {
 
           const bodyStart = body.loc.start.line - 1
           const bodyEnd = body.loc.end.line - 1
-          const bodyLines = file.lines.slice(bodyStart + 1, bodyEnd)
+          // Single-line catch: { toast.error(...) } — include the whole line
+          const bodyLines = bodyStart === bodyEnd
+            ? [file.lines[bodyStart]]
+            : file.lines.slice(bodyStart + 1, bodyEnd)
           const { score, label } = scoreCatchBody(bodyLines)
 
           if (score <= 1) {
