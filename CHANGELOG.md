@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] - 2026-02-20
+
+### Fixed
+- CI: suppress `eval-injection` self-detection in rule source (failing since v0.6.0)
+- `shallow-catch`: single-line catch bodies (`catch { toast.error(...) }`) no longer falsely flagged as empty
+
 ## [0.7.0] - 2026-02-19
 
 ### Changed
