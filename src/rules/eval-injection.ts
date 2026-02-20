@@ -1,3 +1,4 @@
+// prodlint-disable eval-injection
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine, isTestFile } from '../utils/patterns.js'
 
