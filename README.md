@@ -219,9 +219,9 @@ claude mcp add prodlint npx prodlint-mcp
 
 Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
 
-## Web Scanner
+## Site Score
 
-Scan any deployed website for AI agent-readiness — 14 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, HTTP Signatures (RFC 9421), and more.
+Check any deployed website for AI agent-readiness — 14 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, HTTP Signatures (RFC 9421), and more.
 
 ```bash
 npx prodlint --web example.com
@@ -229,7 +229,7 @@ npx prodlint --web example.com --json     # JSON output
 ```
 
 ```
-  prodlint web scanner
+  prodlint site score
   example.com · 14 checks
 
   Score: 42 C  ████████░░░░░░░░░░░░
@@ -250,10 +250,10 @@ npx prodlint --web example.com --json     # JSON output
 
   7 passed · 5 failed · 1 warnings
 
-  Full results: https://prodlint.com/web-scanner?url=example.com
+  Full results: https://prodlint.com/score?url=example.com
 ```
 
-Or scan interactively at [prodlint.com/web-scanner](https://prodlint.com/web-scanner).
+Or check your score interactively at [prodlint.com/score](https://prodlint.com/score).
 
 ## For AI Tools
 

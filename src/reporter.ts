@@ -155,7 +155,7 @@ export function reportWebPretty(result: WebScanResult): string {
   const lines: string[] = []
 
   lines.push('')
-  lines.push(pc.bold('  prodlint web scanner'))
+  lines.push(pc.bold('  prodlint site score'))
   lines.push(pc.dim(`  ${result.domain} · ${result.summary.totalChecks} checks`))
   lines.push('')
 
@@ -184,7 +184,7 @@ export function reportWebPretty(result: WebScanResult): string {
   lines.push(`  ${parts.join(pc.dim(' · '))}`)
   lines.push('')
 
-  lines.push(pc.dim(`  Full results: https://prodlint.com/web-scanner?url=${encodeURIComponent(result.domain)}`))
+  lines.push(pc.dim(`  Full results: https://prodlint.com/score?url=${encodeURIComponent(result.domain)}`))
   lines.push('')
 
   return lines.join('\n')

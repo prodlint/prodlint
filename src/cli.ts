@@ -108,7 +108,7 @@ function printHelp() {
     --ignore <pattern>        Glob patterns to ignore (can be repeated)
     --min-severity <level>    Minimum severity to show: critical, warning, info (default: info)
     --quiet                   Suppress badge and summary
-    --web                     Scan a deployed website for AI agent-readiness (14 checks)
+    --web                     Get your site's prodlint score (14 AI agent checks)
     -h, --help                Show this help message
     -v, --version             Show version
 
@@ -119,8 +119,8 @@ function printHelp() {
     npx prodlint --ignore "*.test"            Ignore test files
     npx prodlint --min-severity warning       Only warnings and criticals
     npx prodlint --quiet                      No badge output
-    npx prodlint --web example.com            Web agent-readiness scan
-    npx prodlint --web example.com --json     Web scan with JSON output
+    npx prodlint --web example.com            Site score
+    npx prodlint --web example.com --json     Site score with JSON output
 `)
 }
 
