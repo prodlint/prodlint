@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file tells AI coding agents how to use prodlint — the linter for vibe-coded apps.
+This file tells AI coding agents how to use prodlint — production readiness for vibe-coded apps.
 
 ## What is prodlint?
 
-prodlint is a zero-config static analysis tool for JavaScript and TypeScript projects. It catches the production bugs that AI coding tools consistently write — hardcoded secrets, missing auth, hallucinated imports, unvalidated server actions, and 48 more patterns. 52 rules, 4 categories, under 100ms, MIT licensed.
+prodlint is a zero-config static analysis tool for JavaScript and TypeScript projects. It checks the security, reliability, performance, and AI quality issues that AI coding tools consistently create — hardcoded secrets, missing auth, hallucinated imports, unvalidated server actions, and 48 more patterns. 52 rules, 4 categories, under 100ms, MIT licensed.
 
 ## Running prodlint
 

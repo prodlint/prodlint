@@ -16,7 +16,7 @@ Run a single test file: `npx vitest run tests/rules/secrets.test.ts`
 
 ## Architecture
 
-Prodlint is the linter for vibe-coded apps — a static analysis CLI that catches the production bugs AI coding tools consistently create in JS/TS projects. Three entry points built by tsup:
+Prodlint is a production readiness tool for vibe-coded apps — a static analysis CLI that checks whether AI-generated JS/TS code is ready to ship. Three entry points built by tsup:
 
 - **`src/cli.ts`** → `dist/cli.js` (shebang) — CLI via `npx prodlint`
 - **`src/mcp.ts`** → `dist/mcp.js` (shebang) — MCP server via `npx prodlint-mcp`

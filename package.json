@@ -1,7 +1,7 @@
 {
   "name": "prodlint",
-  "version": "0.7.2",
-  "description": "The linter for vibe-coded apps — catch what AI coding tools miss",
+  "version": "0.8.0",
+  "description": "Production readiness for vibe-coded apps — know your AI code is ready to ship",
   "license": "MIT",
   "author": "prodlint contributors",
   "type": "module",

@@ -1,5 +1,5 @@
 name: 'Prodlint'
-description: 'The linter for vibe-coded apps — catch what AI coding tools miss'
+description: 'Production readiness for vibe-coded apps — check your AI code before you ship'
 branding:
   icon: 'shield'
   color: 'green'
@@ -101,7 +101,7 @@ runs:
           const d = JSON.parse(fs.readFileSync('/tmp/prodlint-result.json', 'utf8'));
           const esc = s => String(s).replace(/[[\]()\\*_\`<>]/g, c => '\\\\' + c);
           const lines = [];
-          lines.push('## ' + '$EMOJI' + ' Prodlint Score: **' + d.overallScore + '/100**');
+          lines.push('## ' + '$EMOJI' + ' Production Readiness: **' + d.overallScore + '/100**');
           lines.push('');
           lines.push('| Category | Score | Issues |');
           lines.push('|----------|-------|--------|');

@@ -4,16 +4,16 @@
 [![npm downloads](https://img.shields.io/npm/dm/prodlint.svg)](https://www.npmjs.com/package/prodlint)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The linter for vibe-coded apps.
+Production readiness for vibe-coded apps.
 
-Static analysis for vibe-coded apps. Catches the production bugs that Cursor, v0, Bolt, and Copilot write — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and more. Zero config, no LLM, 52 rules, under 100ms.
+Static analysis for vibe-coded apps. Flags the security, reliability, performance, and AI quality issues that Cursor, v0, Bolt, and Copilot create — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and more. Zero config, no LLM, 52 rules, under 100ms.
 
 ```bash
 npx prodlint
 ```
 
 ```
-  prodlint v0.7.2
+  prodlint v0.8.0
   Scanned 148 files · 3 critical · 5 warnings
 
   src/app/api/checkout/route.ts
@@ -40,9 +40,9 @@ npx prodlint
 
 ## Why?
 
-Vibe coding is the fastest way to build. It's also the fastest way to ship hardcoded secrets, hallucinated packages, missing auth, and XSS vectors to production. These pass type-checks and look correct — but they aren't.
+Vibe coding is the fastest way to build. Shipping fast means knowing your code is production-ready — not just that it compiles. Hardcoded secrets, hallucinated packages, missing auth, and XSS vectors pass type-checks and look correct — but they aren't ready for production.
 
-prodlint catches what TypeScript and ESLint miss: **the bugs AI coding tools consistently write**.
+prodlint checks what TypeScript and ESLint don't: **whether your vibe-coded app is ready for production**.
 
 ## Install
 
@@ -66,7 +66,7 @@ npm i -g prodlint     # Global install
 
 ### Security (27 rules)
 
-| Rule | What it catches |
+| Rule | What it checks |
 |------|----------------|
 | `secrets` | API keys, tokens, passwords hardcoded in source |
 | `auth-checks` | API routes with no authentication |
@@ -98,7 +98,7 @@ npm i -g prodlint     # Global install
 
 ### Reliability (11 rules)
 
-| Rule | What it catches |
+| Rule | What it checks |
 |------|----------------|
 | `hallucinated-imports` | Imports of packages not in package.json |
 | `error-handling` | Async operations without try/catch |
@@ -114,7 +114,7 @@ npm i -g prodlint     # Global install
 
 ### Performance (6 rules)
 
-| Rule | What it catches |
+| Rule | What it checks |
 |------|----------------|
 | `no-sync-fs` | `readFileSync` in API routes |
 | `no-n-plus-one` | Database calls inside loops |
@@ -125,7 +125,7 @@ npm i -g prodlint     # Global install
 
 ### AI Quality (8 rules)
 
-| Rule | What it catches |
+| Rule | What it checks |
 |------|----------------|
 | `ai-smells` | `any` types, `console.log`, TODO comments piling up |
 | `placeholder-content` | Lorem ipsum, example emails, "your-api-key-here" left in production code |
@@ -219,13 +219,49 @@ claude mcp add prodlint npx prodlint-mcp
 
 Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
 
+## Web Scanner
+
+Scan any deployed website for AI agent-readiness — 13 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, and more.
+
+```bash
+npx prodlint --web example.com
+npx prodlint --web example.com --json     # JSON output
+```
+
+```
+  prodlint web scanner
+  example.com · 13 checks
+
+  Score: 42 C  ████████░░░░░░░░░░░░
+
+  ✗ AI-Disclosure Header          0/10  No AI-Disclosure header found.
+  ✗ Content-Usage Directives      0/10  No Content-Usage directives found.
+  ✗ TDMRep                        0/10  No TDMRep found.
+  ✗ A2A AgentCard                  0/5  No agent-card.json found.
+  ✗ ai.txt                         0/5  No ai.txt found at site root.
+  ! llms.txt                       2/5  llms.txt found but missing key sections.
+  ✓ robots.txt                   10/10  robots.txt found with 15 rules.
+  ✓ Sitemap                      10/10  Valid sitemap with 42 URLs.
+  ✓ Structured Data              10/10  Found JSON-LD structured data.
+  ✓ OpenGraph                    10/10  Complete OpenGraph tags found.
+  ✓ Page Speed                    5/5   Loaded in 0.8s.
+  ✓ AI Bot Directives             5/5   AI-specific bot rules found.
+  ✓ WebMCP Tools                   0/5  No WebMCP tools detected.
+
+  7 passed · 5 failed · 1 warnings
+
+  Full results: https://prodlint.com/web-scanner?url=example.com
+```
+
+Or scan interactively at [prodlint.com/web-scanner](https://prodlint.com/web-scanner).
+
 ## For AI Tools
 
 - **LLM-friendly docs**: [prodlint.com/llms.txt](https://prodlint.com/llms.txt) — concise project summary for LLMs
 - **Full reference**: [prodlint.com/llms-full.txt](https://prodlint.com/llms-full.txt) — all 52 rules with details
 - **MCP setup guide**: [prodlint.com/mcp](https://prodlint.com/mcp) — detailed editor setup for Claude Code, Cursor, Windsurf
 
-prodlint is designed specifically for AI-generated code patterns. Every rule targets bugs that AI coding tools consistently produce — not style nits.
+prodlint is designed specifically for AI-generated code patterns. Every rule checks for production issues that AI coding tools consistently create — not style nits.
 
 ## Suppression
 

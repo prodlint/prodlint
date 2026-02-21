@@ -13,7 +13,7 @@ const server = new McpServer({
 
 server.tool(
   'scan',
-  'Scan a vibe-coded project for production issues. Returns a 0-100 score with findings across security, reliability, performance, and AI quality categories.',
+  'Check a vibe-coded project\'s production readiness. Returns a 0-100 score with findings across security, reliability, performance, and AI quality categories.',
   {
     path: z.string().describe('Absolute path to the project directory to scan'),
     ignore: z.array(z.string()).optional().describe('Glob patterns to ignore'),
@@ -39,7 +39,7 @@ server.tool(
     const result = await scan({ path: resolved, ignore })
 
     const summary = [
-      `## Prodlint Score: ${result.overallScore}/100`,
+      `## Production Readiness: ${result.overallScore}/100`,
       '',
       `Scanned ${result.filesScanned} files in ${result.scanDurationMs}ms`,
       '',
