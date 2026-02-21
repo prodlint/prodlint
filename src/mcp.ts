@@ -21,6 +21,15 @@ server.tool(
   async ({ path, ignore }) => {
     // Validate the path exists and is a directory
     const resolved = resolve(path)
+
+    // Block access outside the current working directory
+    const cwd = process.cwd()
+    if (!resolved.startsWith(cwd)) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: Path must be within the current working directory (${cwd})` }],
+        isError: true,
+      }
+    }
     try {
       const stats = await stat(resolved)
       if (!stats.isDirectory()) {
