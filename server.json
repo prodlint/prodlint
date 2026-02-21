@@ -14,11 +14,16 @@
       "registryType": "npm",
       "identifier": "prodlint",
       "version": "0.7.1",
+      "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
       },
-      "runtimeArguments": ["-y", "prodlint-mcp"],
-      "environmentVariables": []
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "prodlint-mcp"
+        }
+      ]
     }
   ]
 }
