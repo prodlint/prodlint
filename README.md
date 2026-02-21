@@ -6,7 +6,7 @@
 
 The linter for vibe-coded apps.
 
-Cursor, v0, Bolt, and Copilot build fast. prodlint catches what they miss — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and the other production bugs that compile just fine. Zero config, no LLM, fast static analysis.
+Static analysis for vibe-coded apps. Catches the production bugs that Cursor, v0, Bolt, and Copilot write — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and more. Zero config, no LLM, 52 rules, under 100ms.
 
 ```bash
 npx prodlint
@@ -218,6 +218,14 @@ claude mcp add prodlint npx prodlint-mcp
 ```
 
 Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
+
+## For AI Tools
+
+- **LLM-friendly docs**: [prodlint.com/llms.txt](https://prodlint.com/llms.txt) — concise project summary for LLMs
+- **Full reference**: [prodlint.com/llms-full.txt](https://prodlint.com/llms-full.txt) — all 52 rules with details
+- **MCP setup guide**: [prodlint.com/mcp](https://prodlint.com/mcp) — detailed editor setup for Claude Code, Cursor, Windsurf
+
+prodlint is designed specifically for AI-generated code patterns. Every rule targets bugs that AI coding tools consistently produce — not style nits.
 
 ## Suppression
 
