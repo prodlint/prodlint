@@ -108,7 +108,7 @@ function printHelp() {
     --ignore <pattern>        Glob patterns to ignore (can be repeated)
     --min-severity <level>    Minimum severity to show: critical, warning, info (default: info)
     --quiet                   Suppress badge and summary
-    --web                     Scan a deployed website for AI agent-readiness (13 checks)
+    --web                     Scan a deployed website for AI agent-readiness (14 checks)
     -h, --help                Show this help message
     -v, --version             Show version
 

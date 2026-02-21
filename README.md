@@ -221,7 +221,7 @@ Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool direc
 
 ## Web Scanner
 
-Scan any deployed website for AI agent-readiness — 13 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, and more.
+Scan any deployed website for AI agent-readiness — 14 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, HTTP Signatures (RFC 9421), and more.
 
 ```bash
 npx prodlint --web example.com
@@ -230,7 +230,7 @@ npx prodlint --web example.com --json     # JSON output
 
 ```
   prodlint web scanner
-  example.com · 13 checks
+  example.com · 14 checks
 
   Score: 42 C  ████████░░░░░░░░░░░░
 
