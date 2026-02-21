@@ -131,6 +131,25 @@ Composite action: installs Node 20, runs `npx prodlint --json`, parses JSON, pos
 3. Create `tests/rules/<rule-id>.test.ts`
 4. Run `npm test` and `npm run build`
 
+### Version Bump Checklist
+
+When bumping the version (`npm version patch/minor/major`), update ALL of these hardcoded version strings:
+
+**This repo (prodlint):**
+1. `package.json` → `version` (handled by `npm version`)
+2. `server.json` → both `version` fields (top-level and inside `packages[0]`)
+3. `README.md` → terminal output example (`prodlint v0.x.x`)
+
+**Website repo (prodlint-website):**
+4. `app/components/animated-terminal.tsx` → terminal animation line (`prodlint v0.x.x`)
+5. `app/layout.tsx` → JSON-LD `softwareVersion`
+6. `app/mcp/page.tsx` → JSON-LD `softwareVersion`
+
+**After updating all files:**
+- `npm run build && npm publish` (this repo)
+- `npm run build` (website repo, then push to deploy)
+- `./mcp-publisher.exe publish` (update MCP registry)
+
 ### npm Package
 
 `files` field includes only `dist/**/*.js`, `dist/**/*.d.ts`, and `action.yml`. Source maps are built but excluded from the published tarball (~22 KB).
