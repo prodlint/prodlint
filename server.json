@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.prodlint/prodlint",
+  "name": "io.github.Anthony-Marcovecchio/prodlint",
   "title": "prodlint",
   "description": "Static analysis that catches the production bugs AI coding tools write. 52 rules.",
   "websiteUrl": "https://prodlint.com",
@@ -8,12 +8,12 @@
     "url": "https://github.com/prodlint/prodlint",
     "source": "github"
   },
-  "version": "0.7.1",
+  "version": "0.7.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "prodlint",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

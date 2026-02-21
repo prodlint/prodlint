@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "The linter for vibe-coded apps — catch what AI coding tools miss",
   "license": "MIT",
   "author": "prodlint contributors",
@@ -13,7 +13,7 @@
     "url": "https://github.com/prodlint/prodlint/issues"
   },
   "homepage": "https://prodlint.com",
-  "mcpName": "io.github.prodlint/prodlint",
+  "mcpName": "io.github.Anthony-Marcovecchio/prodlint",
   "bin": {
     "prodlint": "./dist/cli.js",
     "prodlint-mcp": "./dist/mcp.js"
