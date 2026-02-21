@@ -13,6 +13,7 @@
     "url": "https://github.com/prodlint/prodlint/issues"
   },
   "homepage": "https://prodlint.com",
+  "mcpName": "io.github.prodlint/prodlint",
   "bin": {
     "prodlint": "./dist/cli.js",
     "prodlint-mcp": "./dist/mcp.js"

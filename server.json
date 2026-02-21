@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.prodlint/prodlint",
+  "title": "prodlint",
+  "description": "Static analysis for vibe-coded apps. Catches the production bugs AI coding tools write — hardcoded secrets, missing auth, hallucinated imports, unvalidated server actions, and 48 more patterns. 52 rules, zero config, under 100ms.",
+  "websiteUrl": "https://prodlint.com",
+  "repository": {
+    "url": "https://github.com/prodlint/prodlint",
+    "source": "github"
+  },
+  "version": "0.7.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "prodlint",
+      "version": "0.7.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": ["-y", "prodlint-mcp"],
+      "environmentVariables": []
+    }
+  ]
+}
