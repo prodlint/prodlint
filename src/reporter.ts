@@ -117,7 +117,7 @@ function renderBar(score: number): string {
   return color('█'.repeat(filled)) + pc.dim('░'.repeat(empty))
 }
 
-// Web scanner report
+// Site score report
 interface WebScanCheck {
   id: string
   name: string

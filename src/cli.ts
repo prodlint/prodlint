@@ -30,7 +30,7 @@ async function main() {
     process.exit(0)
   }
 
-  // Web scanner mode
+  // Site score mode
   if (values.web) {
     const url = positionals[0]
     if (!url) {
