@@ -78,6 +78,12 @@
     "mcp-server",
     "cursor",
     "copilot",
+    "v0",
+    "bolt",
+    "windsurf",
+    "claude",
+    "github-action",
+    "eslint-alternative",
     "devtools"
   ]
 }
