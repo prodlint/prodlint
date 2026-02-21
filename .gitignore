@@ -5,3 +5,13 @@ dist/
 .env
 .env.local
 .env.*
+
+# MCP registry publisher
+.mcpregistry_*
+mcp-publisher.exe
+
+# Windows artifacts
+nul
+
+# Drafts
+drafts/
