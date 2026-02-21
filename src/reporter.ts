@@ -116,3 +116,76 @@ function renderBar(score: number): string {
   const color = scoreColor(score)
   return color('█'.repeat(filled)) + pc.dim('░'.repeat(empty))
 }
+
+// Web scanner report
+interface WebScanCheck {
+  id: string
+  name: string
+  status: string
+  severity: string
+  points: number
+  maxPoints: number
+  details?: string
+}
+
+interface WebScanResult {
+  url: string
+  domain: string
+  overallScore: number
+  grade: string
+  checks: WebScanCheck[]
+  summary: { passed: number; failed: number; warnings: number; totalChecks: number }
+}
+
+const STATUS_ICONS: Record<string, (s: string) => string> = {
+  pass: pc.green,
+  fail: pc.red,
+  warn: pc.yellow,
+  info: pc.blue,
+}
+
+const STATUS_SYMBOLS: Record<string, string> = {
+  pass: '✓',
+  fail: '✗',
+  warn: '!',
+  info: 'i',
+}
+
+export function reportWebPretty(result: WebScanResult): string {
+  const lines: string[] = []
+
+  lines.push('')
+  lines.push(pc.bold('  prodlint web scanner'))
+  lines.push(pc.dim(`  ${result.domain} · ${result.summary.totalChecks} checks`))
+  lines.push('')
+
+  // Score
+  const overallColor = scoreColor(result.overallScore)
+  const bar = renderBar(result.overallScore)
+  lines.push(`  ${pc.bold('Score:')} ${overallColor(pc.bold(`${result.overallScore}`))} ${overallColor(result.grade)}  ${bar}`)
+  lines.push('')
+
+  // Checks sorted: fail first, then warn, info, pass
+  const order: Record<string, number> = { fail: 0, warn: 1, info: 2, pass: 3 }
+  const sorted = [...result.checks].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
+
+  for (const check of sorted) {
+    const color = STATUS_ICONS[check.status] ?? pc.dim
+    const symbol = STATUS_SYMBOLS[check.status] ?? '?'
+    const pts = `${check.points}/${check.maxPoints}`
+    lines.push(`  ${color(symbol)} ${check.name.padEnd(28)} ${pc.dim(pts.padStart(6))}  ${pc.dim(check.details || '')}`)
+  }
+
+  lines.push('')
+  const parts: string[] = []
+  if (result.summary.passed > 0) parts.push(pc.green(`${result.summary.passed} passed`))
+  if (result.summary.failed > 0) parts.push(pc.red(`${result.summary.failed} failed`))
+  if (result.summary.warnings > 0) parts.push(pc.yellow(`${result.summary.warnings} warnings`))
+  lines.push(`  ${parts.join(pc.dim(' · '))}`)
+  lines.push('')
+
+  lines.push(pc.dim(`  Full results: https://prodlint.com/web-scanner?url=${encodeURIComponent(result.domain)}`))
+  lines.push('')
+
+  return lines.join('\n')
+}
