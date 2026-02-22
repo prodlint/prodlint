@@ -145,10 +145,12 @@ When bumping the version (`npm version patch/minor/major`), update ALL of these 
 5. `app/layout.tsx` → JSON-LD `softwareVersion`
 6. `app/mcp/page.tsx` → JSON-LD `softwareVersion`
 
-**After updating all files:**
-- `npm run build && npm publish` (this repo)
-- `npm run build` (website repo, then push to deploy)
-- `./mcp-publisher.exe publish` (update MCP registry)
+**After updating all files, run these in order:**
+1. `npm run build && npm test` (verify everything passes)
+2. `npm publish` (publishes to npm, requires OTP)
+3. `git tag -f v1 && git push origin v1 --force` (update v1 tag so GitHub Action users get the new version)
+4. `./mcp-publisher.exe publish` (update MCP registry — requires `mcp-publisher.exe login github` if not already logged in)
+5. `npm run build` (website repo, then push to deploy)
 
 ### npm Package
 
