@@ -13,7 +13,7 @@ npx prodlint
 ```
 
 ```
-  prodlint v0.8.1
+  prodlint v0.9.0
   Scanned 148 files · 3 critical · 5 warnings
 
   src/app/api/checkout/route.ts
@@ -72,7 +72,7 @@ npm i -g prodlint     # Global install
 | `auth-checks` | API routes with no authentication |
 | `env-exposure` | `NEXT_PUBLIC_` on server-only secrets |
 | `input-validation` | Request body used without validation |
-| `cors-config` | `Access-Control-Allow-Origin: *` |
+| `cors-config` | `Access-Control-Allow-Origin: *`, wildcard + credentials escalated to critical |
 | `unsafe-html` | `dangerouslySetInnerHTML` with user data |
 | `sql-injection` | String-interpolated SQL queries (ORM-aware) |
 | `open-redirect` | User input passed to `redirect()` |
@@ -121,7 +121,7 @@ npm i -g prodlint     # Global install
 | `no-unbounded-query` | `.findMany()` / `.select('*')` with no limit |
 | `no-dynamic-import-loop` | `import()` inside loops |
 | `server-component-fetch-self` | Server components fetching their own API routes |
-| `missing-abort-controller` | Fetch calls without timeout or AbortController |
+| `missing-abort-controller` | Fetch/axios calls without timeout or AbortController |
 
 ### AI Quality (8 rules)
 

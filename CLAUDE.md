@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (562+ tests)
+npm run test         # vitest run (580+ tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -107,7 +107,7 @@ Overall = **weighted** average: security 40%, reliability 30%, performance 15%, 
 
 ### Finding Interface (v0.5.0)
 
-`Finding` now has an optional `fix?: string` field for actionable remediation hints. New rules include fix suggestions.
+`Finding` has an optional `fix?: string` field for actionable remediation hints. All 52 rules include fix suggestions (v0.9.0).
 
 ### CLI Flags (v0.5.0)
 
