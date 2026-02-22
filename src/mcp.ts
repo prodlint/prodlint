@@ -5,6 +5,7 @@ import { stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
+import { runWebScan, normalizeUrl, isPrivateHost } from './web-scanner/index.js'
 
 const server = new McpServer({
   name: 'prodlint',
@@ -71,6 +72,53 @@ server.tool(
         summary.push(`- ...and ${result.findings.length - 30} more findings`)
       }
     }
+
+    return {
+      content: [{ type: 'text' as const, text: summary.join('\n') }],
+    }
+  },
+)
+
+server.tool(
+  'scan-web',
+  'Check a deployed website\'s AI agent-readiness. Returns a 0-100 score across 14 checks including robots.txt AI directives, llms.txt, AgentCard, WebMCP, and more.',
+  { url: z.string().describe('URL of the website to scan (e.g. https://example.com)') },
+  async ({ url }) => {
+    let normalizedUrl: string
+    try {
+      normalizedUrl = normalizeUrl(url)
+    } catch {
+      return {
+        content: [{ type: 'text' as const, text: `Error: Invalid URL "${url}"` }],
+        isError: true,
+      }
+    }
+
+    const hostname = new URL(normalizedUrl).hostname
+    if (isPrivateHost(hostname)) {
+      return {
+        content: [{ type: 'text' as const, text: 'Error: Cannot scan private or internal hosts.' }],
+        isError: true,
+      }
+    }
+
+    const result = await runWebScan(normalizedUrl)
+
+    const STATUS_SYMBOLS: Record<string, string> = { pass: '\u2713', fail: '\u2717', warn: '!', info: 'i' }
+
+    const summary = [
+      `## Site Score: ${result.overallScore}/100 (${result.grade})`,
+      '',
+      `Scanned ${result.domain} \u00b7 ${result.summary.totalChecks} checks`,
+      '',
+      '### Checks',
+      ...result.checks.map(c => {
+        const sym = STATUS_SYMBOLS[c.status] ?? '?'
+        return `- ${sym} **${c.name}** \u2014 ${c.details || 'No details'} (${c.points}/${c.maxPoints})`
+      }),
+      '',
+      `### Summary: ${result.summary.passed} passed \u00b7 ${result.summary.failed} failed \u00b7 ${result.summary.warnings} warnings`,
+    ]
 
     return {
       content: [{ type: 'text' as const, text: summary.join('\n') }],

@@ -2,6 +2,8 @@ import { parseArgs } from 'node:util'
 import { scan } from './scanner.js'
 import { reportPretty, reportJson, reportWebPretty } from './reporter.js'
 import { getVersion } from './utils/version.js'
+import { runWebScan as runWebScanLocal, normalizeUrl, isPrivateHost } from './web-scanner/index.js'
+import type { WebScanResult } from './web-scanner/index.js'
 import type { Severity } from './types.js'
 
 const SEVERITY_RANK: Record<Severity, number> = { critical: 3, warning: 2, info: 1 }
@@ -65,34 +67,27 @@ async function main() {
 }
 
 async function runWebScan(url: string, opts: { json: boolean }) {
-  const res = await fetch('https://prodlint.com/api/scan-web', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
-  })
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-    console.error(`Scan failed: ${(data as Record<string, string>).error || res.statusText}`)
+  let normalizedUrl: string
+  try {
+    normalizedUrl = normalizeUrl(url)
+  } catch {
+    console.error('Invalid URL:', url)
     process.exit(2)
   }
 
-  const data = await res.json()
+  const hostname = new URL(normalizedUrl).hostname
+  if (isPrivateHost(hostname)) {
+    console.error('Cannot scan private/internal hosts.')
+    process.exit(2)
+  }
+
+  const result = await runWebScanLocal(normalizedUrl)
 
   if (opts.json) {
-    console.log(JSON.stringify(data, null, 2))
+    console.log(JSON.stringify(result, null, 2))
   } else {
-    console.log(reportWebPretty(data as WebScanResult))
+    console.log(reportWebPretty(result as WebScanResult))
   }
-}
-
-interface WebScanResult {
-  url: string
-  domain: string
-  overallScore: number
-  grade: string
-  checks: { id: string; name: string; status: string; severity: string; points: number; maxPoints: number; details?: string }[]
-  summary: { passed: number; failed: number; warnings: number; totalChecks: number }
 }
 
 function printHelp() {
