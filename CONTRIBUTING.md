@@ -65,3 +65,7 @@ export const myRule: Rule = {
 - TypeScript strict mode
 - No runtime dependencies beyond `fast-glob` and `picocolors`
 - Deterministic rules only (no LLM calls, no network requests)
+
+## Contributor License Agreement
+
+By submitting a pull request, you agree to the terms in [CLA.md](CLA.md). In short: you grant us a license to use and relicense your contributions as part of this project, and you retain your copyright. Submitting a PR is your signature.
