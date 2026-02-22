@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Production readiness for vibe-coded apps — know your AI code is ready to ship",
   "license": "MIT",
   "author": "prodlint contributors",

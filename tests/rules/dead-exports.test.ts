@@ -111,6 +111,35 @@ describe('dead-exports rule', () => {
     expect(findings).toHaveLength(0)
   })
 
+  it('skips Next.js special files (opengraph-image, sitemap, robots, etc.)', () => {
+    const og = makeFile('export default function Image() {}', { relativePath: 'app/opengraph-image.tsx', ext: 'tsx' })
+    const sitemap = makeFile('export default function sitemap() {}', { relativePath: 'app/sitemap.ts', ext: 'ts' })
+    const robots = makeFile('export default function robots() {}', { relativePath: 'app/robots.ts', ext: 'ts' })
+    const twitter = makeFile('export default function Image() {}', { relativePath: 'app/twitter-image.tsx', ext: 'tsx' })
+    const icon = makeFile('export default function Icon() {}', { relativePath: 'app/icon.tsx', ext: 'tsx' })
+    const manifest = makeFile('export default function manifest() {}', { relativePath: 'app/manifest.ts', ext: 'ts' })
+    const other = makeFile('const x = 1', { relativePath: 'src/app.ts' })
+
+    const findings = deadExportsRule.checkProject!([og, sitemap, robots, twitter, icon, manifest, other], project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('skips export keywords inside string literals', () => {
+    const exporter = makeFile([
+      'export const RULES_DATA = [',
+      '  {',
+      '    example: `export const foo = 1',
+      'export function bar() {}`,',
+      '  }',
+      ']',
+    ].join('\n'), { relativePath: 'src/data.ts' })
+
+    const consumer = makeFile(`import { RULES_DATA } from './data'`, { relativePath: 'src/app.ts' })
+
+    const findings = deadExportsRule.checkProject!([exporter, consumer], project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('does not collide symbols across files with same name', () => {
     // Two files both export 'format', only one is imported
     const fileA = makeFile('export const format = (x: string) => x.trim()', { relativePath: 'src/string-utils.ts' })

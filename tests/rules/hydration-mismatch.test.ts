@@ -64,6 +64,39 @@ export default function Page() {
     expect(findings).toHaveLength(1)
   })
 
+  it('ignores server-only lib directory inside app/', () => {
+    const file = makeFile(`const ts = Date.now()`, { relativePath: 'app/lib/rate-limit.ts' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('ignores server-only lib directory inside src/app/', () => {
+    const file = makeFile(`const d = new Date()`, { relativePath: 'src/app/lib/generators/og.ts' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('ignores server actions directory inside app/', () => {
+    const file = makeFile(`const d = new Date()`, { relativePath: 'app/actions/submit.ts' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('ignores pure .ts files without JSX in app/', () => {
+    const file = makeFile(`export function getTime() { return Date.now() }`, { relativePath: 'app/utils.ts' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('still flags .tsx files with JSX in app/', () => {
+    const file = makeFile(`export default function Page() {
+  const now = new Date()
+  return <div>{now.toISOString()}</div>
+}`, { relativePath: 'app/dashboard/page.tsx' })
+    const findings = hydrationMismatchRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
   // AST improvement: precise useEffect range detection
   it('AST: skips window.innerWidth inside complex useEffect', () => {
     const file = makeFile([

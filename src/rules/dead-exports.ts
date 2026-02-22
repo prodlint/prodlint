@@ -4,7 +4,7 @@ import { isTestFile, isScriptFile } from '../utils/patterns.js'
 // Files that are entry points — their exports are consumed externally
 function isEntryPoint(relativePath: string): boolean {
   const name = relativePath.split('/').pop() ?? ''
-  return /^(page|layout|loading|error|not-found|route|middleware|instrumentation)\.(tsx?|jsx?)$/.test(name) ||
+  return /^(page|layout|loading|error|not-found|route|middleware|instrumentation|opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\.(tsx?|jsx?)$/.test(name) ||
     /^index\.(tsx?|jsx?)$/.test(name) ||
     name === 'global-error.tsx' ||
     name === 'global-error.jsx'
@@ -51,8 +51,31 @@ export const deadExportsRule: Rule = {
       if (isEntryPoint(file.relativePath)) continue
 
       // Collect named exports
+      let inTemplateLiteral = false
       for (let i = 0; i < file.lines.length; i++) {
         const line = file.lines[i]
+
+        // Track multiline template literal state (backtick toggles)
+        let backtickCount = 0
+        for (let j = 0; j < line.length; j++) {
+          if (line[j] === '\\') { j++; continue }
+          if (line[j] === '`') backtickCount++
+        }
+        if (backtickCount % 2 === 1) inTemplateLiteral = !inTemplateLiteral
+
+        // Skip lines inside template literals (code examples containing 'export')
+        if (inTemplateLiteral && backtickCount % 2 === 0) continue
+
+        // Skip if 'export' is inside a string literal on this line
+        const exportIdx = line.indexOf('export')
+        if (exportIdx >= 0) {
+          let inStr = false
+          for (let j = 0; j < exportIdx; j++) {
+            if (line[j] === '\\') { j++; continue }
+            if (line[j] === "'" || line[j] === '"' || line[j] === '`') inStr = !inStr
+          }
+          if (inStr) continue
+        }
 
         let match
         const namedRe = /export\s+(?:async\s+)?(?:function|const|let|class|enum)\s+(\w+)/g

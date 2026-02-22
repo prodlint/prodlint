@@ -36,6 +36,12 @@ export const hydrationMismatchRule: Rule = {
     // Skip route.ts (API routes)
     if (/route\.[jt]sx?$/.test(file.relativePath)) return []
 
+    // Skip server-only directories inside app/ (utilities, not components)
+    if (/(?:^|\/)(?:src\/)?app\/(?:lib|utils|helpers|server|actions)\//.test(file.relativePath)) return []
+
+    // Skip pure .ts/.js files with no JSX (server utilities, not components)
+    if (/\.[jt]s$/.test(file.relativePath) && !/<[A-Z]/.test(file.content)) return []
+
     const findings: Finding[] = []
 
     // Build useEffect line ranges (AST-based if available)
