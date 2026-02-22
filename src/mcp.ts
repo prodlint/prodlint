@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { resolve, sep } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
 import { runWebScan, normalizeUrl, isPrivateHost } from './web-scanner/index.js'
@@ -23,9 +23,11 @@ server.tool(
     // Validate the path exists and is a directory
     const resolved = resolve(path)
 
-    // Block access outside the current working directory
+    // Block access outside the current working directory (case-insensitive on Windows)
     const cwd = process.cwd()
-    if (!resolved.startsWith(cwd)) {
+    const normalizedResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    const normalizedCwd = process.platform === 'win32' ? cwd.toLowerCase() : cwd
+    if (normalizedResolved !== normalizedCwd && !normalizedResolved.startsWith(normalizedCwd + sep)) {
       return {
         content: [{ type: 'text' as const, text: `Error: Path must be within the current working directory (${cwd})` }],
         isError: true,
