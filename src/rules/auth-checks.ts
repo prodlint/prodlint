@@ -98,6 +98,7 @@ export const authChecksRule: Rule = {
       message,
       severity,
       category: 'security',
+      fix: "Add authentication check: const session = await auth(); if (!session) return new Response('Unauthorized', { status: 401 })",
     }]
   },
 }

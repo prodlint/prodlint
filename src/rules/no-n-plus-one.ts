@@ -72,6 +72,7 @@ export const noNPlusOneRule: Rule = {
             message: 'Database/fetch call inside loop — potential N+1 query, consider batching',
             severity: 'warning',
             category: 'performance',
+            fix: 'Use eager loading (include/join) or batch the queries outside the loop',
           })
           break // one finding per loop body
         }

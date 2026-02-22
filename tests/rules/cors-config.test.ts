@@ -55,4 +55,46 @@ describe('cors-config rule', () => {
     const findings = corsConfigRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('escalates to critical when origin: "*" with credentials: true', () => {
+    const file = makeFile(`const config = {
+  origin: "*",
+  credentials: true,
+}`)
+    const findings = corsConfigRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+    expect(findings[0].message).toContain('credentials')
+  })
+
+  it('stays warning when origin: "*" without credentials', () => {
+    const file = makeFile(`const config = { origin: "*" }`)
+    const findings = corsConfigRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+  })
+
+  it('passes specific origin with credentials: true', () => {
+    const file = makeFile(`const config = {
+  origin: 'https://example.com',
+  credentials: true,
+}`)
+    const findings = corsConfigRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('detects credentials near Access-Control-Allow-Origin header', () => {
+    const file = makeFile(`res.setHeader("Access-Control-Allow-Origin", "*")
+res.setHeader("Access-Control-Allow-Credentials", "true")
+const credentials = true`)
+    const findings = corsConfigRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('includes fix hints on all findings', () => {
+    const file = makeFile(`app.use(cors())`)
+    const findings = corsConfigRule.check(file, project)
+    expect(findings[0].fix).toBeDefined()
+  })
 })

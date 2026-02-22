@@ -67,6 +67,7 @@ export const rateLimitingRule: Rule = {
       message: 'No rate limiting — anyone could spam this endpoint and run up your API costs',
       severity: 'info',
       category: 'security',
+      fix: "Add rate limiting: import { Ratelimit } from '@upstash/ratelimit' or use express-rate-limit",
     }]
   },
 }

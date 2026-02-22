@@ -42,6 +42,7 @@ export const envExposureRule: Rule = {
           message: '.env is not listed in .gitignore — secrets may be committed',
           severity: 'critical',
           category: 'security',
+          fix: 'Add .env to .gitignore to prevent committing secrets',
         })
       }
       return findings
@@ -70,6 +71,7 @@ export const envExposureRule: Rule = {
             : `Server env var "${envName}" used in client component (will be undefined at runtime)`,
           severity: isSensitive ? 'critical' : 'warning',
           category: 'security',
+          fix: 'Move to server-only file or use NEXT_PUBLIC_ prefix only for non-sensitive values',
         })
       }
     }

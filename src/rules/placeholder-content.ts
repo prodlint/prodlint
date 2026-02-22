@@ -44,6 +44,7 @@ export const placeholderContentRule: Rule = {
             message: label,
             severity: 'info',
             category: 'ai-quality',
+            fix: 'Replace placeholder content with real production values before deploying',
           })
           break // one finding per line
         }

@@ -86,6 +86,7 @@ export const openRedirectRule: Rule = {
               message: 'User input in redirect — validate against an allowlist to prevent open redirect',
               severity: 'warning',
               category: 'security',
+              fix: 'Validate the redirect URL against an allowlist of trusted domains',
             })
             return
           }
@@ -100,6 +101,7 @@ export const openRedirectRule: Rule = {
               message: 'Possible user input in redirect — verify the URL is validated before use',
               severity: 'warning',
               category: 'security',
+              fix: 'Validate the redirect URL against an allowlist of trusted domains',
             })
           }
         })
@@ -125,6 +127,7 @@ export const openRedirectRule: Rule = {
             message: 'User input in redirect — validate against an allowlist to prevent open redirect',
             severity: 'warning',
             category: 'security',
+            fix: 'Validate the redirect URL against an allowlist of trusted domains',
           })
           break
         }
@@ -143,6 +146,7 @@ export const openRedirectRule: Rule = {
             message: 'Possible user input in redirect — verify the URL is validated before use',
             severity: 'warning',
             category: 'security',
+            fix: 'Validate the redirect URL against an allowlist of trusted domains',
           })
           break
         }

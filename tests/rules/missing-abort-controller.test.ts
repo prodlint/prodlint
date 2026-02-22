@@ -56,4 +56,65 @@ export async function getData() {
     const findings = missingAbortControllerRule.check(file, project)
     expect(findings).toHaveLength(0)
   })
+
+  it('detects axios call without timeout in API route', () => {
+    const file = makeFile(`export async function GET(req) {
+  const res = await axios.get('https://api.example.com/data')
+  return Response.json(res.data)
+}`, { relativePath: 'app/api/proxy/route.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('axios()')
+  })
+
+  it('allows axios.create with timeout config', () => {
+    const file = makeFile(`const client = axios.create({ baseURL: 'https://api.example.com', timeout: 5000 })
+export async function GET(req) {
+  const res = await client.get('/data')
+  return Response.json(res.data)
+}`, { relativePath: 'app/api/proxy/route.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('detects fetch in background job file without timeout', () => {
+    const file = makeFile(`import { queue } from './queue'
+queue.process(async (job) => {
+  const res = await fetch('https://api.example.com/webhook')
+  console.log(await res.json())
+})`, { relativePath: 'workers/notify.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('allows cron handler with AbortController', () => {
+    const file = makeFile(`import cron from 'node-cron'
+cron.schedule('* * * * *', async () => {
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 5000)
+  await fetch('https://api.example.com', { signal: controller.signal })
+})`, { relativePath: 'jobs/sync.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('detects fetch in setInterval without timeout', () => {
+    const file = makeFile(`export async function GET(req) {
+  setInterval(async () => {
+    const res = await fetch('https://api.example.com/poll')
+  }, 30000)
+  return Response.json({ ok: true })
+}`, { relativePath: 'app/api/poll/route.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('allows axios with inline timeout', () => {
+    const file = makeFile(`export async function GET(req) {
+  const res = await axios.get('https://api.example.com', { timeout: 5000 })
+  return Response.json(res.data)
+}`, { relativePath: 'app/api/proxy/route.ts' })
+    const findings = missingAbortControllerRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

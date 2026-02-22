@@ -93,6 +93,7 @@ export const unhandledPromiseRule: Rule = {
         message: 'Async call without await, return, or assignment — promise result is lost',
         severity: 'warning',
         category: 'reliability',
+        fix: 'Add .catch() handler or use try/catch with await',
       })
     }
 

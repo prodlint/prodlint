@@ -45,6 +45,7 @@ export const staleFallbackRule: Rule = {
             message: `${label} — use environment variable instead`,
             severity: 'warning',
             category: 'ai-quality',
+            fix: 'Replace hardcoded URL with an environment variable: process.env.DATABASE_URL or similar',
           })
           break
         }

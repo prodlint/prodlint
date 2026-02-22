@@ -99,6 +99,7 @@ export const shallowCatchRule: Rule = {
                 : `Decorative error handler: ${label}`,
               severity: score === 0 ? 'warning' : 'info',
               category: 'reliability',
+              fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
             })
           }
         })
@@ -174,6 +175,7 @@ export const shallowCatchRule: Rule = {
             : `Decorative error handler: ${label}`,
           severity: score === 0 ? 'warning' : 'info',
           category: 'reliability',
+          fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
         })
       }
 

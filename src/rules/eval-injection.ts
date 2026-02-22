@@ -37,6 +37,7 @@ export const evalInjectionRule: Rule = {
             message: msg,
             severity: 'critical',
             category: 'security',
+            fix: 'Replace eval/Function constructor with a safe alternative like JSON.parse() or a sandboxed interpreter',
           })
           break
         }

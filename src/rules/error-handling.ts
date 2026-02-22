@@ -42,6 +42,7 @@ export const errorHandlingRule: Rule = {
       message: 'API route handler has no try/catch block',
       severity: 'warning',
       category: 'reliability',
+      fix: 'Wrap the handler body in try/catch and return appropriate error responses',
     }]
   },
 }

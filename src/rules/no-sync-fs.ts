@@ -36,6 +36,7 @@ export const noSyncFsRule: Rule = {
           message: `Synchronous ${fnName}() blocks the event loop — use async alternative`,
           severity,
           category: 'performance',
+          fix: `Use the async version: fs.promises.${fnName.replace('Sync', '')}() instead of ${fnName}()`,
         })
       }
     }

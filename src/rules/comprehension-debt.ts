@@ -59,6 +59,7 @@ export const comprehensionDebtRule: Rule = {
             message: `${fnName}() has ${params} parameters (max ${MAX_PARAMS}) — hard to call correctly`,
             severity: 'info',
             category: 'ai-quality',
+            fix: 'Group related parameters into an options object',
           })
         }
       }
@@ -89,6 +90,7 @@ export const comprehensionDebtRule: Rule = {
                 message: `${fnName}() is ${length} lines long (max ${MAX_FUNCTION_LENGTH}) — consider splitting`,
                 severity: 'info',
                 category: 'ai-quality',
+                fix: 'Break this into smaller, focused functions with clear names',
               })
             }
             if (maxDepthInFn > MAX_NESTING_DEPTH) {
@@ -100,6 +102,7 @@ export const comprehensionDebtRule: Rule = {
                 message: `${fnName}() has nesting depth ${maxDepthInFn} (max ${MAX_NESTING_DEPTH}) — flatten with early returns`,
                 severity: 'info',
                 category: 'ai-quality',
+                fix: 'Reduce nesting with early returns, guard clauses, or extracted helper functions',
               })
             }
 

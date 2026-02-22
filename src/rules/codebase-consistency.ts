@@ -160,6 +160,7 @@ export const codebaseConsistencyRule: Rule = {
         message: `${dim.label}: ${consistency}% consistent — dominant: ${dominant} (${dominantCount} files), minority: ${minorities.join(', ')}`,
         severity: consistency < 60 ? 'warning' : 'info',
         category: 'ai-quality',
+        fix: 'Standardize on one pattern across the codebase for consistency',
       })
     }
 

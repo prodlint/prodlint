@@ -31,6 +31,7 @@ export const missingErrorBoundaryRule: Rule = {
       message: `Layout without error.tsx — errors in ${dir} will bubble up to parent error boundary`,
       severity: 'info',
       category: 'reliability',
+      fix: 'Add an error.tsx file in the same route segment to catch rendering errors',
     }]
   },
 }

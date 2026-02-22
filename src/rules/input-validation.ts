@@ -61,6 +61,7 @@ export const inputValidationRule: Rule = {
       message: 'Request body accessed without validation (consider using Zod, Yup, or similar)',
       severity: 'warning',
       category: 'security',
+      fix: 'Validate input with Zod or a similar schema library before using it',
     }]
   },
 }

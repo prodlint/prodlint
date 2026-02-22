@@ -29,6 +29,7 @@ export const noUnboundedQueryRule: Rule = {
           message: '.findMany() without take/limit — query may return unbounded results',
           severity: 'warning',
           category: 'performance',
+          fix: 'Add a LIMIT clause or use pagination to prevent unbounded result sets',
         })
         continue
       }
@@ -45,6 +46,7 @@ export const noUnboundedQueryRule: Rule = {
             message: '.findMany() without take — add pagination or limit',
             severity: 'warning',
             category: 'performance',
+            fix: 'Add a LIMIT clause or use pagination to prevent unbounded result sets',
           })
         }
         continue
@@ -69,6 +71,7 @@ export const noUnboundedQueryRule: Rule = {
             message: ".select('*') without .limit() or filter — add pagination or a where clause",
             severity: 'warning',
             category: 'performance',
+            fix: 'Add a LIMIT clause or use pagination to prevent unbounded result sets',
           })
         }
       }

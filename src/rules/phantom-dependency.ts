@@ -67,6 +67,7 @@ export const phantomDependencyRule: Rule = {
           message: `"${name}" is a commonly hallucinated package name — verify it exists and is the correct package`,
           severity: 'warning',
           category: 'security',
+          fix: 'Add the missing package to dependencies in package.json, or remove the import if the package is hallucinated',
         })
       }
 
@@ -80,6 +81,7 @@ export const phantomDependencyRule: Rule = {
             message: `"${name}" has a suspicious package name pattern — verify it's legitimate`,
             severity: 'info',
             category: 'security',
+            fix: 'Verify the package on npm — suspicious names may indicate typosquatting or hallucination',
           })
           break
         }

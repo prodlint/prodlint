@@ -33,6 +33,7 @@ export const noDynamicImportLoopRule: Rule = {
             message: 'Dynamic import() inside loop — move import outside or use Promise.all',
             severity: 'warning',
             category: 'performance',
+            fix: 'Move the dynamic import outside the loop and call it once',
           })
         }
       }

@@ -45,6 +45,7 @@ export const missingLoadingStateRule: Rule = {
           message: 'useEffect with fetch but no loading/pending state — users see empty content during load',
           severity: 'info',
           category: 'reliability',
+          fix: 'Add a loading state: const [loading, setLoading] = useState(true) and show a spinner/skeleton while loading',
         }]
       }
     }

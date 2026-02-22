@@ -43,6 +43,7 @@ export const secretsRule: Rule = {
             message: `Hardcoded ${name} detected`,
             severity: 'critical',
             category: 'security',
+            fix: 'Move the secret to an environment variable and access via process.env.SECRET_NAME',
           })
         }
       }

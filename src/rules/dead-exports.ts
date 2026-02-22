@@ -172,6 +172,7 @@ export const deadExportsRule: Rule = {
         message: `${totalDead} exported symbols never imported — dead exports pollute AI context. Top files: ${topFiles.join(', ')}`,
         severity: totalDead > 20 ? 'warning' : 'info',
         category: 'ai-quality',
+        fix: 'Remove the unused export or add a consumer',
       })
     }
 

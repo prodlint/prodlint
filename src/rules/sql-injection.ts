@@ -81,6 +81,7 @@ export const sqlInjectionRule: Rule = {
             message,
             severity,
             category: 'security',
+            fix: "Use parameterized queries: db.query('SELECT * FROM users WHERE id = $1', [id])",
           })
           break // One finding per line is enough
         }

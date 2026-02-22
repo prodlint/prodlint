@@ -44,6 +44,7 @@ export const hallucinatedApiRule: Rule = {
             message: fix,
             severity: 'warning',
             category: 'ai-quality',
+            fix: fix,
           })
         }
       }

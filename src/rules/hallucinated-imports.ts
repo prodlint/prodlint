@@ -84,6 +84,7 @@ export const hallucinatedImportsRule: Rule = {
             message: `Package "${pkgName}" is imported but not in package.json`,
             severity: isNonProd ? 'warning' : 'critical',
             category: 'reliability',
+            fix: 'Verify the package exists on npm. The AI may have invented this package name.',
           })
         }
         return findings
@@ -122,6 +123,7 @@ export const hallucinatedImportsRule: Rule = {
           message: `Package "${pkgName}" is imported but not in package.json`,
           severity: isNonProd ? 'warning' : 'critical',
           category: 'reliability',
+          fix: 'Verify the package exists on npm. The AI may have invented this package name.',
         })
       }
     }

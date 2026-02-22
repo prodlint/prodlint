@@ -45,6 +45,7 @@ export const aiSmellsRule: Rule = {
             message: `${todoMatch[1]} comment: ${todoMatch[2].trim() || '(no description)'}`,
             severity: 'info',
             category: 'ai-quality',
+            fix: 'Resolve the TODO/FIXME before shipping to production',
           })
         }
 
@@ -65,6 +66,7 @@ export const aiSmellsRule: Rule = {
               message: `${COMMENTED_CODE_THRESHOLD}+ consecutive lines of commented-out code`,
               severity: 'info',
               category: 'ai-quality',
+              fix: 'Remove commented-out code — use version control to recover old code if needed',
             })
           }
         } else {
@@ -85,6 +87,7 @@ export const aiSmellsRule: Rule = {
           message: 'Placeholder "not implemented" function',
           severity: 'warning',
           category: 'ai-quality',
+          fix: 'Replace with a production-ready implementation or remove the function',
         })
       }
 
@@ -108,6 +111,7 @@ export const aiSmellsRule: Rule = {
         message: `${consoleLogCount} console.log statements (consider a proper logger)`,
         severity: 'warning',
         category: 'ai-quality',
+        fix: 'Replace console.log with a structured logger (e.g., pino, winston) or remove debug logs',
       })
     }
 
@@ -120,6 +124,7 @@ export const aiSmellsRule: Rule = {
         message: `${anyTypeCount} uses of "any" type (consider proper typing)`,
         severity: 'warning',
         category: 'ai-quality',
+        fix: 'Replace "any" with specific types or use "unknown" with type narrowing',
       })
     }
 

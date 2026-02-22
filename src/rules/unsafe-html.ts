@@ -45,6 +45,7 @@ export const unsafeHtmlRule: Rule = {
                 message: 'dangerouslySetInnerHTML is an XSS risk — sanitize with DOMPurify or similar',
                 severity: 'critical',
                 category: 'security',
+                fix: 'Sanitize HTML with DOMPurify before rendering: DOMPurify.sanitize(html)',
               })
             }
           }
@@ -79,6 +80,7 @@ export const unsafeHtmlRule: Rule = {
                 message: 'dangerouslySetInnerHTML is an XSS risk — sanitize with DOMPurify or similar',
                 severity: 'critical',
                 category: 'security',
+                fix: 'Sanitize HTML with DOMPurify before rendering: DOMPurify.sanitize(html)',
               })
             }
           }
@@ -101,6 +103,7 @@ export const unsafeHtmlRule: Rule = {
                 message: 'Direct innerHTML assignment is an XSS risk',
                 severity: 'critical',
                 category: 'security',
+                fix: 'Sanitize HTML with DOMPurify before rendering: DOMPurify.sanitize(html)',
               })
             }
           }
@@ -135,6 +138,7 @@ export const unsafeHtmlRule: Rule = {
           message: 'dangerouslySetInnerHTML is an XSS risk — sanitize with DOMPurify or similar',
           severity: 'critical',
           category: 'security',
+          fix: 'Sanitize HTML with DOMPurify before rendering: DOMPurify.sanitize(html)',
         })
       }
 
@@ -147,6 +151,7 @@ export const unsafeHtmlRule: Rule = {
           message: 'Direct innerHTML assignment is an XSS risk',
           severity: 'critical',
           category: 'security',
+          fix: 'Sanitize HTML with DOMPurify before rendering: DOMPurify.sanitize(html)',
         })
       }
     }
