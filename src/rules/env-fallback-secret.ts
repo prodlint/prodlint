@@ -5,6 +5,8 @@ const SENSITIVE_ENV = /process\.env\.(JWT_SECRET|SECRET_KEY|AUTH_SECRET|SESSION_
 
 const ENV_FALLBACK = /process\.env\.\w*(SECRET|KEY|PASSWORD|TOKEN)\w*\s*(?:\|\||\?\?)\s*['"`]/i
 
+const CONN_STRING_FALLBACK = /process\.env\.\w+\s*(?:\|\||\?\?)\s*['"`](?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|mssql):\/\//i
+
 export const envFallbackSecretRule: Rule = {
   id: 'env-fallback-secret',
   name: 'Secret with Fallback Value',
@@ -33,6 +35,21 @@ export const envFallbackSecretRule: Rule = {
           severity: 'critical',
           category: 'security',
           fix: 'Throw an error if the env var is missing: const secret = process.env.SECRET ?? (() => { throw new Error("SECRET is required") })()',
+        })
+        continue
+      }
+
+      const connMatch = CONN_STRING_FALLBACK.exec(line)
+      if (connMatch) {
+        findings.push({
+          ruleId: 'env-fallback-secret',
+          file: file.relativePath,
+          line: i + 1,
+          column: connMatch.index + 1,
+          message: 'Connection string with credentials used as fallback — hardcoded DB/service URL becomes the production connection when env var is missing',
+          severity: 'warning',
+          category: 'security',
+          fix: 'Fail fast when required env vars are missing instead of falling back to a default value',
         })
         continue
       }

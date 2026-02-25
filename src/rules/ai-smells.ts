@@ -1,7 +1,7 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine, isTestFile, isScriptFile } from '../utils/patterns.js'
 
-const CONSOLE_LOG_THRESHOLD = 5
+const CONSOLE_LOG_THRESHOLD = 3
 const ANY_TYPE_THRESHOLD = 5
 const COMMENTED_CODE_THRESHOLD = 3
 

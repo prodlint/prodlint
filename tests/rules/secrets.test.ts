@@ -65,6 +65,19 @@ describe('secrets rule', () => {
     expect(findings[0].column).toBeGreaterThan(0)
   })
 
+  it('detects short Stripe keys (8+ chars after prefix)', () => {
+    const file = makeFile(`const key = "sk_live_abc123def456"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Stripe secret key')
+  })
+
+  it('ignores too-short Stripe prefix (under 8 chars)', () => {
+    const file = makeFile(`const key = "sk_live_short"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('returns no findings for clean code', () => {
     const file = makeFile(`export function hello() { return "world" }`)
     const findings = secretsRule.check(file, project)

@@ -2,8 +2,8 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 
 const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
-  { name: 'Stripe secret key', pattern: /sk_live_[a-zA-Z0-9]{20,}/ },
-  { name: 'Stripe test key', pattern: /sk_test_[a-zA-Z0-9]{20,}/ },
+  { name: 'Stripe secret key', pattern: /sk_live_[a-zA-Z0-9]{8,}/ },
+  { name: 'Stripe test key', pattern: /sk_test_[a-zA-Z0-9]{8,}/ },
   { name: 'AWS access key', pattern: /AKIA[0-9A-Z]{16}/ },
   { name: 'AWS secret key', pattern: /(?:aws_secret_access_key|AWS_SECRET)\s*[=:]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/ },
   { name: 'Supabase service role key', pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{50,}\.[A-Za-z0-9_-]{20,}/ },

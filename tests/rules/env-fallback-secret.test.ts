@@ -55,4 +55,29 @@ describe('env-fallback-secret rule', () => {
     const findings = envFallbackSecretRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  it('detects postgres connection string fallback', () => {
+    const file = makeFile(`const db = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/mydb"`)
+    const findings = envFallbackSecretRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Connection string')
+  })
+
+  it('detects mongodb connection string fallback', () => {
+    const file = makeFile(`const mongo = process.env.MONGO_URI ?? "mongodb://localhost:27017/app"`)
+    const findings = envFallbackSecretRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('detects redis connection string fallback', () => {
+    const file = makeFile(`const redis = process.env.REDIS_URL || "redis://localhost:6379"`)
+    const findings = envFallbackSecretRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('ignores non-connection-string fallback for generic env var', () => {
+    const file = makeFile(`const url = process.env.APP_URL || "http://localhost:3000"`)
+    const findings = envFallbackSecretRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
 })

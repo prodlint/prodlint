@@ -50,15 +50,15 @@ describe('ai-smells rule', () => {
   })
 
   describe('console.log spam', () => {
-    it('flags more than 5 console.log statements', () => {
-      const lines = Array.from({ length: 7 }, (_, i) => `console.log("debug ${i}")`)
+    it('flags more than 3 console.log statements', () => {
+      const lines = Array.from({ length: 5 }, (_, i) => `console.log("debug ${i}")`)
       const file = makeFile(lines.join('\n'))
       const findings = aiSmellsRule.check(file, project)
       expect(findings.some(f => f.message.includes('console.log'))).toBe(true)
     })
 
-    it('allows up to 5 console.log', () => {
-      const lines = Array.from({ length: 5 }, (_, i) => `console.log("${i}")`)
+    it('allows up to 3 console.log', () => {
+      const lines = Array.from({ length: 3 }, (_, i) => `console.log("${i}")`)
       const file = makeFile(lines.join('\n'))
       const findings = aiSmellsRule.check(file, project)
       expect(findings.some(f => f.message.includes('console.log'))).toBe(false)
