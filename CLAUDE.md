@@ -144,6 +144,7 @@ When bumping the version (`npm version patch/minor/major`), update ALL of these 
 4. `app/components/animated-terminal.tsx` → terminal animation line (`prodlint v0.x.x`)
 5. `app/layout.tsx` → JSON-LD `softwareVersion`
 6. `app/mcp/page.tsx` → JSON-LD `softwareVersion`
+7. `public/.well-known/agent-card.json` → `"version"` field
 
 **After updating all files, run these in order:**
 1. `npm run build && npm test` (verify everything passes)
