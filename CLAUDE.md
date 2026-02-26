@@ -107,7 +107,7 @@ Overall = **weighted** average: security 40%, reliability 30%, performance 15%, 
 
 ### Finding Interface (v0.5.0)
 
-`Finding` has an optional `fix?: string` field for actionable remediation hints. All 52 rules include fix suggestions (v0.9.0).
+`Finding` has an optional `fix?: string` field for actionable remediation hints. All 52 rules include fix suggestions (v0.9.1).
 
 ### CLI Flags (v0.5.0)
 
