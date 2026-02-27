@@ -1,5 +1,6 @@
 export { scan } from './scanner.js'
 export { rules } from './rules/index.js'
+export { reportJson, reportPretty, reportSummary, reportSarif } from './reporter.js'
 export { runWebScan } from './web-scanner/index.js'
 export type {
   WebScanResult,

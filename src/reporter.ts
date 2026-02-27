@@ -1,5 +1,7 @@
 import pc from 'picocolors'
-import type { ScanResult, Finding } from './types.js'
+import type { ScanResult, Finding, Rule } from './types.js'
+import { rules } from './rules/index.js'
+import { getVersion } from './utils/version.js'
 
 const SEVERITY_COLORS = {
   critical: pc.red,
@@ -107,6 +109,119 @@ export function reportPretty(result: ScanResult, opts: ReportOptions = {}): stri
 
 export function reportJson(result: ScanResult): string {
   return JSON.stringify(result, null, 2)
+}
+
+export function reportSummary(result: ScanResult): string {
+  const lines: string[] = []
+  const { critical, warning, info } = result.summary
+  const hasCritical = critical > 0
+
+  const verdict = hasCritical ? pc.red(pc.bold('FAIL')) : pc.green(pc.bold('PASS'))
+  const scorePart = scoreColor(result.overallScore)(`${result.overallScore}/100`)
+
+  const countParts: string[] = []
+  if (critical > 0) countParts.push(`${critical} critical`)
+  if (warning > 0) countParts.push(`${warning} warning`)
+  if (info > 0) countParts.push(`${info} info`)
+
+  lines.push('')
+  if (countParts.length > 0) {
+    lines.push(`  ${verdict} ${pc.dim('—')} ${countParts.join(', ')} ${pc.dim(`(score: ${scorePart})`)}`)
+  } else {
+    lines.push(`  ${verdict} ${pc.dim('—')} no issues ${pc.dim(`(score: ${scorePart})`)}`)
+  }
+
+  // Show top 3 critical/warning findings
+  const topFindings = result.findings
+    .filter(f => f.severity === 'critical' || f.severity === 'warning')
+    .slice(0, 3)
+
+  if (topFindings.length > 0) {
+    for (let i = 0; i < topFindings.length; i++) {
+      const f = topFindings[i]
+      const color = SEVERITY_COLORS[f.severity]
+      const label = SEVERITY_LABELS[f.severity]
+      lines.push(`  ${pc.dim(`${i + 1}.`)} ${f.file}:${f.line} ${pc.dim('—')} ${color(label)} ${f.message} ${pc.dim(f.ruleId)}`)
+    }
+  }
+
+  lines.push('')
+  return lines.join('\n')
+}
+
+const SARIF_SEVERITY_MAP: Record<string, string> = {
+  critical: 'error',
+  warning: 'warning',
+  info: 'note',
+}
+
+export function reportSarif(result: ScanResult): string {
+  const ruleMap = new Map<string, Rule>()
+  for (const r of rules) {
+    ruleMap.set(r.id, r)
+  }
+
+  // Collect unique rule IDs from findings
+  const usedRuleIds = new Set(result.findings.map(f => f.ruleId))
+
+  const sarifRules = [...usedRuleIds].map(id => {
+    const rule = ruleMap.get(id)
+    return {
+      id,
+      name: rule?.name ?? id,
+      shortDescription: { text: rule?.description ?? id },
+      defaultConfiguration: {
+        level: SARIF_SEVERITY_MAP[rule?.severity ?? 'info'] ?? 'note',
+      },
+      helpUri: `https://prodlint.com/rules/${id}`,
+    }
+  })
+
+  const sarifResults = result.findings.map(f => {
+    const sarifResult: Record<string, unknown> = {
+      ruleId: f.ruleId,
+      level: SARIF_SEVERITY_MAP[f.severity] ?? 'note',
+      message: { text: f.message },
+      locations: [
+        {
+          physicalLocation: {
+            artifactLocation: { uri: f.file.replace(/\\/g, '/') },
+            region: { startLine: f.line, startColumn: f.column },
+          },
+        },
+      ],
+    }
+
+    if (f.fix) {
+      sarifResult.fixes = [
+        {
+          description: { text: f.fix },
+        },
+      ]
+    }
+
+    return sarifResult
+  })
+
+  const sarif = {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0' as const,
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'prodlint',
+            version: getVersion(),
+            informationUri: 'https://prodlint.com',
+            rules: sarifRules,
+          },
+        },
+        results: sarifResults,
+      },
+    ],
+  }
+
+  return JSON.stringify(sarif, null, 2)
 }
 
 function renderBar(score: number): string {

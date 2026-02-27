@@ -6,18 +6,18 @@
 
 Production readiness for vibe-coded apps.
 
-Static analysis for vibe-coded apps. Flags the security, reliability, performance, and AI quality issues that Cursor, v0, Bolt, and Copilot create — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and more. Zero config, no LLM, 52 rules, under 100ms.
+Static analysis for vibe-coded apps. Flags the security, reliability, performance, and AI quality issues that Cursor, v0, Bolt, and Copilot create — hallucinated imports, missing auth, hardcoded secrets, unvalidated server actions, and more. Zero config, no LLM, 52 rules.
 
 ```bash
 npx prodlint
 ```
 
 ```
-  prodlint v0.9.1
-  Scanned 148 files · 3 critical · 5 warnings
+  prodlint v0.9.0
+  Scanned 148 files · 2 critical · 5 warnings · 1 info
 
   src/app/api/checkout/route.ts
-    12:1  CRIT  No rate limiting — anyone could spam this endpoint and run up your API costs  rate-limiting
+    12:1  INFO  No rate limiting — anyone could spam this endpoint and run up your API costs  rate-limiting
     28:5  WARN  Empty catch block silently swallows error  shallow-catch
 
   src/actions/submit.ts
@@ -35,7 +35,7 @@ npx prodlint
 
   Overall: 82/100 (weighted)
 
-  3 critical · 5 warnings · 3 info
+  2 critical · 5 warnings · 4 info
 ```
 
 ## Why?
@@ -50,6 +50,11 @@ prodlint checks what TypeScript and ESLint don't: **whether your vibe-coded app 
 npx prodlint                              # Run directly (no install)
 npx prodlint ./my-app                     # Scan specific path
 npx prodlint --json                       # JSON output for CI
+npx prodlint --sarif                      # SARIF 2.1.0 for GitHub Code Scanning
+npx prodlint --summary                    # Quick pass/fail + top 3 blockers
+npx prodlint --profile startup            # Only critical findings
+npx prodlint --profile strict             # All findings including info
+npx prodlint --baseline .prodlint-baseline.json   # Only new findings
 npx prodlint --ignore "*.test.ts"         # Ignore patterns
 npx prodlint --min-severity warning       # Only warnings and criticals
 npx prodlint --quiet                      # Suppress badge output
@@ -196,13 +201,40 @@ Posts a score breakdown as a PR comment and fails the build if below threshold.
 | `score` | Overall score (0-100) |
 | `critical` | Number of critical findings |
 
+### SARIF + GitHub Code Scanning
+
+Upload prodlint results to GitHub's Security tab:
+
+```yaml
+- name: Run prodlint
+  run: npx prodlint --sarif > prodlint.sarif
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: prodlint.sarif
+    category: prodlint
+```
+
+### Baseline for Existing Projects
+
+Adopt prodlint gradually without drowning in pre-existing findings:
+
+```bash
+# Save current state as baseline
+npx prodlint --baseline-save .prodlint-baseline.json
+
+# CI only fails on NEW findings
+npx prodlint --baseline .prodlint-baseline.json
+```
+
 ## MCP Server
 
 Use prodlint inside Cursor, Claude Code, or any MCP-compatible editor:
 
 **Claude Code:**
 ```bash
-claude mcp add prodlint npx prodlint-mcp
+claude mcp add prodlint -- npx -y prodlint-mcp
 ```
 
 **Cursor / Windsurf:**

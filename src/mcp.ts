@@ -66,9 +66,8 @@ server.tool(
     if (result.findings.length > 0) {
       summary.push('', '### Findings')
       for (const f of result.findings.slice(0, 30)) {
-        summary.push(
-          `- **[${f.severity}]** \`${f.ruleId}\` ${f.file}:${f.line} — ${f.message}`,
-        )
+        const line = `- **[${f.severity}]** \`${f.ruleId}\` ${f.file}:${f.line} — ${f.message}`
+        summary.push(f.fix ? `${line}\n  - _Fix: ${f.fix}_` : line)
       }
       if (result.findings.length > 30) {
         summary.push(`- ...and ${result.findings.length - 30} more findings`)

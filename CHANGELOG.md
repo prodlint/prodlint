@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **`--sarif`** flag — SARIF 2.1.0 output for GitHub Code Scanning integration
+- **`--summary`** flag — quick pass/fail verdict with top 3 critical/warning findings
+- **`--profile <name>`** flag — presets: `startup` (criticals only), `balanced` (warnings+), `strict` (all)
+- **`--baseline <file>`** flag — only show findings not present in a saved baseline
+- **`--baseline-save <file>`** flag — save current findings as a baseline snapshot
+- `reportSummary()` and `reportSarif()` exported from programmatic API
+- MCP `scan` tool now includes fix hints in output
+- 17 new tests: 10 reporter unit tests + 7 CLI integration tests (597 total)
+
+## [0.9.0] - 2026-02-21
+
+### Added
+- **Fix hints on all 52 rules** — every finding now includes an actionable `fix` field with remediation guidance
+- CLA (Contributor License Agreement)
+
+### Changed
+- `cors-config`: wildcard origin (`*`) combined with `credentials: true` escalated to critical severity
+- `missing-abort-controller`: now detects axios calls without timeout configuration
+- CI hardening and dependency updates
+- MCP server path boundary validation strengthened
+
+## [0.8.1] - 2026-02-21
+
+### Fixed
+- `hydration-mismatch`: reduced false positives
+- `dead-exports`: reduced false positives
+
+## [0.8.0] - 2026-02-20
+
+### Added
+- **Site Score** (`--web` flag) — scan any deployed website for AI agent-readiness, 14 checks scored 0-100
+- Checks: robots.txt AI directives, llms.txt, ai.txt, TDMRep, A2A AgentCard, WebMCP tools, HTTP Signatures (RFC 9421), AI-Disclosure header, Content-Usage directives, structured data, OpenGraph, sitemap, page speed
+- `npx prodlint --web example.com` and `--web --json` for JSON output
+- `secrets` rule: OpenAI API key detection
+- Pretty terminal report for site score results (`reportWebPretty`)
+- Site Score grades: A+ (95-100) through F (0-29)
+
 ## [0.7.1] - 2026-02-20
 
 ### Fixed

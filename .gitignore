@@ -13,5 +13,8 @@ mcp-publisher.exe
 # Windows artifacts
 nul
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Drafts
 drafts/

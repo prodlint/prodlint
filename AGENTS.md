@@ -4,7 +4,7 @@ This file tells AI coding agents how to use prodlint — production readiness fo
 
 ## What is prodlint?
 
-prodlint is a zero-config static analysis tool for JavaScript and TypeScript projects. It checks the security, reliability, performance, and AI quality issues that AI coding tools consistently create — hardcoded secrets, missing auth, hallucinated imports, unvalidated server actions, and 48 more patterns. 52 rules, 4 categories, under 100ms, MIT licensed.
+prodlint is a zero-config static analysis tool for JavaScript and TypeScript projects. It checks the security, reliability, performance, and AI quality issues that AI coding tools consistently create — hardcoded secrets, missing auth, hallucinated imports, unvalidated server actions, and 48 more patterns. 52 rules, 4 categories, MIT licensed.
 
 ## Running prodlint
 
@@ -12,6 +12,13 @@ prodlint is a zero-config static analysis tool for JavaScript and TypeScript pro
 npx prodlint                              # Scan current directory
 npx prodlint ./my-app                     # Scan specific path
 npx prodlint --json                       # JSON output (for programmatic use)
+npx prodlint --sarif                      # SARIF 2.1.0 output (for GitHub Code Scanning)
+npx prodlint --summary                    # Quick pass/fail + top 3 blockers
+npx prodlint --profile startup            # Only critical findings
+npx prodlint --profile balanced           # Warnings and criticals (default)
+npx prodlint --profile strict             # All findings including info
+npx prodlint --baseline .prodlint-baseline.json   # Only new findings since baseline
+npx prodlint --baseline-save .prodlint-baseline.json  # Save current findings as baseline
 npx prodlint --ignore "*.test.ts"         # Ignore patterns
 npx prodlint --min-severity warning       # Only warnings and criticals
 npx prodlint --quiet                      # Suppress badge output
@@ -24,7 +31,7 @@ Exit codes: 0 = no critical findings, 1 = critical findings exist, 2 = runtime e
 prodlint has a built-in MCP server. To add it:
 
 ```bash
-claude mcp add prodlint npx prodlint-mcp
+claude mcp add prodlint -- npx -y prodlint-mcp
 ```
 
 The server exposes a `scan` tool that takes a `path` (absolute directory path) and optional `ignore` (glob patterns). It returns a score breakdown and findings list. Runs locally via stdio — no data leaves the machine.
@@ -91,6 +98,27 @@ jobs:
           threshold: 50
 ```
 
+### SARIF + GitHub Code Scanning
+
+Upload findings to GitHub's Security tab:
+
+```yaml
+- run: npx prodlint --sarif > prodlint.sarif
+- uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: prodlint.sarif
+    category: prodlint
+```
+
+### Baseline (for existing projects)
+
+Adopt prodlint gradually — only fail on new findings:
+
+```bash
+npx prodlint --baseline-save .prodlint-baseline.json   # Save snapshot
+npx prodlint --baseline .prodlint-baseline.json         # CI: only new findings
+```
+
 ## Programmatic API
 
 ```typescript
@@ -120,7 +148,7 @@ src/
     patterns.ts     → Regex helpers, comment handling, suppression
     frameworks.ts   → ORM/middleware detection and whitelists
 tests/
-  rules/            → One test file per rule (562+ tests)
+  rules/            → One test file per rule (597 tests)
 ```
 
 ## Links
