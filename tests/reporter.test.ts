@@ -17,7 +17,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 
 function makeResult(overrides: Partial<ScanResult> = {}): ScanResult {
   return {
-    version: '0.9.1',
+    version: '0.9.2',
     scannedPath: '.',
     filesScanned: 5,
     scanDurationMs: 42,

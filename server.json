@@ -8,12 +8,12 @@
     "url": "https://github.com/prodlint/prodlint",
     "source": "github"
   },
-  "version": "0.9.1",
+  "version": "0.9.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "prodlint",
-      "version": "0.9.1",
+      "version": "0.9.2",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
