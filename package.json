@@ -46,12 +46,12 @@
     "@babel/parser": "^7.29.0",
     "@babel/types": "^7.29.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@rollup/rollup-win32-x64-msvc": "^4.59.0",
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.59.0",
     "@types/node": "^25.2.3",
     "tsup": "^8.4.0",
     "typescript": "^5.7.0",
