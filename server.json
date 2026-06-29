@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.Anthony-Marcovecchio/prodlint",
+  "name": "io.github.prodlint/prodlint",
   "title": "prodlint",
   "description": "Production readiness for vibe-coded apps. 52 checks for security, reliability, and performance.",
   "websiteUrl": "https://prodlint.com",
@@ -8,12 +8,12 @@
     "url": "https://github.com/prodlint/prodlint",
     "source": "github"
   },
-  "version": "0.9.4",
+  "version": "0.9.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "prodlint",
-      "version": "0.9.4",
+      "version": "0.9.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

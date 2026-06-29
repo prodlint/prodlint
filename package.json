@@ -1,6 +1,6 @@
 {
   "name": "prodlint",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Production readiness for vibe-coded apps — know your AI code is ready to ship",
   "license": "MIT",
   "author": "prodlint contributors",
@@ -13,7 +13,7 @@
     "url": "https://github.com/prodlint/prodlint/issues"
   },
   "homepage": "https://prodlint.com",
-  "mcpName": "io.github.Anthony-Marcovecchio/prodlint",
+  "mcpName": "io.github.prodlint/prodlint",
   "bin": {
     "prodlint": "./dist/cli.js",
     "prodlint-mcp": "./dist/mcp.js"
