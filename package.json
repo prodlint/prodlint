@@ -52,11 +52,13 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.62.2",
     "@types/node": "^26.0.1",
     "tsup": "^8.4.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.6"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.62.2"
   },
   "overrides": {
     "esbuild": "^0.28.1"
