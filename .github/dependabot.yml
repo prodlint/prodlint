@@ -15,3 +15,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # actions/checkout is SHA-pinned at v4 (Node 20, supported); skip unverified major jumps
+      - dependency-name: "actions/checkout"
+        update-types: ["version-update:semver-major"]
