@@ -147,12 +147,15 @@ When bumping the version (`npm version patch/minor/major`), update ALL of these 
 1. `package.json` → `version` (handled by `npm version`)
 2. `server.json` → both `version` fields (top-level and inside `packages[0]`)
 3. `README.md` → terminal output example (`prodlint v0.x.x`)
+4. `tests/reporter.test.ts` → `makeResult()` fixture `version: '0.x.x'`
 
 **Website repo (prodlint-website):**
-4. `app/components/animated-terminal.tsx` → terminal animation line (`prodlint v0.x.x`)
-5. `app/layout.tsx` → JSON-LD `softwareVersion`
-6. `app/mcp/page.tsx` → JSON-LD `softwareVersion`
+5. `app/components/animated-terminal.tsx` → terminal animation line (`prodlint v0.x.x`)
+6. `app/layout.tsx` → JSON-LD `softwareVersion`
 7. `public/.well-known/agent-card.json` → `"version"` field
+8. `app/blog/data.ts` → sample `prodlint v0.x.x` output inside the AGENTS.md blog post
+
+Tip: sweep both repos with `grep -rn "<old-version>"` (excluding node_modules/dist/package-lock/CHANGELOG) to catch any stragglers. Note: `app/mcp/page.tsx` no longer carries a version string.
 
 **After updating all files, run these in order:**
 1. `npm run build && npm test` (verify everything passes)
