@@ -14,6 +14,20 @@ const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
   { name: 'GitHub fine-grained token', pattern: /github_pat_[A-Za-z0-9_]{22,}/ },
   { name: 'Generic API key assignment', pattern: /(?:api_key|apikey|api_secret|secret_key|private_key)\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/ },
   { name: 'SendGrid API key', pattern: /SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}/ },
+  // Cloud / platform keys
+  { name: 'Google API key', pattern: /AIza[0-9A-Za-z_\-]{35}/ },
+  { name: 'Google OAuth client secret', pattern: /GOCSPX-[a-zA-Z0-9_\-]{20,}/ },
+  { name: 'GitLab personal access token', pattern: /glpat-[A-Za-z0-9_\-]{20,}/ },
+  { name: 'npm access token', pattern: /npm_[A-Za-z0-9]{36}/ },
+  { name: 'Slack token', pattern: /xox[baprs]-[A-Za-z0-9-]{10,}/ },
+  { name: 'Slack webhook URL', pattern: /hooks\.slack\.com\/services\/[A-Za-z0-9_\-\/]{20,}/ },
+  { name: 'Supabase secret key', pattern: /sb_secret_[a-zA-Z0-9_\-]{20,}/ },
+  // AI provider keys
+  { name: 'Hugging Face token', pattern: /hf_[a-zA-Z0-9]{34,}/ },
+  { name: 'Groq API key', pattern: /gsk_[a-zA-Z0-9]{40,}/ },
+  // Structural / high-signal
+  { name: 'private key', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/ },
+  { name: 'database connection string with credentials', pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqps?):\/\/[^\s:@/]+:[^\s@/]{3,}@/ },
 ]
 
 export const secretsRule: Rule = {
