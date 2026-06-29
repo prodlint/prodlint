@@ -11,6 +11,11 @@ updates:
       # vitest 4's rolldown native binding fails via npm optional-deps bug (npm/cli#4828) on Windows; held on 3.x
       - dependency-name: "vitest"
         update-types: ["version-update:semver-major"]
+      # @babel/parser & @babel/types are the runtime AST engine; major bumps need manual test of all rules
+      - dependency-name: "@babel/parser"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@babel/types"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
