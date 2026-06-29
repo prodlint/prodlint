@@ -33,6 +33,26 @@ describe('secrets rule', () => {
     expect(findings[0].message).toContain('GitHub token')
   })
 
+  it('detects Anthropic API key', () => {
+    const file = makeFile(`const key = "sk-ant-api03-AbCdEf1234567890GhIjKlMnOpQrStUvWxYz_-1234567890aBcDeFgHiJkLmNoPqRsTuVwXyZ09"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Anthropic API key')
+  })
+
+  it('detects Anthropic admin key', () => {
+    const file = makeFile(`const key = "sk-ant-admin01-AbCdEf1234567890GhIjKlMnOpQrStUvWxYz_-1234567890aBcDeFgHiJkLmNoPqRsT"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('Anthropic API key')
+  })
+
+  it('ignores non-key sk-ant- prefixes', () => {
+    const file = makeFile(`const slug = "sk-ant-short"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('detects generic API key assignment', () => {
     const file = makeFile(`const api_key = "abc123def456ghi789jkl012mno"`)
     const findings = secretsRule.check(file, project)

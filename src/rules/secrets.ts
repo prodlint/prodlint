@@ -9,6 +9,7 @@ const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
   { name: 'Supabase service role key', pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{50,}\.[A-Za-z0-9_-]{20,}/ },
   { name: 'OpenAI API key (legacy)', pattern: /sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}/ },
   { name: 'OpenAI API key', pattern: /sk-proj-[a-zA-Z0-9_\-]{20,}/ },
+  { name: 'Anthropic API key', pattern: /sk-ant-(?:api|admin)[0-9]{2}-[a-zA-Z0-9_\-]{20,}/ },
   { name: 'GitHub token', pattern: /gh[ps]_[A-Za-z0-9_]{36,}/ },
   { name: 'GitHub fine-grained token', pattern: /github_pat_[A-Za-z0-9_]{22,}/ },
   { name: 'Generic API key assignment', pattern: /(?:api_key|apikey|api_secret|secret_key|private_key)\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/ },
