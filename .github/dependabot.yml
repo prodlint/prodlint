@@ -4,23 +4,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Stability policy: handle ALL major upgrades manually via a deliberate full-suite test pass
+    # (e.g. TypeScript 6 breaks tsup's DTS build, vitest 4's rolldown binding fails on Windows,
+    # @babel/* are the runtime AST engine). Dependabot still proposes minor/patch + security bumps.
     ignore:
-      # TypeScript 6 breaks tsup's DTS build (TS5101 baseUrl deprecation); held on 5.x
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
-      # vitest 4's rolldown native binding fails via npm optional-deps bug (npm/cli#4828) on Windows; held on 3.x
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
-      # @babel/parser & @babel/types are the runtime AST engine; major bumps need manual test of all rules
-      - dependency-name: "@babel/parser"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@babel/types"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    # Actions are SHA-pinned for supply-chain hardening; review action majors (checkout, setup-node) manually.
     ignore:
-      # actions/checkout is SHA-pinned at v4 (Node 20, supported); skip unverified major jumps
-      - dependency-name: "actions/checkout"
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
