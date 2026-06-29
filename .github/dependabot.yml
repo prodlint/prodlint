@@ -4,6 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # TypeScript 6 breaks tsup's DTS build (TS5101 baseUrl deprecation); held on 5.x
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # vitest 4's rolldown native binding fails via npm optional-deps bug (npm/cli#4828) on Windows; held on 3.x
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
