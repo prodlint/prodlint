@@ -141,28 +141,36 @@ Composite action: installs Node 20, runs `npx prodlint --json`, parses JSON, pos
 
 ### Version Bump Checklist
 
-When bumping the version (`npm version patch/minor/major`), update ALL of these hardcoded version strings:
+Releases are automated. `npm version patch/minor/major` fires the `version` lifecycle
+hook, which runs `scripts/sync-versions.cjs` to propagate the new version into
+`server.json` (both fields) and `packages/prodlint-mcp/package.json` (its `version` and
+its `^` dependency range on `prodlint`), then stages them into the version commit.
 
-**This repo (prodlint):**
-1. `package.json` → `version` (handled by `npm version`)
-2. `server.json` → both `version` fields (top-level and inside `packages[0]`)
-3. `README.md` → terminal output example (`prodlint v0.x.x`)
-4. `tests/reporter.test.ts` → `makeResult()` fixture `version: '0.x.x'`
+Pushing the resulting `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies
+metadata, builds, tests, self-scans, and publishes **both** `prodlint` and the
+`prodlint-mcp` launcher to npm with provenance, then force-updates the rolling `v1` tag.
 
-**Website repo (prodlint-website):**
-5. `app/components/animated-terminal.tsx` → terminal animation line (`prodlint v0.x.x`)
-6. `app/layout.tsx` → JSON-LD `softwareVersion`
-7. `public/.well-known/agent-card.json` → `"version"` field
-8. `app/blog/data.ts` → sample `prodlint v0.x.x` output inside the AGENTS.md blog post
+npm auth is **trusted publishing (OIDC)** — there is no `NPM_TOKEN`. Both packages have
+`prodlint/prodlint` + `release.yml` registered as a trusted publisher on npmjs.com.
 
-Tip: sweep both repos with `grep -rn "<old-version>"` (excluding node_modules/dist/package-lock/CHANGELOG) to catch any stragglers. Note: `app/mcp/page.tsx` no longer carries a version string.
+**Still manual:**
+1. `README.md` → terminal output example (`prodlint v0.x.x`)
+2. `tests/reporter.test.ts` → `makeResult()` fixture `version: '0.x.x'`
+3. `./mcp-publisher.exe publish` (MCP registry — needs `mcp-publisher.exe login github`
+   first; the registry JWT expires within minutes, so log in immediately before)
+4. Website repo (prodlint-website): `app/components/animated-terminal.tsx`,
+   `app/layout.tsx` JSON-LD `softwareVersion`,
+   `public/.well-known/agent-card.json` → `"version"`, and the sample output in
+   `app/blog/data.ts`. Note: `app/mcp/page.tsx` no longer carries a version string.
 
-**After updating all files, run these in order:**
-1. `npm run build && npm test` (verify everything passes)
-2. `npm publish` (publishes to npm, requires OTP)
-3. `git tag -f v1 && git push origin v1 --force` (update v1 tag so GitHub Action users get the new version)
-4. `./mcp-publisher.exe publish` (update MCP registry — requires `mcp-publisher.exe login github` if not already logged in)
-5. `npm run build` (website repo, then push to deploy)
+Tip: sweep both repos with `grep -rn "<old-version>"` (excluding
+node_modules/dist/package-lock/CHANGELOG) to catch stragglers. `npm run verify:release`
+checks the automated set at any time; CI runs it on every PR.
+
+**Do not re-add `@rollup/rollup-win32-x64-msvc` as an explicit dependency.** It was a
+workaround for an `os=linux` line in the machine's global `~/.npmrc`, which made npm skip
+win32 native bindings on Windows. That line is gone; rollup declares all 26 platform
+bindings itself at its exact version, and pinning one separately reintroduces version skew.
 
 ### npm Package
 

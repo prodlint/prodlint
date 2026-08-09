@@ -4,28 +4,56 @@ on:
   push:
     tags: ['v*']
 
+# Least privilege by default; the publish job widens what it needs.
+permissions: {}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: write # push the rolling v1 tag
+      id-token: write # OIDC: npm trusted publishing + provenance attestation
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 22
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
+
+      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 24 still ships npm 10.x.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # Catches the release footguns that have bitten this repo before: a tag that
+      # disagrees with package.json, and an mcpName/server.json mismatch, which the
+      # MCP registry rejects with a 400 only *after* npm has already been published
+      # (and npm versions are immutable, so that costs a version bump to undo).
+      - name: Verify version + MCP name consistency
+        run: node scripts/verify-release.cjs "${GITHUB_REF_NAME}"
+
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Self-scan
+        run: node dist/cli.js . --ignore "tests/**"
 
-      # Update the v1 tag to point to the latest release
-      - name: Update v1 tag
+      # No NODE_AUTH_TOKEN: auth comes from the OIDC identity configured as a
+      # trusted publisher on npmjs.com. Provenance is attested automatically.
+      - name: Publish prodlint to npm
+        run: npm publish --provenance --access public
+
+      # Published second so its `prodlint` dependency already exists on the registry.
+      # Keeping it in this workflow is what stops it drifting from the scanner again.
+      - name: Publish prodlint-mcp launcher to npm
+        run: npm publish ./packages/prodlint-mcp --provenance --access public
+
+      - name: Update rolling v1 tag
         run: |
           git tag -f v1
           git push origin v1 --force

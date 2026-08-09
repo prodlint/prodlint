@@ -234,7 +234,7 @@ Use prodlint inside Cursor, Claude Code, or any MCP-compatible editor:
 
 **Claude Code:**
 ```bash
-claude mcp add prodlint -- npx -y prodlint-mcp
+claude mcp add prodlint -- npx -y -p prodlint prodlint-mcp
 ```
 
 **Cursor / Windsurf:**
@@ -243,11 +243,14 @@ claude mcp add prodlint -- npx -y prodlint-mcp
   "mcpServers": {
     "prodlint": {
       "command": "npx",
-      "args": ["-y", "prodlint-mcp"]
+      "args": ["-y", "-p", "prodlint", "prodlint-mcp"]
     }
   }
 }
 ```
+
+`-p prodlint` runs the MCP server straight from the `prodlint` package, so you always get
+the current scanner.
 
 Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
 

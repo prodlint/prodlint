@@ -31,7 +31,7 @@ Exit codes: 0 = no critical findings, 1 = critical findings exist, 2 = runtime e
 prodlint has a built-in MCP server. To add it:
 
 ```bash
-claude mcp add prodlint -- npx -y prodlint-mcp
+claude mcp add prodlint -- npx -y -p prodlint prodlint-mcp
 ```
 
 The server exposes a `scan` tool that takes a `path` (absolute directory path) and optional `ignore` (glob patterns). It returns a score breakdown and findings list. Runs locally via stdio — no data leaves the machine.
