@@ -41,24 +41,24 @@
     "test:watch": "vitest",
     "lint": "node dist/cli.js .",
     "audit:supply-chain": "node scripts/supply-chain-audit.cjs",
+    "verify:release": "node scripts/verify-release.cjs",
+    "sync:versions": "node scripts/sync-versions.cjs",
+    "version": "node scripts/sync-versions.cjs && git add server.json packages/prodlint-mcp/package.json",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
     "@babel/types": "^7.29.7",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.2",
     "tsup": "^8.4.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.6"
-  },
-  "optionalDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.62.2"
+    "vitest": "^3.2.7"
   },
   "overrides": {
     "esbuild": "^0.28.1"
