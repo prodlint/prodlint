@@ -178,6 +178,44 @@ async function collectWorkspaceDependencies(root: string, patterns: string[]): P
   return deps
 }
 
+/**
+ * Collect dependencies from nested package.json files that aren't part of a declared
+ * workspace — e.g. a plain `packages/` directory with no `workspaces` field. Those
+ * manifests still declare real dependencies, so imports inside them aren't hallucinated.
+ */
+async function collectNestedPackageDependencies(root: string): Promise<Set<string>> {
+  const deps = new Set<string>()
+
+  try {
+    const pkgFiles = await fg(['**/package.json'], {
+      cwd: root,
+      absolute: false,
+      ignore: ['**/node_modules/**', 'package.json'],
+    })
+
+    for (const pkgFile of pkgFiles) {
+      try {
+        const raw = await readFile(resolve(root, pkgFile), 'utf-8')
+        const pkg = JSON.parse(raw)
+        if (pkg.name) deps.add(pkg.name)
+        for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
+          if (pkg[key] && typeof pkg[key] === 'object') {
+            for (const dep of Object.keys(pkg[key])) {
+              deps.add(dep)
+            }
+          }
+        }
+      } catch {
+        // Invalid nested package.json
+      }
+    }
+  } catch {
+    // Glob failed
+  }
+
+  return deps
+}
+
 export async function buildProjectContext(
   root: string,
   files: string[],
@@ -212,6 +250,12 @@ export async function buildProjectContext(
     for (const dep of workspaceDeps) {
       declaredDependencies.add(dep)
     }
+  }
+
+  // Nested packages that aren't declared workspaces still declare real dependencies.
+  const nestedDeps = await collectNestedPackageDependencies(root)
+  for (const dep of nestedDeps) {
+    declaredDependencies.add(dep)
   }
 
   // Detect frameworks from dependencies (after workspace merging)
