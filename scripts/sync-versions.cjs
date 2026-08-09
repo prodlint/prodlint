@@ -11,6 +11,8 @@ const rootPkgPath = path.join(root, 'package.json');
 const version = JSON.parse(fs.readFileSync(rootPkgPath, 'utf8')).version;
 
 const edits = [];
+// Every file this script writes, tracked so the version commit can stage exactly these.
+const written = [];
 
 // server.json — both the top-level version and the npm package entry.
 const serverPath = path.join(root, 'server.json');
@@ -24,6 +26,7 @@ if (server.packages?.[0] && server.packages[0].version !== version) {
   server.packages[0].version = version;
 }
 fs.writeFileSync(serverPath, JSON.stringify(server, null, 2) + '\n');
+written.push('server.json');
 
 // packages/prodlint-mcp — version and its dependency range on the scanner.
 const mcpPath = path.join(root, 'packages', 'prodlint-mcp', 'package.json');
@@ -37,6 +40,7 @@ if (mcp.dependencies.prodlint !== `^${version}`) {
   mcp.dependencies.prodlint = `^${version}`;
 }
 fs.writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + '\n');
+written.push('packages/prodlint-mcp/package.json');
 
 // Plain-text version strings. Each pattern must match exactly once — if a file is
 // restructured so the anchor moves, fail loudly rather than silently skipping it.
@@ -76,7 +80,20 @@ for (const { file, label, pattern } of textTargets) {
     edits.push(`${label}: ${before.trim()} -> ${before.trim().replace(SEMVER, version)}`);
     fs.writeFileSync(full, updated);
   }
+  // Staged unconditionally: already-correct files are a no-op to `git add`, and this
+  // keeps the staged set identical to the set of files this script owns.
+  written.push(file);
 }
 
 console.log(`Syncing everything to v${version}`);
 console.log(edits.length ? edits.map((e) => `  ${e}`).join('\n') : '  (already in sync)');
+
+// Under `npm version`, stage everything we touched so it lands in the version commit
+// (and therefore the tag). Staging here rather than in package.json's `version` hook
+// keeps the file list in one place — a hardcoded `git add` list silently drifts as
+// targets are added, which strands edits outside the tag.
+if (process.env.npm_lifecycle_event === 'version') {
+  const { execFileSync } = require('child_process');
+  execFileSync('git', ['add', '--', ...written], { cwd: root, stdio: 'inherit' });
+  console.log(`\nStaged for the version commit:\n${written.map((f) => `  ${f}`).join('\n')}`);
+}

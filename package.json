@@ -43,7 +43,7 @@
     "audit:supply-chain": "node scripts/supply-chain-audit.cjs",
     "verify:release": "node scripts/verify-release.cjs",
     "sync:versions": "node scripts/sync-versions.cjs",
-    "version": "node scripts/sync-versions.cjs && git add server.json packages/prodlint-mcp/package.json",
+    "version": "node scripts/sync-versions.cjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
