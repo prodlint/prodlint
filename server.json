@@ -12,18 +12,12 @@
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "prodlint",
+      "identifier": "prodlint-mcp",
       "version": "0.9.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
-      },
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "prodlint-mcp"
-        }
-      ]
+      }
     }
   ]
 }

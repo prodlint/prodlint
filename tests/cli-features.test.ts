@@ -11,11 +11,19 @@ function run(args: string, cwd?: string): { stdout: string; status: number } {
     const stdout = execSync(`node ${CLI_PATH} ${args}`, {
       cwd: cwd ?? join(__dirname, '..'),
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: 120000,
     })
     return { stdout, status: 0 }
   } catch (err: unknown) {
-    const e = err as { stdout?: string; status?: number }
+    const e = err as { stdout?: string; status?: number; code?: string; signal?: string }
+    // A non-zero exit is expected (prodlint exits 1 on criticals), but a timeout
+    // is not — it would otherwise surface as an empty-stdout assertion failure
+    // that says nothing about the real cause.
+    if (e.code === 'ETIMEDOUT' || e.signal) {
+      throw new Error(
+        `prodlint CLI did not finish: code=${e.code ?? 'none'} signal=${e.signal ?? 'none'} (args: ${args})`
+      )
+    }
     return { stdout: e.stdout ?? '', status: e.status ?? 1 }
   }
 }

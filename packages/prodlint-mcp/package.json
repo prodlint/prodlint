@@ -1,0 +1,45 @@
+{
+  "name": "prodlint-mcp",
+  "version": "0.9.5",
+  "description": "MCP server for prodlint — scan AI-generated projects for production readiness issues",
+  "license": "MIT",
+  "author": "prodlint contributors",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prodlint/prodlint"
+  },
+  "bugs": {
+    "url": "https://github.com/prodlint/prodlint/issues"
+  },
+  "homepage": "https://prodlint.com",
+  "mcpName": "io.github.prodlint/prodlint",
+  "bin": {
+    "prodlint-mcp": "./bin.mjs"
+  },
+  "files": [
+    "bin.mjs"
+  ],
+  "dependencies": {
+    "prodlint": "^0.9.5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "prodlint",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "lint",
+    "linter",
+    "ai",
+    "ai-code",
+    "vibe-coding",
+    "production-readiness",
+    "cursor",
+    "copilot",
+    "claude",
+    "devtools"
+  ]
+}
