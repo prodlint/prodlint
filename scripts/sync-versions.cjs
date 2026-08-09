@@ -38,5 +38,45 @@ if (mcp.dependencies.prodlint !== `^${version}`) {
 }
 fs.writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + '\n');
 
+// Plain-text version strings. Each pattern must match exactly once — if a file is
+// restructured so the anchor moves, fail loudly rather than silently skipping it.
+const SEMVER = /\d+\.\d+\.\d+/;
+const textTargets = [
+  {
+    file: 'README.md',
+    label: 'README sample output',
+    pattern: /^\s*prodlint v\d+\.\d+\.\d+$/m,
+  },
+  {
+    file: 'tests/reporter.test.ts',
+    label: 'reporter test fixture',
+    pattern: /^\s*version: '\d+\.\d+\.\d+',$/m,
+  },
+];
+
+for (const { file, label, pattern } of textTargets) {
+  const full = path.join(root, file);
+  const raw = fs.readFileSync(full, 'utf8');
+  const matches = raw.match(new RegExp(pattern.source, pattern.flags.replace('m', 'gm')));
+
+  if (!matches || matches.length !== 1) {
+    console.error(
+      `\n${file}: expected exactly 1 version string for "${label}", found ${matches ? matches.length : 0}.`
+    );
+    console.error('The anchor has moved — update scripts/sync-versions.cjs.');
+    process.exit(1);
+  }
+
+  // Substitute inside the matched line rather than reassembling from capture groups —
+  // replace() passes the match offset where an unused group would be, so an arity
+  // mismatch silently appends it to the version.
+  const before = matches[0];
+  const updated = raw.replace(pattern, (m) => m.replace(SEMVER, version));
+  if (updated !== raw) {
+    edits.push(`${label}: ${before.trim()} -> ${before.trim().replace(SEMVER, version)}`);
+    fs.writeFileSync(full, updated);
+  }
+}
+
 console.log(`Syncing everything to v${version}`);
 console.log(edits.length ? edits.map((e) => `  ${e}`).join('\n') : '  (already in sync)');
