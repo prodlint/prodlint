@@ -1,6 +1,6 @@
 {
   "name": "prodlint-mcp",
-  "version": "0.9.5",
+  "version": "0.10.0",
   "description": "MCP server for prodlint — scan AI-generated projects for production readiness issues",
   "license": "MIT",
   "author": "prodlint contributors",
@@ -21,7 +21,7 @@
     "bin.mjs"
   ],
   "dependencies": {
-    "prodlint": "^0.9.5"
+    "prodlint": "^0.10.0"
   },
   "engines": {
     "node": ">=18"
