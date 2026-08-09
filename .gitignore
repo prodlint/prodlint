@@ -8,7 +8,9 @@ dist/
 
 # MCP registry publisher
 .mcpregistry_*
+mcp-publisher
 mcp-publisher.exe
+mcp-publisher.tar.gz
 
 # Windows artifacts
 nul
