@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-25
+
 ### Security
 - **`--web` and the MCP `scan-web` tool could be pointed at private hosts.** The guard
   only compared the hostname string, so IPv4-mapped IPv6 (`[::ffff:127.0.0.1]`,
