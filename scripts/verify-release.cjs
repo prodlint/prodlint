@@ -50,6 +50,11 @@ check('prodlint-mcp dependency on prodlint', mcpPkg.dependencies?.prodlint, `^${
 check('server.json packages[0].identifier', server.packages?.[0]?.identifier, mcpPkg.name);
 check('prodlint-mcp mcpName vs server.json name', mcpPkg.mcpName, server.name);
 
+// The GitHub Action runs `npx prodlint@<pin>`. A stale pin would make every action tag
+// run an older scanner than the release it belongs to.
+const actionYml = fs.readFileSync(path.join(root, 'action.yml'), 'utf8');
+check('action.yml scanner pin', actionYml.match(/\bnpx -y prodlint@(\d+\.\d+\.\d+)\b/)?.[1], pkg.version);
+
 console.log('Release consistency check');
 console.log(checks.join('\n'));
 

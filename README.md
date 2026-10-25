@@ -187,7 +187,9 @@ jobs:
           threshold: 50
 ```
 
-Posts a score breakdown as a PR comment and fails the build if below threshold.
+Posts a score breakdown as a PR comment and fails the build if below threshold. Each
+release of the action runs its matching prodlint version, so pinning the action (`@v1`,
+a version tag, or a commit SHA) also pins the scanner.
 
 | Input | Default | Description |
 |-------|---------|-------------|

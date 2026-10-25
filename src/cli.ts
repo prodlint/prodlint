@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { scan } from './scanner.js'
 import { reportPretty, reportJson, reportSummary, reportSarif, reportWebPretty } from './reporter.js'
 import { getVersion } from './utils/version.js'
-import { runWebScan as runWebScanLocal, normalizeUrl, isPrivateHost } from './web-scanner/index.js'
+import { runWebScan as runWebScanLocal, normalizeUrl, isPrivateHost, resolvesToPrivateAddress } from './web-scanner/index.js'
 import type { WebScanResult } from './web-scanner/index.js'
 import type { Severity, Finding } from './types.js'
 
@@ -160,7 +160,7 @@ async function runWebScan(url: string, opts: { json: boolean }) {
   }
 
   const hostname = new URL(normalizedUrl).hostname
-  if (isPrivateHost(hostname)) {
+  if (isPrivateHost(hostname) || await resolvesToPrivateAddress(hostname)) {
     console.error('Cannot scan private/internal hosts.')
     process.exit(2)
   }

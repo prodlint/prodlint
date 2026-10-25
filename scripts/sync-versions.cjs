@@ -69,6 +69,12 @@ const textTargets = [
     label: 'reporter test fixture',
     pattern: /^\s*version: '\d+\.\d+\.\d+',$/m,
   },
+  {
+    // The action runs this exact version, so each action tag pins the scanner it ships with.
+    file: 'action.yml',
+    label: 'action.yml scanner pin',
+    pattern: /^.*\bnpx -y prodlint@\d+\.\d+\.\d+\b.*$/m,
+  },
 ];
 
 for (const { file, label, pattern } of textTargets) {

@@ -4,31 +4,27 @@ on:
   push:
     tags: ['v*']
 
-# Least privilege by default; the publish job widens what it needs.
+# Least privilege by default; each job widens only what it needs.
 permissions: {}
 
 jobs:
-  publish:
+  # Everything that runs third-party code (npm ci's install scripts, the build, the test
+  # suite) happens here, with a read-only token and no OIDC. The publish job only ever
+  # sees the packed tarballs, so a compromised dev dependency can't mint the npm
+  # trusted-publishing token or push to the repo.
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # push the rolling v1 tag
-      id-token: write # OIDC: npm trusted publishing + provenance attestation
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
-
-      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 24 still ships npm 10.x.
-      - name: Upgrade npm for trusted publishing
-        run: |
-          npm install -g npm@latest
-          npm --version
 
       # Catches the release footguns that have bitten this repo before: a tag that
       # disagrees with package.json, and an mcpName/server.json mismatch, which the
@@ -43,15 +39,59 @@ jobs:
       - name: Self-scan
         run: node dist/cli.js . --ignore "tests/**"
 
+      - name: Pack prodlint and the prodlint-mcp launcher
+        run: |
+          mkdir release
+          npm pack --pack-destination release
+          npm pack ./packages/prodlint-mcp --pack-destination release
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tarballs
+          path: release/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC: npm trusted publishing + provenance, MCP registry login
+    steps:
+      # Only for server.json, which mcp-publisher reads. No code from the repo runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 24 still ships npm 10.x.
+      # Pinned rather than @latest: this job can publish, so it shouldn't pick up whatever
+      # npm release (or major) landed that morning.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@11.21.0
+          npm --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarballs
+          path: release
+
       # No NODE_AUTH_TOKEN: auth comes from the OIDC identity configured as a
       # trusted publisher on npmjs.com. Provenance is attested automatically.
+      # Publishing a tarball runs none of the package's lifecycle scripts.
       - name: Publish prodlint to npm
-        run: npm publish --provenance --access public
+        run: npm publish "release/prodlint-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
 
       # Published second so its `prodlint` dependency already exists on the registry.
       # Keeping it in this workflow is what stops it drifting from the scanner again.
       - name: Publish prodlint-mcp launcher to npm
-        run: npm publish ./packages/prodlint-mcp --provenance --access public
+        run: npm publish "release/prodlint-mcp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
 
       # Registry auth is OIDC too, so this needs no stored credential. Previously this
       # step was manual and awkward: mcp-publisher's registry JWT expires within
@@ -70,6 +110,17 @@ jobs:
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
+
+  # The only job that can write to the repo, and it runs nothing but git.
+  update-v1-tag:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the rolling v1 tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Update rolling v1 tag
         run: |
