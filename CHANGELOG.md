@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The GitHub Action runs on Node 22 (Node 20 is end-of-life).
 - The Action's PR comment shows finding messages as inline code.
 - `--web` fetches the homepage once instead of twice.
+- Lockfile refreshed to clear 10 of 13 `npm audit` findings: `@modelcontextprotocol/sdk`
+  1.32.2, `zod` 4.6.7, and transitive dependencies of the SDK and the build tools. The
+  other three are dev-only, in vitest 3, and every fix needs a vitest major that drops
+  Node 18.
 
 ## [0.10.0] - 2026-08-09
 
