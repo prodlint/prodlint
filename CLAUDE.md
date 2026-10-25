@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (618 tests)
+npm run test         # vitest run (675 tests)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -130,7 +130,10 @@ Overall = **weighted** average: security 40%, reliability 30%, performance 15%, 
 
 ### GitHub Action (`action.yml`)
 
-Composite action: installs Node 20, runs `npx prodlint --json`, parses JSON, posts PR comment via `marocchino/sticky-pull-request-comment@v2`, fails if score < threshold. Sanitizes markdown output to prevent injection.
+Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`, parses JSON, posts PR comment via `marocchino/sticky-pull-request-comment`, fails if score < threshold. Both third-party actions are SHA-pinned.
+
+- **The scanner version is pinned, never `@latest`.** `sync-versions.cjs` bumps the pin and `verify-release.cjs` fails on drift, so pinning the action (`@v1`, a tag, a SHA) pins the code that runs in users' CI.
+- **The comment is built by `scripts/action-comment.cjs`**, not inline `node -e "..."` — bash's double-quote processing once silently stripped the escaper's backslash. File paths and messages come from the scanned repo: they're flattened to one line and rendered as inline code (no autolinks, @-mentions or HTML there). Tests: `tests/action-comment.test.ts`.
 
 ### Adding a New Rule
 
@@ -151,14 +154,21 @@ git push --follow-tags
 `npm version` fires the `version` lifecycle hook, which runs `scripts/sync-versions.cjs`
 to propagate the new version into `server.json` (both fields),
 `packages/prodlint-mcp/package.json` (its `version` and its `^` range on `prodlint`),
-the `README.md` sample output, and the `tests/reporter.test.ts` fixture — then stages
-them into the version commit. The script **fails loudly** if a text anchor no longer
-matches exactly once, rather than silently skipping a file.
+the `README.md` sample output, the `tests/reporter.test.ts` fixture, and the scanner pin
+in `action.yml` — then stages them into the version commit. The script **fails loudly**
+if a text anchor no longer matches exactly once, rather than silently skipping a file.
 
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
 to npm with provenance, publishes to the **MCP registry**, then force-updates the
 rolling `v1` tag.
+
+It is three jobs, split by privilege — keep it that way:
+- **`build`** (read-only token, no OIDC) runs everything that executes third-party code —
+  `npm ci`, build, tests, self-scan — then `npm pack`s both packages into an artifact.
+- **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
+  the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
+- **`update-v1-tag`** (`contents: write`) runs nothing but git.
 
 Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 - **npm**: trusted publishing. Both `prodlint` and `prodlint-mcp` have

@@ -152,6 +152,14 @@ export default key
   })
 })
 
+describe('--web flag', () => {
+  it('refuses private hosts before making any request', () => {
+    for (const host of ['localhost.', '[::ffff:127.0.0.1]', 'metadata.google.internal']) {
+      expect(run(`--web "${host}"`).status).toBe(2)
+    }
+  })
+})
+
 describe('--help flag', () => {
   it('shows all new flags', () => {
     const { stdout } = run('--help')

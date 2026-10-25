@@ -34,9 +34,11 @@ runs:
   using: 'composite'
   steps:
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
-        node-version: '20'
+        node-version: '22'
+        # Automatic caching would key off the scanned repo's package.json; npx needs none.
+        package-manager-cache: false
 
     - name: Run prodlint
       id: scan
@@ -54,7 +56,9 @@ runs:
           done
         fi
 
-        OUTPUT=$(npx -y prodlint@latest "${CMD_ARGS[@]}" 2>&1) || true
+        # The exact release this action ships with (scripts/sync-versions.cjs bumps it), so
+        # pinning the action — @v1, a version tag or a commit SHA — also pins the scanner.
+        OUTPUT=$(npx -y prodlint@0.10.0 "${CMD_ARGS[@]}" 2>&1) || true
 
         SCORE=$(echo "$OUTPUT" | node -e "
           const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
@@ -70,72 +74,22 @@ runs:
 
         echo "score=${SCORE:-0}" >> "$GITHUB_OUTPUT"
         echo "critical=${CRITICAL:-0}" >> "$GITHUB_OUTPUT"
-        echo "$OUTPUT" > /tmp/prodlint-result.json
+        echo "$OUTPUT" > "$RUNNER_TEMP/prodlint-result.json"
 
+    # Built by a script file rather than inline `node -e`: the comment carries file paths
+    # and messages from the scanned repo, and the script's escaping is unit-tested.
     - name: Generate comment body
       if: inputs.comment == 'true' && github.event_name == 'pull_request'
       id: comment
       shell: bash
-      env:
-        SCAN_SCORE: ${{ steps.scan.outputs.score }}
-        INPUT_THRESHOLD: ${{ inputs.threshold }}
-      run: |
-        SCORE="$SCAN_SCORE"
-        THRESHOLD="$INPUT_THRESHOLD"
-
-        if [ "$SCORE" -ge 80 ]; then
-          EMOJI="✅"
-          COLOR="brightgreen"
-        elif [ "$SCORE" -ge 60 ]; then
-          EMOJI="⚠️"
-          COLOR="yellow"
-        else
-          EMOJI="🚨"
-          COLOR="red"
-        fi
-
-        # Build comment from JSON with markdown sanitization
-        TMPFILE=$(mktemp "${RUNNER_TEMP:-/tmp}/prodlint-comment-XXXXXX.md")
-        node -e "
-          const fs = require('fs');
-          const d = JSON.parse(fs.readFileSync('/tmp/prodlint-result.json', 'utf8'));
-          const esc = s => String(s).replace(/[[\]()\\*_\`<>]/g, c => '\\\\' + c);
-          const lines = [];
-          lines.push('## ' + '$EMOJI' + ' Production Readiness: **' + d.overallScore + '/100**');
-          lines.push('');
-          lines.push('| Category | Score | Issues |');
-          lines.push('|----------|-------|--------|');
-          for (const c of d.categoryScores) {
-            const icon = c.score >= 80 ? '🟢' : c.score >= 60 ? '🟡' : '🔴';
-            lines.push('| ' + icon + ' ' + esc(c.category) + ' | ' + c.score + '/100 | ' + c.findingCount + ' |');
-          }
-          if (d.summary.critical > 0) {
-            lines.push('');
-            lines.push('### Critical Issues');
-            lines.push('');
-            const crits = d.findings.filter(f => f.severity === 'critical');
-            for (const f of crits.slice(0, 10)) {
-              lines.push('- \`' + esc(f.ruleId) + '\` \`' + esc(f.file) + ':' + f.line + '\` — ' + esc(f.message));
-            }
-            if (crits.length > 10) {
-              lines.push('- ...and ' + (crits.length - 10) + ' more');
-            }
-          }
-          lines.push('');
-          lines.push('---');
-          lines.push('*Scanned ' + d.filesScanned + ' files in ' + d.scanDurationMs + 'ms · [prodlint](https://prodlint.com)*');
-          fs.writeFileSync('$TMPFILE', lines.join('\n'));
-        "
-
-        # Use the generated file for the comment step
-        cp "$TMPFILE" /tmp/prodlint-comment.md
+      run: node "$GITHUB_ACTION_PATH/scripts/action-comment.cjs" "$RUNNER_TEMP/prodlint-result.json" "$RUNNER_TEMP/prodlint-comment.md"
 
     - name: Post PR comment
       if: inputs.comment == 'true' && github.event_name == 'pull_request'
-      uses: marocchino/sticky-pull-request-comment@v3
+      uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
       with:
         header: prodlint
-        path: /tmp/prodlint-comment.md
+        path: ${{ runner.temp }}/prodlint-comment.md
 
     - name: Check threshold
       if: inputs.threshold != '0'

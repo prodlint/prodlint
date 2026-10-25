@@ -5,7 +5,7 @@ import { stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
-import { runWebScan, normalizeUrl, isPrivateHost } from './web-scanner/index.js'
+import { runWebScan, normalizeUrl, isPrivateHost, resolvesToPrivateAddress } from './web-scanner/index.js'
 
 const server = new McpServer({
   name: 'prodlint',
@@ -96,7 +96,7 @@ server.tool(
     }
 
     const hostname = new URL(normalizedUrl).hostname
-    if (isPrivateHost(hostname)) {
+    if (isPrivateHost(hostname) || await resolvesToPrivateAddress(hostname)) {
       return {
         content: [{ type: 'text' as const, text: 'Error: Cannot scan private or internal hosts.' }],
         isError: true,

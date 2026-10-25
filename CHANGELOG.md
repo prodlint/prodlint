@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+- **`--web` and the MCP `scan-web` tool could be pointed at private hosts.** The guard
+  only compared the hostname string, so IPv4-mapped IPv6 (`[::ffff:127.0.0.1]`,
+  `[::ffff:169.254.169.254]`), NAT64, `localhost.`, `*.localhost` and hostnames that
+  resolve to private addresses all got through, and redirects were followed before the
+  final URL was checked. Every resolved address is now checked at connect time (which
+  also covers DNS rebinding), and redirects are followed by hand with each hop re-checked.
+- **The GitHub Action always ran `prodlint@latest`**, so pinning the action to a tag or
+  commit SHA didn't pin the scanner that ran in your CI. Each action release now runs its
+  matching prodlint version, and `setup-node` and `sticky-pull-request-comment` are
+  pinned by commit SHA.
+- **PR comment markdown injection.** A crafted import name or file path in a pull request
+  could add headings, @-mentions or HTML to the bot's comment: newlines weren't stripped,
+  and bash quoting had dropped the backslash from the escaper. The comment is now built by
+  `scripts/action-comment.cjs`, which flattens untrusted text to one line and renders it
+  as inline code.
+- **Release workflow split by privilege.** `npm ci` and the test suite ran in the same job
+  that held the npm publishing (OIDC) token and repo write access. They now run in a
+  read-only `build` job; publishing only sees the packed tarballs, and npm is pinned
+  instead of `@latest`.
+
+### Fixed
+- **`--web` refused legitimate sites whose names start with "fc" or "fd"** (fdic.gov,
+  fcc.gov, fd.io) as private hosts. The IPv6 unique-local check ran against every
+  hostname, not just IP literals.
+- **`--web` could hang indefinitely.** The request timeout was cleared before the body was
+  read, so a server that trickled its response stalled the scan, or an MCP tool call,
+  forever. One deadline now covers connect, redirects and body, and bodies are capped at 5 MB.
+
+### Changed
+- The GitHub Action runs on Node 22 (Node 20 is end-of-life).
+- The Action's PR comment shows finding messages as inline code.
+- `--web` fetches the homepage once instead of twice.
+
 ## [0.10.0] - 2026-08-09
 
 ### Fixed
