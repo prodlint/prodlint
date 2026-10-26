@@ -7,12 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (675 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (682 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
 
 Run a single test file: `npx vitest run tests/rules/secrets.test.ts`
+
+`tests/cli-features.test.ts` and `tests/mcp-server.test.ts` run the built `dist/`
+(the MCP one talks JSON-RPC to `dist/mcp.js` over stdio), so build before testing.
 
 ## Architecture
 
