@@ -64,7 +64,7 @@ runs:
         # pinning the action — @v1, a version tag or a commit SHA — also pins the scanner.
         # It exits 1 when it finds criticals and 2 when the scan fails; "Check results" decides.
         EXIT_CODE=0
-        npx -y prodlint@0.10.3 "${CMD_ARGS[@]}" > "$RUNNER_TEMP/prodlint-result.json" || EXIT_CODE=$?
+        npx -y prodlint@0.10.4 "${CMD_ARGS[@]}" > "$RUNNER_TEMP/prodlint-result.json" || EXIT_CODE=$?
         echo "exit-code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
         node "$GITHUB_ACTION_PATH/scripts/action-check.cjs" outputs "$RUNNER_TEMP/prodlint-result.json" >> "$GITHUB_OUTPUT"
 
