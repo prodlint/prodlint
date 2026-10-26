@@ -58,7 +58,7 @@ runs:
 
         # The exact release this action ships with (scripts/sync-versions.cjs bumps it), so
         # pinning the action — @v1, a version tag or a commit SHA — also pins the scanner.
-        OUTPUT=$(npx -y prodlint@0.10.2 "${CMD_ARGS[@]}" 2>&1) || true
+        OUTPUT=$(npx -y prodlint@0.10.3 "${CMD_ARGS[@]}" 2>&1) || true
 
         SCORE=$(echo "$OUTPUT" | node -e "
           const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));

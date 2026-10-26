@@ -13,7 +13,7 @@ npx prodlint
 ```
 
 ```
-  prodlint v0.10.2
+  prodlint v0.10.3
   Scanned 148 files · 2 critical · 5 warnings · 1 info
 
   src/app/api/checkout/route.ts
