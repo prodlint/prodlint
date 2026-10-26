@@ -70,6 +70,33 @@ describe('next-server-action-validation rule', () => {
     expect(findings).toHaveLength(1)
   })
 
+  // React's compiled server bundles say `marking it with "use server"` in an error message
+  it('ignores "use server" in a string, which is not a directive', () => {
+    const file = makeFile([
+      'export function explain() {',
+      '  throw new Error(\'Expose it by marking it with "use server".\')',
+      '}',
+      'export function decode(formData) {',
+      '  return JSON.parse(String(formData.get("payload")))',
+      '}',
+    ].join('\n'), { relativePath: 'src/lib/decode.ts' })
+    const findings = nextServerActionValidationRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('still reads a "use server" directive inside a function', () => {
+    const file = makeFile([
+      'export default function Page() {',
+      '  async function create(formData: FormData) {',
+      "    'use server'",
+      '    await db.insert({ name: formData.get("name") })',
+      '  }',
+      '}',
+    ].join('\n'), { relativePath: 'app/page.tsx' })
+    const findings = nextServerActionValidationRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
   it('ignores files without use server', () => {
     const file = makeFile([
       'export async function submit(formData: FormData) {',

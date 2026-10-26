@@ -1,7 +1,9 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile } from '../utils/patterns.js'
 
-const USE_SERVER = /['"]use server['"]/
+// The directive starts a line (file top or function body); "use server" inside a string,
+// like an error message in React's compiled server bundles, doesn't make a server action
+const USE_SERVER = /^\s*['"]use server['"]/m
 
 const AUTH_PATTERNS = [
   /getServerSession\s*\(/,

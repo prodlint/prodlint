@@ -92,6 +92,17 @@ export async function deleteItem(id) {
     }
   })
 
+  it('ignores "use server" in a string, which is not a directive', () => {
+    const file = makeFile(`export function explain() {
+  throw new Error('Expose it by marking it with "use server".')
+}
+export function remove(id) {
+  return db.delete(items).where({ id })
+}`, { relativePath: 'src/lib/items.ts' })
+    const findings = serverActionAuthRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('skips public action patterns', () => {
     const file = makeFile(`'use server'
 export async function submitFeedback(data) {

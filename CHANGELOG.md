@@ -73,8 +73,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   as one sent to OpenAI, no longer counts as an auth check; reading the request's own
   header still does. "session" anywhere in a server action, such as a `sessionId` form
   field, no longer counts as auth; a session lookup (`verifySession()`,
-  `getIronSession()`), a session cookie read or a session guard does. **Scan results may
-  change** for routes and actions that only passed this way.
+  `getIronSession()`), a session cookie read or a session guard does. The two server
+  action rules also take `'use server'` as a directive only where it starts a line, so a
+  file that just mentions it (React's compiled server bundles do, in an error message)
+  isn't a server action. **Scan results may change** for routes and actions that only
+  passed this way.
 - **SARIF output didn't validate against the 2.1.0 schema.** Each result's `fixes` lacked
   the required `artifactChanges`. prodlint's fix hints are prose, not edits, so they now go
   in the result's `properties.fix`.
