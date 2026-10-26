@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- The README and AGENTS.md set up the MCP server with `npx -y prodlint-mcp`, the same
+  command prodlint.com and the MCP registry entry use. It runs the same server as the old
+  `npx -y -p prodlint prodlint-mcp`; the launcher ships with every release.
+
 ## [0.10.3] - 2026-10-26
 
 ### Added
