@@ -145,7 +145,7 @@ npm i -g prodlint     # Global install
 
 prodlint avoids common false positives:
 
-- **AST parsing** — Babel-based analysis for 12 rules (imports, catch blocks, redirects, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
+- **AST parsing** — Babel-based analysis for 13 rules (imports, catch blocks, redirects, redirects in try/catch, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
 - **Monorepo support** — npm/yarn/pnpm workspace dependencies resolved automatically
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
 - **Middleware detection** — Clerk, NextAuth, Supabase middleware detected — auth findings downgraded
@@ -187,14 +187,16 @@ jobs:
           threshold: 50
 ```
 
-Posts a score breakdown as a PR comment and fails the build if below threshold. Each
-release of the action runs its matching prodlint version, so pinning the action (`@v1`,
-a version tag, or a commit SHA) also pins the scanner.
+Posts a score breakdown as a PR comment, and fails the build when the scan finds critical
+issues or the score is below `threshold`. Each release of the action runs its matching
+prodlint version, so pinning the action (`@v1`, a version tag, or a commit SHA) also pins
+the scanner.
 
 | Input | Default | Description |
 |-------|---------|-------------|
 | `path` | `.` | Path to scan |
 | `threshold` | `0` | Minimum score to pass (0-100) |
+| `fail-on-critical` | `true` | Fail when the scan finds critical issues; `false` reports them without failing |
 | `ignore` | | Comma-separated glob patterns to ignore |
 | `comment` | `true` | Post PR comment with results |
 

@@ -2,9 +2,26 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 import { isFrameworkSafeMethod } from '../utils/frameworks.js'
 
-const HALLUCINATED_APIS: { pattern: RegExp; fix: string; methodName: string }[] = [
+// DOM token lists (`classList`, `relList`) and nodes (`el.contains(other)`) do have
+// .contains(), and no .includes(). These are their usual shapes: a token list, a React ref,
+// the document, or a node argument such as an event target or a `Node` cast.
+const DOM_CONTAINS_RECEIVER = /(?:\b(?:classList|relList)|\.current|\bdocument(?:\.(?:body|documentElement|head))?)\??$/
+const DOM_CONTAINS_ARGUMENT = /^\s*(?:[\w$.?]*\.(?:target|relatedTarget|currentTarget|activeElement)\b|[^)]*\bas\s+(?:Node|Element|HTML\w*Element)\b)/
+
+const HALLUCINATED_APIS: {
+  pattern: RegExp
+  fix: string
+  methodName: string
+  /** The call is real here, given the code before and after the match */
+  isValid?: (before: string, after: string) => boolean
+}[] = [
   { pattern: /\.flatten\s*\(/, fix: 'Use .flat() instead of .flatten()', methodName: 'flatten' },
-  { pattern: /\.contains\s*\(/, fix: 'Use .includes() instead of .contains()', methodName: 'contains' },
+  {
+    pattern: /\.contains\s*\(/,
+    fix: 'Use .includes() instead of .contains() on arrays and strings — DOM classList and Node .contains() are valid',
+    methodName: 'contains',
+    isValid: (before, after) => DOM_CONTAINS_RECEIVER.test(before) || DOM_CONTAINS_ARGUMENT.test(after),
+  },
   { pattern: /\.substr\s*\(/, fix: 'Use .substring() or .slice() instead of deprecated .substr()', methodName: 'substr' },
   { pattern: /\.trimLeft\s*\(/, fix: 'Use .trimStart() instead of deprecated .trimLeft()', methodName: 'trimLeft' },
   { pattern: /\.trimRight\s*\(/, fix: 'Use .trimEnd() instead of deprecated .trimRight()', methodName: 'trimRight' },
@@ -30,11 +47,13 @@ export const hallucinatedApiRule: Rule = {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
       const line = file.lines[i]
 
-      for (const { pattern, fix, methodName } of HALLUCINATED_APIS) {
+      for (const { pattern, fix, methodName, isValid } of HALLUCINATED_APIS) {
         const match = pattern.exec(line)
         if (match) {
           // Skip if this method is legitimate for a detected framework
           if (isFrameworkSafeMethod(methodName, frameworks)) continue
+          // ...or for the object it's called on (DOM .contains())
+          if (isValid?.(line.slice(0, match.index), line.slice(match.index + match[0].length))) continue
 
           findings.push({
             ruleId: 'hallucinated-api',

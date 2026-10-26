@@ -4,7 +4,8 @@ import { isTestFile } from '../utils/patterns.js'
 const USE_SERVER = /['"]use server['"]/
 const FORM_DATA_GET = /formData\.get\s*\(/
 const VALIDATION_PATTERNS = [
-  /\.parse\s*\(/,
+  // A schema's .parse(), but not parsers that validate nothing: JSON.parse(), Date.parse()...
+  /(?<!\b(?:JSON|Date|URL|path|qs|querystring))\.parse\s*\(/,
   /\.safeParse\s*\(/,
   /\bvalidate\s*\(/,
   /\.parseAsync\s*\(/,

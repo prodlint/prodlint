@@ -2,7 +2,27 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile } from '../utils/patterns.js'
 
 const CREATE_TABLE = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)/gi
-const ENABLE_RLS = /ALTER\s+TABLE\s+(?:(?:public|"public")\.)?(\w+)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi
+// `ALTER TABLE [IF EXISTS] [ONLY] [public.]name`, any part of the name quoted or not
+const ENABLE_RLS = /ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:(?:public|"public")\.)?"?(\w+)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi
+
+/** Only migration and schema files create the tables an app ships */
+function isMigrationFile(file: FileContext): boolean {
+  return file.ext === 'sql' && !isTestFile(file.relativePath) &&
+    /migration|supabase|schema/i.test(file.relativePath)
+}
+
+/**
+ * The project a SQL file belongs to, so that separate projects in one repo (a monorepo's
+ * apps or examples) don't vouch for each other's tables: the path before the file's
+ * nearest `supabase/` directory, else before its nearest `migrations/`, else its directory.
+ */
+function sqlProject(relativePath: string): string {
+  const dirs = relativePath.split('/').slice(0, -1)
+  const supabase = dirs.map(d => d.toLowerCase() === 'supabase').lastIndexOf(true)
+  const migrations = dirs.map(d => /^migrations?$/i.test(d)).lastIndexOf(true)
+  const end = supabase !== -1 ? supabase : migrations !== -1 ? migrations : dirs.length
+  return dirs.slice(0, end).join('/')
+}
 
 export const supabaseMissingRlsRule: Rule = {
   id: 'supabase-missing-rls',
@@ -12,54 +32,44 @@ export const supabaseMissingRlsRule: Rule = {
   severity: 'critical',
   fileExtensions: ['sql'],
 
-  check(file: FileContext, project: ProjectContext): Finding[] {
-    if (isTestFile(file.relativePath)) return []
-    // Only check migration files
-    if (!/migration|supabase|schema/i.test(file.relativePath)) return []
+  check(): Finding[] {
+    // Project-level: RLS is often enabled in a later migration than the one creating the table
+    return []
+  },
 
-    const content = file.content
+  checkProject(files: FileContext[], _project: ProjectContext): Finding[] {
     const findings: Finding[] = []
 
-    // Find all tables created
-    const tables: { name: string; line: number }[] = []
-    CREATE_TABLE.lastIndex = 0
-    let match
-    while ((match = CREATE_TABLE.exec(content)) !== null) {
-      const name = match[1]
-      // Skip internal/system tables
-      if (name.startsWith('_') || name === 'schema_migrations') continue
-      // Find line number
-      const beforeMatch = content.slice(0, match.index)
-      const line = beforeMatch.split('\n').length
-      tables.push({ name, line })
-    }
-
-    if (tables.length === 0) return []
-
-    // Find all tables with RLS enabled
+    // Tables with RLS enabled in any SQL file, per project: "<project>::<table>"
     const rlsTables = new Set<string>()
-    ENABLE_RLS.lastIndex = 0
-    while ((match = ENABLE_RLS.exec(content)) !== null) {
-      rlsTables.add(match[1].toLowerCase())
+    for (const file of files) {
+      if (file.ext !== 'sql' || isTestFile(file.relativePath)) continue
+      const project = sqlProject(file.relativePath)
+      for (const match of file.content.matchAll(ENABLE_RLS)) {
+        rlsTables.add(`${project}::${match[1].toLowerCase()}`)
+      }
     }
 
-    // Also check across all project SQL files
-    for (const filePath of project.allFiles) {
-      if (!filePath.endsWith('.sql')) continue
-      if (filePath === file.relativePath) continue
-    }
+    for (const file of files) {
+      if (!isMigrationFile(file)) continue
+      const content = file.content
+      const project = sqlProject(file.relativePath)
 
-    for (const table of tables) {
-      if (!rlsTables.has(table.name.toLowerCase())) {
+      for (const match of content.matchAll(CREATE_TABLE)) {
+        const name = match[1]
+        // Skip internal/system tables
+        if (name.startsWith('_') || name === 'schema_migrations') continue
+        if (rlsTables.has(`${project}::${name.toLowerCase()}`)) continue
+
         findings.push({
           ruleId: 'supabase-missing-rls',
           file: file.relativePath,
-          line: table.line,
+          line: content.slice(0, match.index).split('\n').length,
           column: 1,
-          message: `Table "${table.name}" created without ENABLE ROW LEVEL SECURITY — all rows are publicly accessible via the Supabase API`,
+          message: `Table "${name}" created without ENABLE ROW LEVEL SECURITY — all rows are publicly accessible via the Supabase API`,
           severity: 'critical',
           category: 'security',
-          fix: `Add: ALTER TABLE ${table.name} ENABLE ROW LEVEL SECURITY; and create appropriate policies`,
+          fix: `Add: ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY; and create appropriate policies`,
         })
       }
     }

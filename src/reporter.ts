@@ -192,12 +192,10 @@ export function reportSarif(result: ScanResult): string {
       ],
     }
 
+    // A SARIF `fix` must carry artifactChanges (concrete edits). prodlint's fixes are
+    // hints in prose, so they go in the result's property bag instead.
     if (f.fix) {
-      sarifResult.fixes = [
-        {
-          description: { text: f.fix },
-        },
-      ]
+      sarifResult.properties = { fix: f.fix }
     }
 
     return sarifResult

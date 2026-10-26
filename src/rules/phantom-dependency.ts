@@ -1,32 +1,42 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 
-// Commonly hallucinated packages that AI suggests but don't exist or are wrong
-// Source: https://snyk.io/articles/package-hallucinations/ + community reports
-const PHANTOM_PACKAGES = new Set([
-  'huggingface-cli',       // hallucinated, real: huggingface_hub
-  'flask-hierarchical',    // hallucinated
-  'beautifulsoup',         // real is beautifulsoup4
-  'python-dotenv',         // real is python-dotenv (this one exists but confusable)
-  'openai-sdk',            // hallucinated, real: openai
-  'anthropic-sdk',         // hallucinated, real: @anthropic-ai/sdk
-  'langchain-core',        // confusable with @langchain/core
-  'react-native-utils',    // hallucinated generic
-  'next-middleware',        // hallucinated
-  'supabase-client',       // hallucinated, real: @supabase/supabase-js
-  'stripe-sdk',            // hallucinated, real: stripe
-  'prisma-client',         // hallucinated, real: @prisma/client
-  'tailwind-utils',        // hallucinated
-  'express-validator-v2',  // hallucinated
-  'node-postgres-pool',    // hallucinated, real: pg
-  'mongo-client',          // hallucinated, real: mongodb
-  'redis-client',          // hallucinated, real: redis or ioredis
-  'aws-s3-upload',         // hallucinated
-  'gpt-tokenizer',         // exists but often confused
+// Commonly hallucinated packages that AI suggests but don't exist or are wrong, each with
+// the package usually meant. Source: https://snyk.io/articles/package-hallucinations/ +
+// community reports. Checked against the npm registry on 2026-10-26: every name is missing,
+// unpublished, an npm security placeholder, deprecated, or an old package that isn't the one
+// people mean. (gpt-tokenizer used to be listed; it's a real, maintained tokenizer.)
+const PHANTOM_PACKAGES = new Map<string, string[]>([
+  ['huggingface-cli', ['@huggingface/hub']],        // a Python CLI; an npm placeholder
+  ['flask-hierarchical', []],                       // not on npm
+  ['beautifulsoup', ['cheerio']],                   // a Python library (beautifulsoup4); not on npm
+  ['python-dotenv', ['dotenv']],                    // a Python library; an npm placeholder
+  ['openai-sdk', ['openai']],                       // unpublished
+  ['anthropic-sdk', ['@anthropic-ai/sdk']],         // an npm placeholder
+  ['langchain-core', ['@langchain/core']],          // deprecated
+  ['react-native-utils', []],                       // a 2015 native module
+  ['next-middleware', []],                          // a 2017 0.0.1; Next.js has middleware built in
+  ['supabase-client', ['@supabase/supabase-js']],   // unpublished
+  ['stripe-sdk', ['stripe']],                       // not on npm
+  ['prisma-client', ['@prisma/client']],            // an empty 0.0.0 placeholder
+  ['tailwind-utils', []],                           // a 2021 alpha
+  ['express-validator-v2', ['express-validator']],  // not on npm
+  ['node-postgres-pool', ['pg']],                   // not on npm
+  ['mongo-client', ['mongodb']],                    // a 2013 wrapper
+  ['redis-client', ['redis', 'ioredis']],           // a 2015 client
+  ['aws-s3-upload', ['@aws-sdk/client-s3']],        // a 2018 0.0.2
 ])
 
-// Legitimate short package names (2 chars) that should not be flagged
-const KNOWN_SHORT_PACKAGES = new Set([
+// Real, established packages the name patterns below would flag (checked on npm)
+const KNOWN_PACKAGES = new Set([
+  // 2-char names
   'pg', 'ws', 'ms', 'qs', 'ip', 'is', 'he', 'ky', 'bl', 'rc', 'io', 'db', 'fp', 'rx',
+  // -js suffix
+  'crypto-js', 'chroma-js', 'libphonenumber-js', 'ua-parser-js', 'keycloak-js', 'pusher-js',
+  'matter-js', 'amplitude-js',
+  // Vanity prefixes
+  'fast-glob', 'fast-deep-equal', 'fast-json-stable-stringify', 'fast-xml-parser',
+  'fast-levenshtein', 'fast-safe-stringify', 'fast-uri', 'fast-equals', 'fast-csv',
+  'fast-check', 'fast-diff', 'simple-git', 'simple-peer', 'simple-icons',
 ])
 
 // Suspicious patterns in package names (typosquatting indicators)
@@ -35,6 +45,11 @@ const SUSPICIOUS_PATTERNS = [
   /-js$/, // redundant -js suffix often hallucinated
   /^(the|my|simple|easy|fast|super|mega|ultra)-/, // vanity prefixes
 ]
+
+/** `"a"`, or `"a" or "b"` */
+function quoteList(names: string[]): string {
+  return names.map(n => `"${n}"`).join(' or ')
+}
 
 export const phantomDependencyRule: Rule = {
   id: 'phantom-dependency',
@@ -58,21 +73,26 @@ export const phantomDependencyRule: Rule = {
     }
 
     for (const [name, _version] of Object.entries(deps)) {
-      if (PHANTOM_PACKAGES.has(name)) {
+      const meant = PHANTOM_PACKAGES.get(name)
+      if (meant) {
         findings.push({
           ruleId: 'phantom-dependency',
           file: 'package.json',
           line: 1,
           column: 1,
-          message: `"${name}" is a commonly hallucinated package name — verify it exists and is the correct package`,
+          message: meant.length > 0
+            ? `"${name}" is a commonly hallucinated package name — did you mean ${quoteList(meant)}?`
+            : `"${name}" is a commonly hallucinated package name — verify it exists and is the correct package`,
           severity: 'warning',
           category: 'security',
-          fix: 'Add the missing package to dependencies in package.json, or remove the import if the package is hallucinated',
+          fix: meant.length > 0
+            ? `Check "${name}" on npm before relying on it. If you meant ${quoteList(meant)}, install that instead and update the code that imports "${name}"`
+            : `Check "${name}" on npm before relying on it — it may not exist, or may not be the package you meant`,
         })
       }
 
       for (const pattern of SUSPICIOUS_PATTERNS) {
-        if (pattern.test(name) && !name.startsWith('@') && !KNOWN_SHORT_PACKAGES.has(name)) {
+        if (pattern.test(name) && !name.startsWith('@') && !KNOWN_PACKAGES.has(name)) {
           findings.push({
             ruleId: 'phantom-dependency',
             file: 'package.json',

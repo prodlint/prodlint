@@ -3,6 +3,8 @@ import { unsafeHtmlRule } from '../../src/rules/unsafe-html.js'
 import { makeFile, makeProject } from '../helpers.js'
 
 const project = makeProject()
+// A .tsx path, so the file parses with JSX and the rule takes its AST path
+const TSX = { relativePath: 'components/post.tsx' }
 
 describe('unsafe-html rule', () => {
   it('flags dangerouslySetInnerHTML=', () => {
@@ -119,5 +121,58 @@ describe('unsafe-html rule', () => {
     )
     const findings = unsafeHtmlRule.check(file, project)
     expect(findings).toHaveLength(1)
+  })
+
+  // The rule's own fix is DOMPurify.sanitize(html), so sanitized HTML must pass
+  it('allows dangerouslySetInnerHTML wrapped in DOMPurify.sanitize()', () => {
+    const file = makeFile(
+      `<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />`,
+      TSX,
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows other sanitizers: sanitize-html, js-xss', () => {
+    const file = makeFile([
+      '<div dangerouslySetInnerHTML={{ __html: sanitizeHtml(post.body) }} />',
+      '<div dangerouslySetInnerHTML={{ __html: xss(comment) }} />',
+    ].join('\n'), TSX)
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows a variable that holds sanitized HTML', () => {
+    const file = makeFile([
+      'const clean = DOMPurify.sanitize(post.body)',
+      'export const Post = () => <article dangerouslySetInnerHTML={{ __html: clean }} />',
+    ].join('\n'), TSX)
+    expect(file.ast).toBeTruthy()
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows innerHTML assigned sanitized HTML', () => {
+    const file = makeFile(`el.innerHTML = DOMPurify.sanitize(html)`, TSX)
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('still flags HTML that is only partly sanitized', () => {
+    const file = makeFile(
+      `<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(intro) + body }} />`,
+      TSX,
+    )
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('falls back to regex: allows DOMPurify.sanitize() without an AST', () => {
+    const file = makeFile([
+      '<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />',
+      'el.innerHTML = DOMPurify.sanitize(html)',
+    ].join('\n'), { ext: 'tsx', withAst: false })
+    const findings = unsafeHtmlRule.check(file, project)
+    expect(findings).toHaveLength(0)
   })
 })

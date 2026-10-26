@@ -42,10 +42,16 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
   }
 
   // Phase 2: Project-level rules (cross-file analysis)
+  const filesByPath = new Map(allFiles.map(file => [file.relativePath, file]))
   for (const rule of rules) {
     if (rule.checkProject) {
-      const projectFindings = rule.checkProject(allFiles, project)
-      findings.push(...projectFindings)
+      for (const finding of rule.checkProject(allFiles, project)) {
+        // A finding in a scanned file honors that file's prodlint-disable comments too
+        const file = filesByPath.get(finding.file)
+        if (!file || !isLineSuppressed(file.lines, finding.line - 1, finding.ruleId)) {
+          findings.push(finding)
+        }
+      }
     }
   }
 

@@ -34,7 +34,11 @@ const AUTH_PATTERNS = [
   /createRouteHandlerClient/,
   /createServerComponentClient/,
   /createMiddlewareClient/,
-  /authorization/i,
+  // Reading the request's Authorization header, not sending one upstream:
+  // headers.get('authorization'), req.headers.authorization, req.headers['authorization'], req.header('Authorization')
+  /\.(?:get|header)\(\s*['"`]authorization['"`]/i,
+  /\.headers\??\.authorization\b(?!\s*=(?!=))/i,
+  /\.headers\[\s*['"`]authorization['"`]\s*\](?!\s*=(?!=))/i,
   /getAuth\s*\(/,
   /withPageAuth/,
   /cookies\(\).*auth/s,

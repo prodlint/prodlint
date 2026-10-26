@@ -19,7 +19,13 @@ const AUTH_PATTERNS = [
   /currentUser\s*\(/,
   /getAuth\s*\(/,
   /cookies\(\).*auth/s,
-  /session/i,
+  // Session lookups, not just any "session" text (a `sessionId` form field isn't auth):
+  // verifySession(), getIronSession(), lucia.validateSession(), getServerAuthSession()...
+  /\w*session\w*\s*\(/i,
+  // ...reading a session cookie, or using and guarding a session object
+  /cookie\w*\(?\)?\)?\s*\.get\(\s*['"`][\w-]*(?:session|auth|token)/i,
+  /\bsession\??\.user(?:Id)?\b/,
+  /!\s*session\b/,
 ]
 
 // Server actions that are clearly public (no auth needed)

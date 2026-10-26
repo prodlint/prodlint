@@ -57,6 +57,19 @@ describe('next-server-action-validation rule', () => {
     expect(findings).toHaveLength(0)
   })
 
+  it('does not treat JSON.parse() as validation', () => {
+    const file = makeFile([
+      "'use server'",
+      '',
+      'export async function saveCart(formData: FormData) {',
+      '  const items = JSON.parse(String(formData.get("items")))',
+      '  await db.insert({ items })',
+      '}',
+    ].join('\n'), { relativePath: 'src/actions/cart.ts' })
+    const findings = nextServerActionValidationRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
   it('ignores files without use server', () => {
     const file = makeFile([
       'export async function submit(formData: FormData) {',

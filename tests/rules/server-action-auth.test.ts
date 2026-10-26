@@ -63,6 +63,35 @@ export async function deleteItem(id) {
     expect(findings).toHaveLength(0)
   })
 
+  it('does not count a sessionId variable as an auth check', () => {
+    const file = makeFile(`'use server'
+export async function saveCart(formData: FormData) {
+  const sessionId = formData.get('sessionId')
+  await db.insert(carts).values({ sessionId, items: JSON.parse(String(formData.get('items'))) })
+}`, { relativePath: 'app/actions/cart.ts' })
+    const findings = serverActionAuthRule.check(file, project)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('still counts session lookups and session guards', () => {
+    const checks = [
+      'const session = await verifySession()',
+      'const session = await getIronSession(await cookies(), sessionOptions)',
+      'const { user } = await lucia.validateSession(id)',
+      "const token = (await cookies()).get('session')?.value",
+      'if (!session?.userId) redirect("/login")',
+      'const userId = session.user.id',
+    ]
+    for (const check of checks) {
+      const file = makeFile(`'use server'
+export async function deleteItem(id) {
+  ${check}
+  await db.delete(items).where({ id })
+}`)
+      expect(serverActionAuthRule.check(file, project), check).toHaveLength(0)
+    }
+  })
+
   it('skips public action patterns', () => {
     const file = makeFile(`'use server'
 export async function submitFeedback(data) {

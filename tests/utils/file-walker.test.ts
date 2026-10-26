@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildProjectContext } from '../../src/utils/file-walker.js'
+import { buildProjectContext, readFileContext } from '../../src/utils/file-walker.js'
 
 let dir: string
 
@@ -74,5 +74,21 @@ describe('buildProjectContext — dependency discovery', () => {
     const project = await buildProjectContext(dir, [])
 
     expect(project.declaredDependencies.has('zod')).toBe(true)
+  })
+})
+
+describe('readFileContext — extensions', () => {
+  // extname() sees no extension in `.env` and `local` in `.env.local`, which no rule listed
+  it("gives every dotenv file the ext 'env'", async () => {
+    for (const name of ['.env', '.env.local', '.env.production', 'apps/web/.env.example']) {
+      mkdirSync(join(dir, name, '..'), { recursive: true })
+      writeFileSync(join(dir, name), 'NEXT_PUBLIC_API_URL=/api\n')
+      expect((await readFileContext(dir, name))?.ext, name).toBe('env')
+    }
+  })
+
+  it('keeps the real extension of code files whose names start with .env', async () => {
+    writeFileSync(join(dir, '.env.example.ts'), 'export {}\n')
+    expect((await readFileContext(dir, '.env.example.ts'))?.ext).toBe('ts')
   })
 })

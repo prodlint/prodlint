@@ -7,9 +7,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Changed
+- **Behavior change: the GitHub Action now fails when the scan finds critical issues.**
+  It ignored prodlint's exit code, and `threshold` defaults to `0`, so with default inputs
+  it never failed, even on criticals. The new `fail-on-critical` input defaults to `true`;
+  set it to `false` to post results without failing. The Action also fails when prodlint
+  doesn't produce a result, which it used to read as a score of 0 and pass. Workflows on
+  `prodlint/prodlint@v1` get this when the next release moves `v1`.
 - The README and AGENTS.md set up the MCP server with `npx -y prodlint-mcp`, the same
   command prodlint.com and the MCP registry entry use. It runs the same server as the old
   `npx -y -p prodlint prodlint-mcp`; the launcher ships with every release.
+
+### Fixed
+- **`hallucinated-api` told agents to replace DOM `.contains()` with `.includes()`.**
+  `classList.contains('open')` and `ref.current.contains(event.target)` are real DOM calls,
+  and `DOMTokenList` and `Node` have no `.includes()`, so the hint broke working code.
+  Token lists, React refs, the document and node arguments like event targets are now
+  recognized, and the hint for the rest says `.includes()` is for arrays and strings.
+- **`unsafe-html` flagged HTML sanitized with `DOMPurify.sanitize()`, its own fix.** An
+  `__html` value or `innerHTML` assignment that is a sanitizer call (`DOMPurify.sanitize`,
+  `sanitizeHtml`, `xss`), or a variable set from one, is no longer reported. HTML that is
+  only partly sanitized still is.
+- **`secrets` reported Supabase anon keys as service role keys (critical).** It now reads
+  the JWT's `role` claim. The anon key is public by design, so it isn't reported; a
+  `service_role` key still is, and any other HS256 JWT is reported as a hardcoded JWT.
+- **`redirect-in-try-catch` flagged Express `res.redirect()`, and redirects in catch
+  blocks.** Only a bare `redirect()` in a try block whose catch swallows it is reported now.
+  `res.redirect()` and `NextResponse.redirect()` return rather than throw; a redirect in a
+  catch block or a try/finally propagates; and a catch that re-throws redirect errors
+  (`unstable_rethrow(e)`, a `NEXT_REDIRECT` check, `throw e`) lets it through. The rule now
+  reads try/catch blocks from the AST, so a one-line catch no longer leaves the rest of
+  the file "inside" the try.
+- **`phantom-dependency` flagged real packages.** Every name on its hallucinated-package
+  list was checked against the npm registry, and `gpt-tokenizer`, a maintained package,
+  is gone. `crypto-js`, `fast-glob` and other established packages no longer trip the
+  `-js` and vanity-prefix name checks. A listed package now gets the package usually meant
+  ("did you mean `@supabase/supabase-js`?"), not a hint to add a package already declared.
+- **`dead-exports` reported exports that are imported.** Imports were read line by line, so
+  a multi-line `import { … } from` didn't count, and neither did `import D, { a } from` or
+  `import * as ns from`.
+- **`next-public-sensitive` never checked `.env` files.** The scanner gave `.env` no
+  extension and `.env.local` the extension `local`, neither of which the rule listed.
+  Dotenv files now get the extension `env`, and `#` comments in them are skipped. **Scan
+  results may change**: `NEXT_PUBLIC_*SECRET*`-style names in env files are now critical.
+- **`supabase-missing-rls` ignored RLS enabled in another migration.** Its cross-file
+  check was a no-op, so a table created in one migration and protected in a later one got
+  a critical. RLS statements are now collected from every SQL file, including the quoted
+  (`"public"."profiles"`), `IF EXISTS` and `ONLY` forms. Project-level findings in a
+  scanned file now honor its `prodlint-disable` comments, so these can still be suppressed.
+- **Unrelated text satisfied `input-validation`, `next-server-action-validation`,
+  `auth-checks` and `server-action-auth`.** `JSON.parse()` (or `Date.parse()`,
+  `URL.parse()`) no longer counts as validation. An outgoing `Authorization` header, such
+  as one sent to OpenAI, no longer counts as an auth check; reading the request's own
+  header still does. "session" anywhere in a server action, such as a `sessionId` form
+  field, no longer counts as auth; a session lookup (`verifySession()`,
+  `getIronSession()`), a session cookie read or a session guard does. **Scan results may
+  change** for routes and actions that only passed this way.
+- **SARIF output didn't validate against the 2.1.0 schema.** Each result's `fixes` lacked
+  the required `artifactChanges`. prodlint's fix hints are prose, not edits, so they now go
+  in the result's `properties.fix`.
 
 ## [0.10.3] - 2026-10-26
 

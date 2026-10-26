@@ -162,4 +162,49 @@ describe('dead-exports rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].message).toContain('exported symbols never imported')
   })
+
+  const sixExports = makeFile([
+    'export const alpha = 1',
+    'export const beta = 2',
+    'export const gamma = 3',
+    'export const delta = 4',
+    'export function epsilon() {}',
+    'export function zeta() {}',
+  ].join('\n'), { relativePath: 'lib/utils.ts' })
+
+  it('reads imports that span several lines', () => {
+    const consumer = makeFile([
+      'import {',
+      '  alpha,',
+      '  beta, // the second one',
+      '  gamma,',
+      '  delta as d,',
+      '  epsilon,',
+      '  zeta,',
+      "} from '@/lib/utils'",
+    ].join('\n'), { relativePath: 'app/dashboard/page.tsx', ext: 'tsx' })
+
+    const findings = deadExportsRule.checkProject!([sixExports, consumer], project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('reads named imports that follow a default import', () => {
+    const consumer = makeFile(
+      `import utils, { alpha, beta, gamma, delta, epsilon, zeta } from '../lib/utils'`,
+      { relativePath: 'src/app.ts' },
+    )
+
+    const findings = deadExportsRule.checkProject!([sixExports, consumer], project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('counts a namespace import as using every export of that module', () => {
+    const consumer = makeFile(
+      `import * as utils from '@/lib/utils'\nutils.alpha()`,
+      { relativePath: 'src/app.ts' },
+    )
+
+    const findings = deadExportsRule.checkProject!([sixExports, consumer], project)
+    expect(findings).toHaveLength(0)
+  })
 })

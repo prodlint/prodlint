@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isTestFile, isScriptFile } from '../utils/patterns.js'
+import { isTestFile, isScriptFile, blankOut, closingBrace } from '../utils/patterns.js'
 import { walkAST } from '../utils/ast.js'
 import type { Node } from '@babel/types'
 
@@ -92,28 +92,6 @@ function catchFinding(file: FileContext, catchLine: number, body: CatchBody): Fi
     category: 'reliability',
     fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
   }
-}
-
-// What the regex fallback blanks out: comments, and string and template literals.
-// One alternation, so whichever starts first wins (`'https://...'` stays a string).
-// Template `${}` nesting and regex literals aren't understood.
-const NON_CODE = /\/\/.*|\/\*[\s\S]*?\*\/|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|`(?:[^`\\]|\\[\s\S])*`/g
-
-/** `source` with comments, and string contents too if `strings`, turned to spaces; offsets and line breaks are kept */
-function blankOut(source: string, strings: boolean): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
-  return source.replace(NON_CODE, m =>
-    m[0] === '/' ? blank(m) : strings ? m[0] + blank(m.slice(1, -1)) + m[0] : m)
-}
-
-/** Index of the `}` that closes the `{` at `open` in blanked-out `code`, or -1 */
-function closingBrace(code: string, open: number): number {
-  let depth = 0
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === '{') depth++
-    else if (code[i] === '}' && --depth === 0) return i
-  }
-  return -1
 }
 
 /**

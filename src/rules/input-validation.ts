@@ -2,7 +2,8 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isApiRoute } from '../utils/patterns.js'
 
 const VALIDATION_PATTERNS = [
-  /\.parse\s*\(/,
+  // A schema's .parse(), but not parsers that validate nothing: JSON.parse(), Date.parse()...
+  /(?<!\b(?:JSON|Date|URL|path|qs|querystring))\.parse\s*\(/,
   /\.safeParse\s*\(/,
   /\.validate\s*\(/,
   /\.validateSync\s*\(/,
