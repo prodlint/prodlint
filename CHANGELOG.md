@@ -7,10 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Changed
-- Lockfile refreshed to clear 10 of 13 `npm audit` findings: `@modelcontextprotocol/sdk`
-  1.32.2, `zod` 4.6.7, and transitive dependencies of the SDK and the build tools. The
-  other three are dev-only, in vitest 3, and every fix needs a vitest major that drops
-  Node 18.
+- Dependencies refreshed to clear all 13 `npm audit` findings (`npm audit`: 0
+  vulnerabilities): `@modelcontextprotocol/sdk` 1.32.2, `zod` 4.6.7, transitive
+  dependencies of the SDK and the build tools, and vitest 3 → 5 (dev-only).
+- CI runs the test suite on Node 22 and 24, since vitest 5 needs Node 22.12 or later.
+  Node 18 and 20, which prodlint still supports at runtime, build and self-scan.
 
 ## [0.10.1] - 2026-10-25
 

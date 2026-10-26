@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (675 tests)
+npm run test         # vitest run (675 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -186,10 +186,14 @@ Tip: sweep the website repo with `grep -rn "<old-version>"` (excluding
 node_modules/dist/package-lock/CHANGELOG). `npm run verify:release` checks this repo's
 set at any time; CI runs it on every PR.
 
-**`master` branch protection requires a check named exactly `build`.** The CI matrix
-emits `build-and-test (18|20|22)`, so `ci.yml` carries a dependent aggregator job named
-`build` purely to satisfy it. Removing that job silently makes every PR unmergeable
-without an admin override.
+**`master` branch protection requires a check named exactly `build`.** The CI matrices
+emit `build-and-test (22|24)` and `build-and-scan (18|20)`, so `ci.yml` carries a
+dependent aggregator job named `build` purely to satisfy it. Removing that job silently
+makes every PR unmergeable without an admin override.
+
+**CI runs the test suite on Node 22 and 24 only; 18 and 20 build and self-scan.** vitest 5
+needs Node >= 22.12, but `package.json` `engines` still promises Node >= 18 at runtime, and
+the `build-and-scan` legs keep that promise exercised. Keep them while `engines` says `>=18`.
 
 **Do not re-add `@rollup/rollup-win32-x64-msvc` as an explicit dependency.** It was a
 workaround for an `os=linux` line in the machine's global `~/.npmrc`, which made npm skip
