@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-26
+
 ### Added
 - The MCP `scan` tool takes `minSeverity`, `categories` and `maxFindings` (default 30), so
   an agent can ask for just the criticals, one category, or a longer list.
