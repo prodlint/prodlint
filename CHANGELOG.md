@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **0.10.2's first release run didn't reach the MCP registry.** It registered the server
+  seconds after `npm publish`, while npm was still processing the new version. The
+  release workflow now waits until npm serves the version and retries the registry, and
+  a run that failed after npm can be resumed for its tag.
+
 ## [0.10.2] - 2026-10-26
 
 ### Fixed

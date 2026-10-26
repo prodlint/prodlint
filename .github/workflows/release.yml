@@ -2,10 +2,25 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # Release tags only. The rolling v1 tag also matches v*, and pushing it by hand
+    # used to start a release run that could only fail.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  # Resumes a release that failed after npm (MCP registry, v1 tag): run it from master
+  # with the release tag. Versions already on npm are skipped, so nothing publishes twice.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to resume, e.g. v0.10.2 (v1 moves to it)
+        required: true
+        type: string
 
 # Least privilege by default; each job widens only what it needs.
 permissions: {}
+
+# The tag being released, under either trigger. Steps read it from the environment
+# rather than interpolating it into scripts, since a dispatch input is free text.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # Everything that runs third-party code (npm ci's install scripts, the build, the test
@@ -17,8 +32,17 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Before any checkout: a dispatch input could name a branch or someone's PR ref.
+      - name: Check the release tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The tag must look like vX.Y.Z." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -31,7 +55,7 @@ jobs:
       # MCP registry rejects with a 400 only *after* npm has already been published
       # (and npm versions are immutable, so that costs a version bump to undo).
       - name: Verify version + MCP name consistency
-        run: node scripts/verify-release.cjs "${GITHUB_REF_NAME}"
+        run: node scripts/verify-release.cjs "$RELEASE_TAG"
 
       - run: npm ci
       - run: npm run build
@@ -61,6 +85,7 @@ jobs:
       # Only for server.json, which mcp-publisher reads. No code from the repo runs here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -87,13 +112,27 @@ jobs:
       # Publishing a tarball runs none of the package's lifecycle scripts.
       # Keep the leading ./ on the tarball paths: npm reads a bare "release/x.tgz" as
       # the GitHub repo release/x.tgz, which is why 0.10.1 never reached npm.
+      # A version that's already on npm is skipped, so a resumed release gets past these
+      # steps instead of failing on npm's refusal to republish it.
       - name: Publish prodlint to npm
-        run: npm publish "./release/prodlint-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if [ "$(npm view "prodlint@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]; then
+            echo "prodlint@${VERSION} is already on npm; skipping."
+          else
+            npm publish "./release/prodlint-${VERSION}.tgz" --provenance --access public
+          fi
 
       # Published second so its `prodlint` dependency already exists on the registry.
       # Keeping it in this workflow is what stops it drifting from the scanner again.
       - name: Publish prodlint-mcp launcher to npm
-        run: npm publish "./release/prodlint-mcp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if [ "$(npm view "prodlint-mcp@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]; then
+            echo "prodlint-mcp@${VERSION} is already on npm; skipping."
+          else
+            npm publish "./release/prodlint-mcp-${VERSION}.tgz" --provenance --access public
+          fi
 
       # Registry auth is OIDC too, so this needs no stored credential. Previously this
       # step was manual and awkward: mcp-publisher's registry JWT expires within
@@ -108,10 +147,30 @@ jobs:
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
 
+      # npm keeps processing a new version for a few minutes after `npm publish`
+      # returns, and the registry rejects the publish until it can fetch
+      # prodlint-mcp@VERSION from npm; that's what failed 0.10.2's first run. Wait for
+      # npm to serve it, then retry a few times for CDN lag.
       - name: Publish to MCP Registry
         run: |
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          VERSION="${RELEASE_TAG#v}"
+          for i in $(seq 1 30); do
+            if [ "$(npm view "prodlint-mcp@${VERSION}" version 2>/dev/null)" = "${VERSION}" ]; then
+              break
+            fi
+            echo "prodlint-mcp@${VERSION} isn't served by npm yet ($i/30); waiting 10s."
+            sleep 10
+          done
+          for attempt in 1 2 3 4 5; do
+            if ./mcp-publisher login github-oidc && ./mcp-publisher publish; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "MCP registry publish failed ($attempt/5); retrying in 30s."
+              sleep 30
+            fi
+          done
+          exit 1
 
   # The only job that can write to the repo, and it runs nothing but git.
   update-v1-tag:
@@ -122,6 +181,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Update rolling v1 tag
