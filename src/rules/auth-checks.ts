@@ -55,6 +55,19 @@ const HANDLER_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'
 // A tRPC route passes every request to the router, which checks auth per procedure
 const TRPC_ROUTE = /['"]@trpc\/server\/adapters\//
 
+// Whether a route file is served under /api/: pages/api/**, or app/api/** once route groups
+// like (admin) are dropped. app/[locale]/api/** is served at /en/api/**, and app/api/route.ts
+// at /api itself, which dub's /((?!api/|_next/).*) still matches.
+function servedUnderApi(relativePath: string): boolean {
+  const pages = /(?:^|\/)pages\/api\/(.+)$/.exec(relativePath)
+  if (pages) return !/^index\.\w+$/.test(pages[1])
+  const segments = relativePath.split('/')
+  const app = segments.indexOf('app')
+  if (app === -1) return false
+  const url = segments.slice(app + 1, -1).filter(s => !/^\(.*\)$/.test(s) && !s.startsWith('@'))
+  return url[0] === 'api' && url.length > 1
+}
+
 // A handler wrapped in an auth helper counts as checked. A helper is an auth helper when
 // its name has an auth or session word (auth(handler), withApiAuthRequired,
 // withIronSessionApiRoute), or when it's a with* helper imported from a module whose path
@@ -313,9 +326,13 @@ export const authChecksRule: Rule = {
     const exposed = handlers.filter(h => !h.authed)
     if (handlers.length > 0 && exposed.length === 0) return []
 
+    // Middleware auth covers the route, unless its matcher keeps it off /api
+    const middlewareSkipsRoute = project.hasAuthMiddleware && project.authMiddlewareExcludesApi === true && servedUnderApi(file.relativePath)
+    const middlewareAuth = project.hasAuthMiddleware && !middlewareSkipsRoute
+
     // Determine severity based on context
     let severity: 'critical' | 'warning' | 'info'
-    if (project.hasAuthMiddleware) {
+    if (middlewareAuth) {
       // Middleware handles auth — just an informational note
       severity = 'info'
     } else if (exposed.some(h => h.local && MUTATION_METHODS.has(h.method)) && !TRPC_ROUTE.test(file.content)) {
@@ -330,9 +347,11 @@ export const authChecksRule: Rule = {
     // Report at the first exposed handler
     const handlerLine = exposed[0]?.line ?? 1
 
-    const message = project.hasAuthMiddleware
+    const message = middlewareAuth
       ? 'API route has no inline auth check (middleware auth detected — verify coverage)'
-      : 'API route has no authentication check'
+      : middlewareSkipsRoute
+        ? 'API route has no authentication check (middleware auth detected, but its matcher excludes /api)'
+        : 'API route has no authentication check'
 
     return [{
       ruleId: 'auth-checks',

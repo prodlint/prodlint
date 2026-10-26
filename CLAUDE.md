@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (787 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (795 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -89,6 +89,9 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `FRAMEWORK_SAFE_METHODS` — methods safe per framework (e.g., Prisma `.contains()`)
 - `isFrameworkSafeMethod(method, frameworks)` — whitelist check
 - `SQL_SAFE_ORMS`, `RATE_LIMIT_FRAMEWORKS` — categorized framework sets
+
+**`src/utils/middleware-matcher.ts`** — Next.js middleware `config.matcher`:
+- `matcherExcludesApi(content, fileName)` — reads a literal `export const config = { matcher }` and compiles each source as Next.js does (a port of path-to-regexp 6.3.0). True only when no source can reach a path under /api; no matcher or an unreadable one is false. Sets `ProjectContext.authMiddlewareExcludesApi`, which auth-checks uses to stop downgrading `app/api/**` and `pages/api/**`
 
 ### Key Patterns
 

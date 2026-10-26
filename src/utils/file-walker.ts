@@ -4,6 +4,7 @@ import { resolve, extname, basename, sep } from 'node:path'
 import { buildCommentMap } from './patterns.js'
 import { parseFile } from './ast.js'
 import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
+import { matcherExcludesApi } from './middleware-matcher.js'
 import type { FileContext, ProjectContext } from '../types.js'
 
 const DEFAULT_IGNORES = [
@@ -226,6 +227,7 @@ export async function buildProjectContext(
   let declaredDependencies = new Set<string>()
   let tsconfigPaths = new Set<string>()
   let hasAuthMiddleware = false
+  let authMiddlewareExcludesApi = false
   let hasRateLimiting = false
   const detectedFrameworks = new Set<string>()
   let gitignoreContent: string | null = null
@@ -308,6 +310,7 @@ export async function buildProjectContext(
         ]
         if (authPatterns.some(p => p.test(content))) {
           hasAuthMiddleware = true
+          authMiddlewareExcludesApi = matcherExcludesApi(content, name)
           break
         }
       } catch {
@@ -350,6 +353,7 @@ export async function buildProjectContext(
     declaredDependencies,
     tsconfigPaths,
     hasAuthMiddleware,
+    authMiddlewareExcludesApi,
     hasRateLimiting,
     detectedFrameworks,
     gitignoreContent,

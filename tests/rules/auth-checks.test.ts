@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { authChecksRule } from '../../src/rules/auth-checks.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 describe('auth-checks rule', () => {
   it('flags POST API route without auth as critical (mutation)', () => {
@@ -420,5 +420,52 @@ describe.each([
     expect(findings).toHaveLength(1)
     expect(findings[0].severity).toBe('info')
     expect(findings[0].line).toBe(3)
+  })
+})
+
+// Middleware whose config.matcher leaves out /api doesn't run on API routes, so it can't
+// vouch for them
+describe('auth-checks when the auth middleware matcher excludes /api', () => {
+  const project = makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesApi: true })
+  const POST = 'export async function POST() {\n  return Response.json({ ok: true })\n}'
+  const check = (relativePath: string, code = POST) => authChecksRule.check(makeFile(code, { relativePath }), project)
+
+  it('rates API routes as it would with no middleware', () => {
+    for (const path of ['app/api/items/route.ts', 'src/app/api/items/route.ts', 'app/(admin)/api/items/route.ts', 'app/api/(v1)/items/route.ts']) {
+      const findings = check(path)
+      expect(findings, path).toHaveLength(1)
+      expect(findings[0].severity, path).toBe('critical')
+      expect(findings[0].message, path).toBe('API route has no authentication check (middleware auth detected, but its matcher excludes /api)')
+    }
+    const get = check('app/api/items/route.ts', 'export async function GET() {\n  return Response.json([])\n}')
+    expect(get).toHaveLength(1)
+    expect(get[0].severity).toBe('info')
+    const pages = check('pages/api/items.ts', 'export default function handler(req, res) {\n  res.json({ ok: true })\n}')
+    expect(pages).toHaveLength(1)
+    expect(pages[0].message).toContain('its matcher excludes /api')
+  })
+
+  it('still downgrades route handlers the middleware may run on', () => {
+    // served at /dashboard/export and /en/api/items, which a matcher excluding /api reaches,
+    // and at /api itself, which dub's /((?!api/|_next/).*) still matches
+    for (const path of ['app/dashboard/export/route.ts', 'app/[locale]/api/items/route.ts', 'app/api/route.ts', 'pages/api/index.ts']) {
+      const findings = check(path)
+      expect(findings, path).toHaveLength(1)
+      expect(findings[0].severity, path).toBe('info')
+      expect(findings[0].message, path).toContain('middleware auth detected — verify coverage')
+    }
+  })
+
+  // Through the scanner: Auth.js's docs leave /api out of the middleware with this matcher
+  it("reads the matcher from the project's middleware", async () => {
+    const route = { 'app/api/items/route.ts': `${POST}\n` }
+    const middleware = "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n"
+    const config = "\nexport const config = {\n  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],\n}\n"
+    const severities = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'auth-checks').map(f => f.severity)
+
+    expect(await severities(route)).toEqual(['critical'])
+    expect(await severities({ ...route, 'middleware.ts': middleware })).toEqual(['info'])
+    expect(await severities({ ...route, 'middleware.ts': middleware + config })).toEqual(['critical'])
   })
 })
