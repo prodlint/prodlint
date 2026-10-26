@@ -2,12 +2,33 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile, isScriptFile } from '../utils/patterns.js'
 
 // Files that are entry points — their exports are consumed externally
-function isEntryPoint(relativePath: string): boolean {
+function isEntryPoint(relativePath: string, appRoots: Set<string>): boolean {
   const name = relativePath.split('/').pop() ?? ''
   return /^(page|layout|loading|error|not-found|route|middleware|instrumentation|opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\.(tsx?|jsx?)$/.test(name) ||
     /^index\.(tsx?|jsx?)$/.test(name) ||
     name === 'global-error.tsx' ||
-    name === 'global-error.jsx'
+    name === 'global-error.jsx' ||
+    isNextProxy(relativePath, appRoots)
+}
+
+// Next.js 16's middleware. Next.js runs it only from an app root or the root's src/, so the
+// name is exempt only there. Elsewhere `proxy` is an ordinary module whose exports count,
+// like the session helper in Supabase's lib/supabase/proxy.ts.
+function isNextProxy(relativePath: string, appRoots: Set<string>): boolean {
+  const match = /^(?:(.*)\/)?proxy\.(tsx?|jsx?)$/.exec(relativePath)
+  if (!match) return false
+  const dir = match[1] ?? ''
+  return appRoots.has(dir) || appRoots.has(dir.replace(/(?:^|\/)src$/, ''))
+}
+
+/** The scanned root (`''`) and every folder with a package.json: where an app can live */
+function findAppRoots(paths: string[]): Set<string> {
+  const roots = new Set([''])
+  for (const path of paths) {
+    const match = /^(?:(.*)\/)?package\.json$/.exec(path)
+    if (match) roots.add(match[1] ?? '')
+  }
+  return roots
 }
 
 const EXPORT_NAMED = /export\s+(?:async\s+)?(?:function|const|let|class|enum)\s+(\w+)/g
@@ -43,12 +64,13 @@ export const deadExportsRule: Rule = {
     return []
   },
 
-  checkProject(files: FileContext[], _project: ProjectContext): Finding[] {
+  checkProject(files: FileContext[], project: ProjectContext): Finding[] {
     const sourceFiles = files.filter(f =>
       ['ts', 'tsx', 'js', 'jsx'].includes(f.ext) &&
       !isTestFile(f.relativePath) &&
       !isScriptFile(f.relativePath),
     )
+    const appRoots = findAppRoots(project.allFiles)
 
     // Collect all exported symbols with their locations
     const exports = new Map<string, { file: string; line: number }>()
@@ -62,7 +84,7 @@ export const deadExportsRule: Rule = {
     const namespaceImported = new Set<string>()
 
     for (const file of sourceFiles) {
-      if (isEntryPoint(file.relativePath)) continue
+      if (isEntryPoint(file.relativePath, appRoots)) continue
 
       // Collect named exports
       let inTemplateLiteral = false
