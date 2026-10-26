@@ -170,6 +170,16 @@ It is three jobs, split by privilege — keep it that way:
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
 
+**If a release run fails after npm** (MCP registry, `v1`), don't re-run it: a re-run
+reuses the tagged commit's workflow file and retries the npm publishes, which npm refuses.
+Resume it from master instead — the npm steps skip versions that are already published:
+
+```bash
+gh workflow run release.yml --ref master -f tag=vX.Y.Z
+```
+
+Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
+
 Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 - **npm**: trusted publishing. Both `prodlint` and `prodlint-mcp` have
   `prodlint/prodlint` + `release.yml` registered as a trusted publisher on npmjs.com.
