@@ -148,7 +148,7 @@ prodlint avoids common false positives:
 - **AST parsing** — Babel-based analysis for 13 rules (imports, catch blocks, redirects, redirects in try/catch, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL) with regex fallback
 - **Monorepo support** — npm/yarn/pnpm workspace dependencies resolved automatically
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
-- **Middleware detection** — Clerk, NextAuth, Supabase middleware detected — auth findings downgraded
+- **Middleware detection** — Clerk, NextAuth, Supabase middleware (`middleware.ts`, or `proxy.ts` on Next.js 16) detected — auth findings downgraded
 - **Block comment awareness** — patterns inside `/* */` are ignored
 - **Path alias support** — `@/`, `~/`, and tsconfig paths aren't flagged as hallucinated imports
 - **Route exemptions** — auth, webhook, health, and cron routes are exempt from auth/rate-limit checks
