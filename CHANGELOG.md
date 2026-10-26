@@ -26,6 +26,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `npx -y -p prodlint prodlint-mcp`; the launcher ships with every release.
 
 ### Fixed
+- **`auth-checks` didn't recognize auth wrappers, and rated `export const POST =` handlers
+  as read-only.** A handler exported as a call to an auth helper now counts as checked: a
+  helper whose name has an auth or session word (`auth(handler)`, `withApiAuthRequired`),
+  or a `with*` helper imported from a module whose path has one (dub's `withWorkspace`
+  from `@/lib/auth`). Other wrappers, like `withAxiom` or a generic `withMiddleware`, still
+  don't. Each exported handler is checked on its own, and `OPTIONS` (CORS preflight) needs
+  no check. `export const POST = async (req) => …`, bare or in a non-auth wrapper, is now a
+  mutation like `export async function POST`, so with no auth and no middleware it's
+  critical, not info. A handler imported from another file stays info, and so does a tRPC
+  route, whose router checks auth per procedure (one written as `export async function
+  POST` was critical before). Findings point at the first unchecked handler, not line 1.
+  **Scan results may change**: wrapped routes are no longer reported, some info findings
+  become critical, and line numbers move, so findings saved in a `--baseline` show up again.
 - **The MCP `scan` tool could leave out every critical finding.** It listed the first 30
   findings in file order, so a folder of info findings that sorted first (say, `aaa/`
   full of placeholder text) pushed the criticals out of the response; the summary
