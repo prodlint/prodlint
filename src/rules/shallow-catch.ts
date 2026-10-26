@@ -1,21 +1,39 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import { isCommentLine, isTestFile, isScriptFile } from '../utils/patterns.js'
+import { isTestFile, isScriptFile } from '../utils/patterns.js'
 import { walkAST } from '../utils/ast.js'
 import type { Node } from '@babel/types'
 
+interface CatchBody {
+  /** Source between the braces */
+  text: string
+  /** No statements, only whitespace or comments */
+  empty: boolean
+  /** Source of each value the block returns, whole even when it spans lines */
+  returned: string[]
+  /** The caught error's name: `e` in `catch (e)` */
+  param?: string
+}
+
 /**
- * Score a catch block body on error handling depth:
- * 0 = empty catch
+ * Does a returned value report the error? `error` in any case (`isError: true`,
+ * `'Error: ...'`), `err` starting a word (`errMsg`, `isErr`, but not `dateOverrides`),
+ * `status`, a `Response`/`NextResponse`, `.json(...)`, or the caught error itself (`e.message`).
+ */
+function reportsError(value: string, param: string | undefined): boolean {
+  if (/error/i.test(value) || /\berr|Err|status|Response|json/.test(value)) return true
+  return param !== undefined && new RegExp(`(?<![\\w$])${param.replace(/\$/g, '\\$')}(?![\\w$])`).test(value)
+}
+
+/**
+ * Score a catch block on error handling depth:
+ * 0 = no handling: empty, or swallows the error (e.g. `return null`)
  * 1 = console.log only (decorative)
  * 2 = console.error or logs the error object
  * 3 = re-throws or returns error response
  */
-function scoreCatchBody(bodyLines: string[]): { score: number; label: string } {
-  if (bodyLines.length === 0 || bodyLines.every(l => l.trim() === '')) {
-    return { score: 0, label: 'empty catch' }
-  }
+function scoreCatchBody({ text: body, empty, returned, param }: CatchBody): { score: number; label: string } {
+  if (empty) return { score: 0, label: 'empty catch' }
 
-  const body = bodyLines.join('\n')
   let score = 0
 
   // Logs at all?
@@ -25,7 +43,7 @@ function scoreCatchBody(bodyLines: string[]): { score: number; label: string } {
        /\b(logger|log)\.(error|warn)\s*\(/.test(body)) && /\b(err|error|e)\b/.test(body)) score = 2
   // Re-throws, returns error response, sets error state, or uses proper error handling?
   if (/\bthrow\b/.test(body) ||
-      /\breturn\b.*(?:error|err|status|Response|NextResponse|json)/.test(body) ||
+      returned.some(value => reportsError(value, param)) ||
       /\bset\w*Error\s*\(/.test(body) ||
       /\bres\.\w+\s*\(/.test(body) ||
       // Toast notifications (react-toastify, sonner, shadcn)
@@ -46,13 +64,77 @@ function scoreCatchBody(bodyLines: string[]): { score: number; label: string } {
   }
 
   const labels: Record<number, string> = {
-    0: 'empty catch',
+    0: 'catch swallows the error',
     1: 'catch only logs (no recovery or propagation)',
     2: 'catch logs error but does not propagate or recover',
     3: 'catch handles error properly',
   }
 
   return { score, label: labels[score] }
+}
+
+/** The finding for a catch block that handles its error shallowly, or null */
+function catchFinding(file: FileContext, catchLine: number, body: CatchBody): Finding | null {
+  const { score, label } = scoreCatchBody(body)
+  if (score > 1) return null
+
+  return {
+    ruleId: 'shallow-catch',
+    file: file.relativePath,
+    line: catchLine + 1,
+    column: file.lines[catchLine].indexOf('catch') + 1,
+    message: body.empty
+      ? 'Empty catch block — errors are silently swallowed'
+      : score === 0
+        ? "Catch block swallows the error — it isn't logged, rethrown or returned"
+        : `Decorative error handler: ${label}`,
+    severity: score === 0 ? 'warning' : 'info',
+    category: 'reliability',
+    fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
+  }
+}
+
+// What the regex fallback blanks out: comments, and string and template literals.
+// One alternation, so whichever starts first wins (`'https://...'` stays a string).
+// Template `${}` nesting and regex literals aren't understood.
+const NON_CODE = /\/\/.*|\/\*[\s\S]*?\*\/|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|`(?:[^`\\]|\\[\s\S])*`/g
+
+/** `source` with comments, and string contents too if `strings`, turned to spaces; offsets and line breaks are kept */
+function blankOut(source: string, strings: boolean): string {
+  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
+  return source.replace(NON_CODE, m =>
+    m[0] === '/' ? blank(m) : strings ? m[0] + blank(m.slice(1, -1)) + m[0] : m)
+}
+
+/** Index of the `}` that closes the `{` at `open` in blanked-out `code`, or -1 */
+function closingBrace(code: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++
+    else if (code[i] === '}' && --depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * The regex fallback's stand-in for ReturnStatement arguments: what follows each
+ * `return` up to the end of its statement — a `;` or line break outside brackets,
+ * or the bracket that closes the enclosing block. `code` is `text` blanked out.
+ */
+function returnedValues(code: string, text: string): string[] {
+  const values: string[] = []
+  for (const m of code.matchAll(/(?<![\w$.])return\b/g)) {
+    const start = m.index + 'return'.length
+    let end = start
+    for (let depth = 0; end < code.length; end++) {
+      const ch = code[end]
+      if (ch === '(' || ch === '[' || ch === '{') depth++
+      else if (ch === ')' || ch === ']' || ch === '}') { if (depth-- === 0) break }
+      else if (depth === 0 && (ch === ';' || ch === '\n')) break
+    }
+    values.push(text.slice(start, end))
+  }
+  return values
 }
 
 export const shallowCatchRule: Rule = {
@@ -77,31 +159,24 @@ export const shallowCatchRule: Rule = {
           if (!node.loc) return
 
           const catchLine = node.loc.start.line - 1 // 0-indexed
-          const body = (node as any).body // BlockStatement
-          if (!body || !body.loc) return
+          const body = node.body // BlockStatement
+          if (body?.start == null || body.end == null) return
 
-          const bodyStart = body.loc.start.line - 1
-          const bodyEnd = body.loc.end.line - 1
-          // Single-line catch: { toast.error(...) } — include the whole line
-          const bodyLines = bodyStart === bodyEnd
-            ? [file.lines[bodyStart]]
-            : file.lines.slice(bodyStart + 1, bodyEnd)
-          const { score, label } = scoreCatchBody(bodyLines)
+          // Each returned value whole, so `return {\n  isError: true,\n}` is judged on all its lines
+          const returned: string[] = []
+          walkAST(body, (n: Node) => {
+            if (n.type === 'ReturnStatement' && n.argument?.start != null && n.argument.end != null) {
+              returned.push(file.content.slice(n.argument.start, n.argument.end))
+            }
+          })
 
-          if (score <= 1) {
-            findings.push({
-              ruleId: 'shallow-catch',
-              file: file.relativePath,
-              line: catchLine + 1,
-              column: file.lines[catchLine].indexOf('catch') + 1,
-              message: score === 0
-                ? 'Empty catch block — errors are silently swallowed'
-                : `Decorative error handler: ${label}`,
-              severity: score === 0 ? 'warning' : 'info',
-              category: 'reliability',
-              fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
-            })
-          }
+          const finding = catchFinding(file, catchLine, {
+            text: file.content.slice(body.start + 1, body.end - 1),
+            empty: body.body.length === 0,
+            returned,
+            param: node.param?.type === 'Identifier' ? node.param.name : undefined,
+          })
+          if (finding) findings.push(finding)
         })
         return findings
       } catch {
@@ -109,78 +184,29 @@ export const shallowCatchRule: Rule = {
       }
     }
 
-    // Regex fallback
-    for (let i = 0; i < file.lines.length; i++) {
-      if (isCommentLine(file.lines, i, file.commentMap)) continue
-      const trimmed = file.lines[i].trim()
+    // Regex fallback, on the source with comments and string contents blanked out,
+    // so braces and keywords inside them don't count
+    const source = file.lines.join('\n')
+    const code = blankOut(source, true)
+    const noComments = blankOut(source, false)
+    // `catch {` or `catch (e) {`, but not a promise's `.catch(`
+    const catchRe = /(?<![\w$.])catch\s*(?:\(([^)]*)\)\s*)?\{/g
+    let catchLine = 0 // 0-indexed line of the current match
+    let scanned = 0
+    for (let m = catchRe.exec(code); m; m = catchRe.exec(code)) {
+      for (; scanned < m.index; scanned++) if (code[scanned] === '\n') catchLine++
 
-      // Detect catch block opening
-      if (!/\bcatch\s*\(/.test(trimmed) && !/\bcatch\s*\{/.test(trimmed)) continue
+      const open = m.index + m[0].length - 1
+      const close = closingBrace(code, open)
+      if (close === -1) continue
 
-      // Find the opening brace of the catch body
-      let braceStart = -1
-      for (let j = i; j < Math.min(i + 3, file.lines.length); j++) {
-        if (file.lines[j].includes('{')) {
-          braceStart = j
-          break
-        }
-      }
-      if (braceStart === -1) continue
-
-      // Count braces to find catch body end (string-aware)
-      let depth = 0
-      let bodyEnd = braceStart
-      let inSingle = false
-      let inDouble = false
-      let inTemplate = false
-      for (let j = braceStart; j < file.lines.length; j++) {
-        const line = file.lines[j]
-        const startPos = (j === braceStart) ? line.indexOf('{') : 0
-        for (let k = startPos; k < line.length; k++) {
-          const ch = line[k]
-          const prev = k > 0 ? line[k - 1] : ''
-          const escaped = prev === '\\' && (k < 2 || line[k - 2] !== '\\')
-
-          if (!escaped) {
-            if (ch === "'" && !inDouble && !inTemplate) { inSingle = !inSingle; continue }
-            if (ch === '"' && !inSingle && !inTemplate) { inDouble = !inDouble; continue }
-            if (ch === '`' && !inSingle && !inDouble) { inTemplate = !inTemplate; continue }
-          }
-
-          if (inSingle || inDouble || inTemplate) continue
-
-          if (ch === '{') depth++
-          if (ch === '}') {
-            depth--
-            if (depth === 0) {
-              bodyEnd = j
-              break
-            }
-          }
-        }
-        if (depth === 0) break
-      }
-
-      const bodyLines = file.lines.slice(braceStart + 1, bodyEnd)
-      const { score, label } = scoreCatchBody(bodyLines)
-
-      if (score <= 1) {
-        findings.push({
-          ruleId: 'shallow-catch',
-          file: file.relativePath,
-          line: i + 1,
-          column: file.lines[i].indexOf('catch') + 1,
-          message: score === 0
-            ? 'Empty catch block — errors are silently swallowed'
-            : `Decorative error handler: ${label}`,
-          severity: score === 0 ? 'warning' : 'info',
-          category: 'reliability',
-          fix: 'Log the error with context and either re-throw, return an error response, or recover gracefully',
-        })
-      }
-
-      // Skip past the catch body
-      i = bodyEnd
+      const finding = catchFinding(file, catchLine, {
+        text: source.slice(open + 1, close),
+        empty: code.slice(open + 1, close).trim() === '',
+        returned: returnedValues(code.slice(open + 1, close), noComments.slice(open + 1, close)),
+        param: m[1]?.match(/^\s*([A-Za-z_$][\w$]*)/)?.[1],
+      })
+      if (finding) findings.push(finding)
     }
 
     return findings

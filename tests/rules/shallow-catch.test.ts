@@ -186,3 +186,112 @@ describe('shallow-catch rule', () => {
     expect(findings[0].message).toContain('Empty catch')
   })
 })
+
+// Returns are read whole even when they span lines, on both code paths
+describe.each([
+  { path: 'AST', withAst: true },
+  { path: 'regex fallback', withAst: false },
+])('shallow-catch returns ($path)', ({ withAst }) => {
+  const check = (code: string) => shallowCatchRule.check(makeFile(code, { withAst }), project)
+
+  it('allows a multi-line MCP error result', () => {
+    const findings = check([
+      'try {',
+      '  await stat(path)',
+      '} catch {',
+      '  return {',
+      "    content: [{ type: 'text', text: `Error: ${path} does not exist` }],",
+      '    isError: true,',
+      '  }',
+      '}',
+    ].join('\n'))
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows a multi-line server action error', () => {
+    const findings = check([
+      'try {',
+      '  await db.insert(values)',
+      '} catch (e) {',
+      '  return {',
+      '    success: false,',
+      '    error: e.message,',
+      '  }',
+      '}',
+    ].join('\n'))
+    expect(findings).toHaveLength(0)
+  })
+
+  it('allows a multi-line return that carries the caught error', () => {
+    const findings = check([
+      'try {',
+      '  await save()',
+      '} catch (ex) {',
+      '  return {',
+      '    ok: false,',
+      '    reason: ex.message,',
+      '  }',
+      '}',
+    ].join('\n'))
+    expect(findings).toHaveLength(0)
+  })
+
+  it('flags return null as swallowing the error, not as empty', () => {
+    const findings = check(`try {\n  return JSON.parse(raw)\n} catch {\n  return null\n}`)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('swallows the error')
+    expect(findings[0].message).not.toContain('Empty')
+    expect(findings[0].severity).toBe('warning')
+  })
+
+  it('flags a multi-line return that carries no error', () => {
+    const findings = check([
+      'try {',
+      '  return await load()',
+      '} catch {',
+      '  return {',
+      '    data: null,',
+      '    loading: false,',
+      '  }',
+      '}',
+    ].join('\n'))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('swallows the error')
+  })
+
+  it('does not take words that contain "err" for an error', () => {
+    const findings = check([
+      'try {',
+      '  return await getSchedule()',
+      '} catch {',
+      '  return {',
+      '    dateOverrides: [],',
+      '    preferred: deferred,',
+      '  }',
+      '}',
+    ].join('\n'))
+    expect(findings).toHaveLength(1)
+  })
+
+  it('does not read a trailing comment as part of the return', () => {
+    const findings = check(`try {\n  load()\n} catch {\n  return null // error is logged upstream\n}`)
+    expect(findings).toHaveLength(1)
+  })
+
+  it('flags a genuinely empty catch as empty, comments or not', () => {
+    for (const body of ['', '\n', "\n  // the file may not exist, and that's fine\n"]) {
+      const findings = check(`try {\n  load()\n} catch (e) {${body}}`)
+      expect(findings).toHaveLength(1)
+      expect(findings[0].message).toContain('Empty catch')
+      expect(findings[0].severity).toBe('warning')
+    }
+  })
+
+  it('reads a single-line catch body', () => {
+    expect(check(`try { load() } catch (e) { throw e }`)).toHaveLength(0)
+  })
+
+  it('ignores promise .catch() callbacks', () => {
+    expect(check(`load().catch(() => {})`)).toHaveLength(0)
+  })
+})

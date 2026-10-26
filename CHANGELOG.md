@@ -16,6 +16,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   seconds after `npm publish`, while npm was still processing the new version. The
   release workflow now waits until npm serves the version and retries the registry, and
   a run that failed after npm can be resumed for its tag.
+- **`shallow-catch` flagged catch blocks that return an error over several lines.** It
+  only saw a returned error when `return` and the error were on the same line, so a
+  server action's multi-line `return { success: false, error: e.message }`, or an MCP
+  tool's `{ content, isError: true }` result, was reported as "Empty catch block". The
+  whole returned value is now read, and it counts when it carries an error (`error`,
+  `isError`, `Error: ...`), a `status`, a `Response`, or the caught error itself
+  (`Promise.reject(e)`). `err` has to start a word, so `dateOverrides` doesn't count.
+- **`shallow-catch` said "Empty catch block" about blocks that weren't empty.** A block
+  that swallows its error, like `catch { return null }`, now gets "Catch block swallows
+  the error"; "Empty catch block" is kept for blocks with no statements. Commented-out
+  code no longer counts as handling, so `catch (e) { /* console.error(e) */ }` is
+  reported as empty, and a single-line catch is judged on its own body, not the whole line.
 
 ## [0.10.2] - 2026-10-26
 
