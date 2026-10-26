@@ -6,10 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-26
+
 ### Added
 - An end-to-end test that drives the built MCP server over stdio, the way a client
   does: the handshake, the tool list, a real scan, input validation, and the
-  working-directory and private-host refusals (682 tests total).
+  working-directory and private-host refusals (702 tests total).
+
+### Changed
+- The GitHub Action sets up Node with `actions/setup-node` v7.1.0, still pinned by
+  commit SHA. Also routine updates: `@babel/parser` 7.29.9 and `@types/node` 26.6.5.
 
 ### Fixed
 - **0.10.2's first release run didn't reach the MCP registry.** It registered the server
