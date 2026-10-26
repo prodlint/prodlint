@@ -5,8 +5,8 @@ updates:
     schedule:
       interval: "weekly"
     # Stability policy: handle ALL major upgrades manually via a deliberate full-suite test pass
-    # (e.g. TypeScript 6 breaks tsup's DTS build, vitest 4's rolldown binding fails on Windows,
-    # @babel/* are the runtime AST engine). Dependabot still proposes minor/patch + security bumps.
+    # (e.g. TypeScript 6 breaks tsup's DTS build, vitest majors raise the Node floor of CI's test
+    # legs, @babel/* are the runtime AST engine). Dependabot still proposes minor/patch + security bumps.
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
