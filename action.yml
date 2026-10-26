@@ -13,6 +13,10 @@ inputs:
     description: 'Minimum score to pass (0-100). Fails the check if score is below this.'
     required: false
     default: '0'
+  fail-on-critical:
+    description: 'Fail the check when the scan finds critical issues (true/false)'
+    required: false
+    default: 'true'
   ignore:
     description: 'Glob patterns to ignore (comma-separated)'
     required: false
@@ -58,49 +62,33 @@ runs:
 
         # The exact release this action ships with (scripts/sync-versions.cjs bumps it), so
         # pinning the action — @v1, a version tag or a commit SHA — also pins the scanner.
-        OUTPUT=$(npx -y prodlint@0.10.3 "${CMD_ARGS[@]}" 2>&1) || true
-
-        SCORE=$(echo "$OUTPUT" | node -e "
-          const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-          console.log(Number(d.overallScore) || 0);
-        " 2>/dev/null || echo "0")
-        SCORE=$(echo "$SCORE" | tr -cd '0-9')
-
-        CRITICAL=$(echo "$OUTPUT" | node -e "
-          const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-          console.log(Number(d.summary.critical) || 0);
-        " 2>/dev/null || echo "0")
-        CRITICAL=$(echo "$CRITICAL" | tr -cd '0-9')
-
-        echo "score=${SCORE:-0}" >> "$GITHUB_OUTPUT"
-        echo "critical=${CRITICAL:-0}" >> "$GITHUB_OUTPUT"
-        echo "$OUTPUT" > "$RUNNER_TEMP/prodlint-result.json"
+        # It exits 1 when it finds criticals and 2 when the scan fails; "Check results" decides.
+        EXIT_CODE=0
+        npx -y prodlint@0.10.3 "${CMD_ARGS[@]}" > "$RUNNER_TEMP/prodlint-result.json" || EXIT_CODE=$?
+        echo "exit-code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+        node "$GITHUB_ACTION_PATH/scripts/action-check.cjs" outputs "$RUNNER_TEMP/prodlint-result.json" >> "$GITHUB_OUTPUT"
 
     # Built by a script file rather than inline `node -e`: the comment carries file paths
     # and messages from the scanned repo, and the script's escaping is unit-tested.
     - name: Generate comment body
-      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.scan.outputs.scanned == 'true'
       id: comment
       shell: bash
       run: node "$GITHUB_ACTION_PATH/scripts/action-comment.cjs" "$RUNNER_TEMP/prodlint-result.json" "$RUNNER_TEMP/prodlint-comment.md"
 
     - name: Post PR comment
-      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.scan.outputs.scanned == 'true'
       uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
       with:
         header: prodlint
         path: ${{ runner.temp }}/prodlint-comment.md
 
-    - name: Check threshold
-      if: inputs.threshold != '0'
+    # Fails on critical findings (unless fail-on-critical is false), on a score below
+    # threshold, and when the scan didn't produce a result.
+    - name: Check results
       shell: bash
       env:
-        SCAN_SCORE: ${{ steps.scan.outputs.score }}
+        SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
         INPUT_THRESHOLD: ${{ inputs.threshold }}
-      run: |
-        SCORE="$SCAN_SCORE"
-        THRESHOLD="$INPUT_THRESHOLD"
-        if [ "$SCORE" -lt "$THRESHOLD" ]; then
-          echo "::error::Prodlint score ($SCORE) is below threshold ($THRESHOLD)"
-          exit 1
-        fi
+        INPUT_FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
+      run: node "$GITHUB_ACTION_PATH/scripts/action-check.cjs" check "$RUNNER_TEMP/prodlint-result.json"

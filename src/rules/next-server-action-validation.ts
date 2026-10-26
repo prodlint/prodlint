@@ -1,10 +1,13 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile } from '../utils/patterns.js'
 
-const USE_SERVER = /['"]use server['"]/
+// The directive starts a line (file top or function body); "use server" inside a string,
+// like an error message in React's compiled server bundles, doesn't make a server action
+const USE_SERVER = /^\s*['"]use server['"]/m
 const FORM_DATA_GET = /formData\.get\s*\(/
 const VALIDATION_PATTERNS = [
-  /\.parse\s*\(/,
+  // A schema's .parse(), but not parsers that validate nothing: JSON.parse(), Date.parse()...
+  /(?<!\b(?:JSON|Date|URL|path|qs|querystring))\.parse\s*\(/,
   /\.safeParse\s*\(/,
   /\bvalidate\s*\(/,
   /\.parseAsync\s*\(/,

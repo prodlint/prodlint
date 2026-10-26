@@ -86,4 +86,33 @@ describe('phantom-dependency rule', () => {
     const findings = phantomDependencyRule.checkProject!([], project)
     expect(findings).toHaveLength(0)
   })
+
+  it('does not flag gpt-tokenizer, a real and maintained package', () => {
+    const project = makeProject({
+      packageJson: { dependencies: { 'gpt-tokenizer': '^3.0.0' } },
+    })
+    const findings = phantomDependencyRule.checkProject!([], project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('does not flag well-known packages that match the name heuristics', () => {
+    const project = makeProject({
+      packageJson: {
+        dependencies: { 'crypto-js': '^4.2.0', 'fast-glob': '^3.3.3', 'simple-git': '^3.0.0' },
+      },
+    })
+    const findings = phantomDependencyRule.checkProject!([], project)
+    expect(findings).toHaveLength(0)
+  })
+
+  // The package is already in package.json, so "add the missing package" made no sense
+  it('names the package usually meant instead of asking to add a declared one', () => {
+    const project = makeProject({
+      packageJson: { dependencies: { 'supabase-client': '^1.0.0' } },
+    })
+    const findings = phantomDependencyRule.checkProject!([], project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('"@supabase/supabase-js"')
+    expect(findings[0].fix).not.toMatch(/Add the missing package/)
+  })
 })

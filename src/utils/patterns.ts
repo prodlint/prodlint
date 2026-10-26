@@ -74,6 +74,28 @@ export function isCommentLine(lines: string[], lineIndex: number, commentMap: bo
   return trimmed.startsWith('//')
 }
 
+// What regex fallbacks blank out: comments, and string and template literals.
+// One alternation, so whichever starts first wins (`'https://...'` stays a string).
+// Template `${}` nesting and regex literals aren't understood.
+const NON_CODE = /\/\/.*|\/\*[\s\S]*?\*\/|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|`(?:[^`\\]|\\[\s\S])*`/g
+
+/** `source` with comments, and string contents too if `strings`, turned to spaces; offsets and line breaks are kept */
+export function blankOut(source: string, strings: boolean): string {
+  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
+  return source.replace(NON_CODE, m =>
+    m[0] === '/' ? blank(m) : strings ? m[0] + blank(m.slice(1, -1)) + m[0] : m)
+}
+
+/** Index of the `}` that closes the `{` at `open` in blanked-out `code`, or -1 */
+export function closingBrace(code: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth++
+    else if (code[i] === '}' && --depth === 0) return i
+  }
+  return -1
+}
+
 /**
  * Check if line is suppressed by a prodlint-disable comment
  */

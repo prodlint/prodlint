@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (707 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (757 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -54,14 +54,14 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
-**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 12 (including `sql-injection`, `no-n-plus-one`, `hallucinated-imports`).
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 13 (including `sql-injection`, `no-n-plus-one`, `hallucinated-imports`, and `redirect-in-try-catch`, migrated later).
 
 ### Two-Phase Scanning
 
 - **Phase 1**: Per-file rules — `rule.check(file, project)` called for each file
 - **Phase 2**: Project-level rules — `rule.checkProject(allFiles, project)` called once with all FileContexts
 
-Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency`
+Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency`, `supabase-missing-rls` (RLS is often enabled in a later migration than the `CREATE TABLE`). A phase-2 finding that points into a scanned file honors that file's `prodlint-disable` comments, like phase 1.
 
 ### Shared Utilities
 
@@ -71,6 +71,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isLineSuppressed()` — prodlint-disable support
 - `isTestFile(path)`, `isScriptFile(path)` (matches `scripts/` dir + standalone names like `seed.ts`, `migrate.ts`), `isConfigFile(path)`
 - `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
+- `blankOut(source, strings)` / `closingBrace(code, open)` — regex fallbacks: blank out comments (and string contents) keeping offsets, then match braces (`shallow-catch`, `redirect-in-try-catch`)
 
 **`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+, expanded v0.7.0):
 - `parseFile(content, fileName)` — parses JS/TS/JSX/TSX into Babel AST, returns null on failure
@@ -133,7 +134,9 @@ Overall = **weighted** average: security 40%, reliability 30%, performance 15%, 
 
 ### GitHub Action (`action.yml`)
 
-Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`, parses JSON, posts PR comment via `marocchino/sticky-pull-request-comment`, fails if score < threshold. Both third-party actions are SHA-pinned.
+Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`, parses JSON, posts PR comment via `marocchino/sticky-pull-request-comment`, then fails on critical findings (`fail-on-critical`, default `true`), on a score below `threshold`, or when the scan produced no result. Both third-party actions are SHA-pinned.
+
+- **Pass/fail is decided by `scripts/action-check.cjs`**, which also writes the `score`/`critical` outputs. Tests: `tests/action-check.test.ts`.
 
 - **The scanner version is pinned, never `@latest`.** `sync-versions.cjs` bumps the pin and `verify-release.cjs` fails on drift, so pinning the action (`@v1`, a tag, a SHA) pins the code that runs in users' CI.
 - **The comment is built by `scripts/action-comment.cjs`**, not inline `node -e "..."` — bash's double-quote processing once silently stripped the escaper's backslash. File paths and messages come from the scanned repo: they're flattened to one line and rendered as inline code (no autolinks, @-mentions or HTML there). Tests: `tests/action-comment.test.ts`.

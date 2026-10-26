@@ -15,16 +15,18 @@ export const nextPublicSensitiveRule: Rule = {
   description: 'Detects NEXT_PUBLIC_ prefix on environment variables that should be server-only — exposes secrets to the browser',
   category: 'security',
   severity: 'critical',
-  fileExtensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'env', 'env.local', 'env.production'],
+  // The scanner gives every dotenv file (.env, .env.local, .env.production...) the ext 'env'
+  fileExtensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'env'],
 
   check(file: FileContext, _project: ProjectContext): Finding[] {
     if (isTestFile(file.relativePath)) return []
 
     const findings: Finding[] = []
+    const isEnvFile = file.ext === 'env'
 
     for (let i = 0; i < file.lines.length; i++) {
-      if (isCommentLine(file.lines, i, file.commentMap)) continue
       const line = file.lines[i]
+      if (isEnvFile ? line.trim().startsWith('#') : isCommentLine(file.lines, i, file.commentMap)) continue
 
       const match = SENSITIVE_PATTERN.exec(line)
       if (match) {

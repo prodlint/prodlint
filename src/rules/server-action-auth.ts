@@ -1,7 +1,9 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile } from '../utils/patterns.js'
 
-const USE_SERVER = /['"]use server['"]/
+// The directive starts a line (file top or function body); "use server" inside a string,
+// like an error message in React's compiled server bundles, doesn't make a server action
+const USE_SERVER = /^\s*['"]use server['"]/m
 
 const AUTH_PATTERNS = [
   /getServerSession\s*\(/,
@@ -19,7 +21,13 @@ const AUTH_PATTERNS = [
   /currentUser\s*\(/,
   /getAuth\s*\(/,
   /cookies\(\).*auth/s,
-  /session/i,
+  // Session lookups, not just any "session" text (a `sessionId` form field isn't auth):
+  // verifySession(), getIronSession(), lucia.validateSession(), getServerAuthSession()...
+  /\w*session\w*\s*\(/i,
+  // ...reading a session cookie, or using and guarding a session object
+  /cookie\w*\(?\)?\)?\s*\.get\(\s*['"`][\w-]*(?:session|auth|token)/i,
+  /\bsession\??\.user(?:Id)?\b/,
+  /!\s*session\b/,
 ]
 
 // Server actions that are clearly public (no auth needed)

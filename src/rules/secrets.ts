@@ -1,12 +1,34 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 
-const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
+/**
+ * What an HS256 JWT is, from its `role` claim. Supabase's legacy API keys are such JWTs:
+ * the service_role key bypasses RLS, while the anon key is public by design (it ships to
+ * the browser, and RLS guards the data), so it isn't a secret. Anything else is a bearer
+ * token like any other.
+ */
+function nameJwt(token: string): string | null {
+  try {
+    const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'))
+    if (claims?.role === 'anon') return null
+    if (claims?.role === 'service_role') return 'Supabase service role key'
+  } catch {
+    // Payload isn't JSON: still a JWT-shaped token
+  }
+  return 'JWT'
+}
+
+const SECRET_PATTERNS: {
+  name: string
+  pattern: RegExp
+  /** The name to report for this match, or null when it isn't a secret after all */
+  nameMatch?: (match: string) => string | null
+}[] = [
   { name: 'Stripe secret key', pattern: /sk_live_[a-zA-Z0-9]{8,}/ },
   { name: 'Stripe test key', pattern: /sk_test_[a-zA-Z0-9]{8,}/ },
   { name: 'AWS access key', pattern: /AKIA[0-9A-Z]{16}/ },
   { name: 'AWS secret key', pattern: /(?:aws_secret_access_key|AWS_SECRET)\s*[=:]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/ },
-  { name: 'Supabase service role key', pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{50,}\.[A-Za-z0-9_-]{20,}/ },
+  { name: 'JWT', pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{50,}\.[A-Za-z0-9_-]{20,}/, nameMatch: nameJwt },
   { name: 'OpenAI API key (legacy)', pattern: /sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}/ },
   { name: 'OpenAI API key', pattern: /sk-proj-[a-zA-Z0-9_\-]{20,}/ },
   { name: 'Anthropic API key', pattern: /sk-ant-(?:api|admin)[0-9]{2}-[a-zA-Z0-9_\-]{20,}/ },
@@ -47,15 +69,17 @@ export const secretsRule: Rule = {
       // Skip comments (single-line and block)
       if (isCommentLine(file.lines, i, file.commentMap)) continue
 
-      for (const { name, pattern } of SECRET_PATTERNS) {
+      for (const { name, pattern, nameMatch } of SECRET_PATTERNS) {
         const match = pattern.exec(line)
         if (match) {
+          const reported = nameMatch ? nameMatch(match[0]) : name
+          if (!reported) continue
           findings.push({
             ruleId: 'secrets',
             file: file.relativePath,
             line: i + 1,
             column: match.index + 1,
-            message: `Hardcoded ${name} detected`,
+            message: `Hardcoded ${reported} detected`,
             severity: 'critical',
             category: 'security',
             fix: 'Move the secret to an environment variable and access via process.env.SECRET_NAME',

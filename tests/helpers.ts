@@ -1,6 +1,10 @@
-import type { FileContext, ProjectContext } from '../src/types.js'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import type { FileContext, ProjectContext, ScanResult } from '../src/types.js'
 import { buildCommentMap } from '../src/utils/patterns.js'
 import { parseFile } from '../src/utils/ast.js'
+import { scan } from '../src/scanner.js'
 
 /**
  * Create a FileContext from source code for testing rules.
@@ -45,5 +49,23 @@ export function makeProject(
     envInGitignore: true,
     allFiles: [],
     ...overrides,
+  }
+}
+
+/**
+ * Write `files` (relative path → content) to a temporary project and scan it, so a test
+ * goes through the scanner itself: file discovery, extensions, both phases, suppression.
+ */
+export async function scanFiles(files: Record<string, string>): Promise<ScanResult> {
+  const dir = mkdtempSync(join(tmpdir(), 'prodlint-scan-'))
+  try {
+    for (const [relativePath, content] of Object.entries(files)) {
+      const full = join(dir, relativePath)
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, content)
+    }
+    return await scan({ path: dir })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }

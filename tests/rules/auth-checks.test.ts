@@ -149,6 +149,46 @@ describe('auth-checks rule', () => {
     expect(findings).toHaveLength(1)
   })
 
+  it('does not count an upstream Authorization header as an auth check', () => {
+    const file = makeFile([
+      'export async function POST(req: Request) {',
+      '  const body = await req.json()',
+      "  const res = await fetch('https://api.openai.com/v1/chat/completions', {",
+      "    method: 'POST',",
+      '    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },',
+      '    body: JSON.stringify(body),',
+      '  })',
+      '  return Response.json(await res.json())',
+      '}',
+    ].join('\n'), { relativePath: 'app/api/chat/route.ts' })
+    const findings = authChecksRule.check(file, makeProject())
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('still counts reading the incoming Authorization header', () => {
+    const appRouter = makeFile([
+      'export async function POST(req: Request) {',
+      "  const token = req.headers.get('Authorization')?.replace('Bearer ', '')",
+      "  if (!token) return new Response('Unauthorized', { status: 401 })",
+      '}',
+    ].join('\n'), { relativePath: 'app/api/items/route.ts' })
+    const nextHeaders = makeFile([
+      'export async function DELETE() {',
+      "  const auth = (await headers()).get('authorization')",
+      '}',
+    ].join('\n'), { relativePath: 'app/api/items/route.ts' })
+    const pagesRouter = makeFile([
+      'export default function handler(req, res) {',
+      '  const token = req.headers.authorization',
+      '}',
+    ].join('\n'), { relativePath: 'pages/api/items.ts' })
+    const project = makeProject()
+    expect(authChecksRule.check(appRouter, project)).toHaveLength(0)
+    expect(authChecksRule.check(nextHeaders, project)).toHaveLength(0)
+    expect(authChecksRule.check(pagesRouter, project)).toHaveLength(0)
+  })
+
   it('does not suppress auth check when bearer is in an error string', () => {
     const file = makeFile(
       `export async function POST() {\n  return Response.json({ error: "Missing bearer token" })\n}`,

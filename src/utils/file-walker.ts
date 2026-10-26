@@ -1,6 +1,6 @@
 import fg from 'fast-glob'
 import { readFile, stat, realpath } from 'node:fs/promises'
-import { resolve, extname, sep } from 'node:path'
+import { resolve, extname, basename, sep } from 'node:path'
 import { buildCommentMap } from './patterns.js'
 import { parseFile } from './ast.js'
 import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
@@ -71,7 +71,9 @@ export async function readFileContext(
 
     const content = await readFile(absolutePath, 'utf-8')
     const lines = content.split(/\r?\n|\r/)
-    const ext = extname(relativePath).slice(1) // remove leading dot
+    const rawExt = extname(relativePath).slice(1) // remove leading dot
+    // Dotenv files (.env, .env.local, ...) have no real extension: extname() gives '' or 'local'
+    const ext = /^\.env(?:\.|$)/.test(basename(relativePath)) && !SCAN_EXTENSIONS.includes(rawExt) ? 'env' : rawExt
 
     // Parse AST for JS/TS files (non-fatal on failure)
     let ast: FileContext['ast'] = undefined

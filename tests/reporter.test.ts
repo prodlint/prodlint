@@ -127,7 +127,19 @@ describe('reportSarif', () => {
     expect(sarifResult.locations[0].physicalLocation.artifactLocation.uri).toBe('src/config.ts')
     expect(sarifResult.locations[0].physicalLocation.region.startLine).toBe(5)
     expect(sarifResult.locations[0].physicalLocation.region.startColumn).toBe(3)
-    expect(sarifResult.fixes[0].description.text).toBe('Move to environment variable')
+  })
+
+  // SARIF 2.1.0 requires every fix to carry artifactChanges (at least one); prodlint's fixes
+  // are prose hints, not edits, so they go in the result's property bag instead
+  it('emits no fixes without artifactChanges, and keeps the fix hint', () => {
+    const findings = [makeFinding({ fix: 'Move to environment variable' })]
+    const sarif = JSON.parse(reportSarif(makeResult({ findings })))
+
+    const sarifResult = sarif.runs[0].results[0]
+    for (const fix of sarifResult.fixes ?? []) {
+      expect(fix.artifactChanges?.length).toBeGreaterThan(0)
+    }
+    expect(sarifResult.properties.fix).toBe('Move to environment variable')
   })
 
   it('maps severity levels correctly', () => {
@@ -164,6 +176,7 @@ describe('reportSarif', () => {
     const sarif = JSON.parse(reportSarif(result))
 
     expect(sarif.runs[0].results[0].fixes).toBeUndefined()
+    expect(sarif.runs[0].results[0].properties).toBeUndefined()
   })
 
   it('normalizes backslashes in file paths', () => {

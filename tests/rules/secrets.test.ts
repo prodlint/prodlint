@@ -4,6 +4,12 @@ import { makeFile, makeProject } from '../helpers.js'
 
 const project = makeProject()
 
+/** An HS256 JWT carrying `claims`, shaped like Supabase's legacy API keys (fake signature) */
+function jwt(claims: Record<string, unknown>): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode(claims)}.ZmFrZS1zaWduYXR1cmUtZm9yLXRlc3RzLW9ubHk`
+}
+
 describe('secrets rule', () => {
   it('detects Stripe live key', () => {
     const file = makeFile(`const key = "sk_live_abcdefghijklmnopqrstuv"`)
@@ -174,5 +180,30 @@ describe('secrets rule', () => {
     const file = makeFile(`export function hello() { return "world" }`)
     const findings = secretsRule.check(file, project)
     expect(findings).toHaveLength(0)
+  })
+
+  // Supabase's anon key is public by design: it ships to the browser, and RLS guards the data
+  it('does not report a Supabase anon key', () => {
+    const key = jwt({ iss: 'supabase', ref: 'abcdefghijklmnopqrst', role: 'anon', iat: 1700000000, exp: 2000000000 })
+    const file = makeFile(`const supabaseAnonKey = "${key}"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('reports a Supabase service_role key as one', () => {
+    const key = jwt({ iss: 'supabase', ref: 'abcdefghijklmnopqrst', role: 'service_role', iat: 1700000000, exp: 2000000000 })
+    const file = makeFile(`const serviceKey = "${key}"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toBe('Hardcoded Supabase service role key detected')
+    expect(findings[0].severity).toBe('critical')
+  })
+
+  it('reports any other HS256 JWT as a JWT, not as a Supabase key', () => {
+    const token = jwt({ sub: 'user_1234567890', scope: 'read:all', iat: 1700000000 })
+    const file = makeFile(`const token = "${token}"`)
+    const findings = secretsRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toBe('Hardcoded JWT detected')
   })
 })

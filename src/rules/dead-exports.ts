@@ -13,9 +13,21 @@ function isEntryPoint(relativePath: string): boolean {
 const EXPORT_NAMED = /export\s+(?:async\s+)?(?:function|const|let|class|enum)\s+(\w+)/g
 const EXPORT_DEFAULT = /export\s+default\s+(?:async\s+)?(?:function|class)\s+(\w+)/g
 const EXPORT_BRACES = /export\s*\{([^}]+)\}/g
-const IMPORT_BRACES = /import\s*\{([^}]+)\}\s*from/g
-const IMPORT_DEFAULT = /import\s+(\w+)\s+from/g
 const DYNAMIC_IMPORT = /import\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g
+
+// Imports are read from the whole file, so a statement can span lines:
+// `import { a, b as c } from 'x'`, `import type { a } from 'x'`, `import D, { a } from 'x'`
+const IMPORT_NAMED = /\bimport\s*(?:type\s*)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g
+// `import D from 'x'`, `import D, { a } from 'x'`
+const IMPORT_DEFAULT = /\bimport\s+([\w$]+)\s*(?:,\s*\{[^}]*\}\s*)?from\s*['"]([^'"]+)['"]/g
+// `import * as ns from 'x'`: any export of x may be used through ns
+const IMPORT_NAMESPACE = /\bimport\s+(?:[\w$]+\s*,\s*)?\*\s*as\s+[\w$]+\s+from\s*['"]([^'"]+)['"]/g
+const FROM_SOURCE = /from\s+['"]([^'"]+)['"]/g
+
+/** `'@/lib/utils'` → `utils`, matching how export files are keyed */
+function sourceBasename(source: string): string {
+  return source.split('/').pop()?.replace(/\.\w+$/, '') ?? ''
+}
 
 const THRESHOLD = 5
 
@@ -46,6 +58,8 @@ export const deadExportsRule: Rule = {
     const allImportedSymbols = new Set<string>()
     // Track which files are imported (for default imports and dynamic imports)
     const importedFiles = new Set<string>()
+    // Basenames imported as a namespace: all their exports count as used
+    const namespaceImported = new Set<string>()
 
     for (const file of sourceFiles) {
       if (isEntryPoint(file.relativePath)) continue
@@ -95,43 +109,39 @@ export const deadExportsRule: Rule = {
       }
     }
 
+    const addImport = (sym: string, source: string) => {
+      allImportedSymbols.add(sym)
+      const fromBasename = sourceBasename(source)
+      if (fromBasename) {
+        const set = imports.get(fromBasename) ?? new Set()
+        set.add(sym)
+        imports.set(fromBasename, set)
+      }
+    }
+
     // Collect all imports across ALL files (including tests — they consume exports)
     for (const file of files) {
-      for (const line of file.lines) {
-        let match
+      for (const match of file.content.matchAll(IMPORT_NAMED)) {
+        const symbols = match[1]
+          .replace(/\/\/.*$/gm, '')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .split(',')
+          .map(s => s.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim())
+          .filter(Boolean)
+        for (const sym of symbols) addImport(sym, match[2])
+      }
 
-        // Extract from-clause for source tracking
-        const fromMatch = line.match(/from\s+['"]([^'"]+)['"]/)
-        const fromBasename = fromMatch ? fromMatch[1].split('/').pop()?.replace(/\.\w+$/, '') ?? '' : ''
+      for (const match of file.content.matchAll(IMPORT_DEFAULT)) {
+        addImport(match[1], match[2])
+      }
 
-        const bracesRe = /import\s*(?:type\s*)?\{([^}]+)\}\s*from/g
-        while ((match = bracesRe.exec(line)) !== null) {
-          const symbols = match[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean)
-          for (const sym of symbols) {
-            allImportedSymbols.add(sym)
-            if (fromBasename) {
-              const set = imports.get(fromBasename) ?? new Set()
-              set.add(sym)
-              imports.set(fromBasename, set)
-            }
-          }
-        }
+      for (const match of file.content.matchAll(IMPORT_NAMESPACE)) {
+        namespaceImported.add(sourceBasename(match[1]))
+      }
 
-        const defaultRe = /import\s+(\w+)\s+from/g
-        while ((match = defaultRe.exec(line)) !== null) {
-          allImportedSymbols.add(match[1])
-          if (fromBasename) {
-            const set = imports.get(fromBasename) ?? new Set()
-            set.add(match[1])
-            imports.set(fromBasename, set)
-          }
-        }
-
-        // Track file imports for re-export detection
-        const fromRe = /from\s+['"]([^'"]+)['"]/g
-        while ((match = fromRe.exec(line)) !== null) {
-          importedFiles.add(match[1])
-        }
+      // Track file imports for re-export detection
+      for (const match of file.content.matchAll(FROM_SOURCE)) {
+        importedFiles.add(match[1])
       }
     }
 
@@ -140,6 +150,7 @@ export const deadExportsRule: Rule = {
     for (const [key, loc] of exports) {
       const symbolName = key.split('::')[1]
       const exportFileBasename = loc.file.split('/').pop()?.replace(/\.\w+$/, '') ?? ''
+      if (namespaceImported.has(exportFileBasename)) continue
 
       // Check if any import from a matching basename includes this symbol
       const importSet = imports.get(exportFileBasename)

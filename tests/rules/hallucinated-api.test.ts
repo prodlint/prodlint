@@ -80,4 +80,30 @@ describe('hallucinated-api rule', () => {
     const findings = hallucinatedApiRule.check(file, project)
     expect(findings).toHaveLength(1)
   })
+
+  // DOMTokenList and Node have .contains() and no .includes(), so the old hint broke them
+  it('does not flag DOM classList.contains()', () => {
+    const file = makeFile(`if (el.classList.contains('open')) close()`)
+    const findings = hallucinatedApiRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('does not flag Node.contains() on refs, the document or event targets', () => {
+    const file = makeFile([
+      'if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)',
+      'if (menuRef.current?.contains(e.target)) return',
+      'const attached = document.body.contains(node)',
+      'if (!panel.contains(document.activeElement)) blur()',
+    ].join('\n'))
+    const findings = hallucinatedApiRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
+  it('says .includes() is for arrays and strings, so DOM code is left alone', () => {
+    const file = makeFile(`if (tags.contains('a')) {}`)
+    const findings = hallucinatedApiRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].fix).toMatch(/arrays and strings/)
+    expect(findings[0].fix).toMatch(/classList/)
+  })
 })

@@ -105,6 +105,30 @@ describe('input-validation rule', () => {
     expect(findings).toHaveLength(1)
   })
 
+  it('does not treat JSON.parse() as validation', () => {
+    const file = makeFile([
+      'export async function POST(req: Request) {',
+      '  const body = await req.json()',
+      '  const meta = JSON.parse(body.meta)',
+      '  await db.insert({ ...body, meta })',
+      '}',
+    ].join('\n'), { relativePath: 'app/api/items/route.ts' })
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].line).toBe(2)
+  })
+
+  it('still counts a schema .parse() on the same file', () => {
+    const file = makeFile([
+      'export async function POST(req: Request) {',
+      '  const body = ItemSchema.parse(await req.json())',
+      '  const meta = JSON.parse(body.meta)',
+      '}',
+    ].join('\n'), { relativePath: 'app/api/items/route.ts' })
+    const findings = inputValidationRule.check(file, project)
+    expect(findings).toHaveLength(0)
+  })
+
   it('does not treat metadata/database as body/data validation', () => {
     const file = makeFile(
       `export async function POST(req) {\n  const body = await req.json()\n  if (!metadata.field) return\n  if (metadata?.type === 'premium') return\n  await db.insert(body)\n}`,
