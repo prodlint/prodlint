@@ -7,12 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (695 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (702 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
 
 Run a single test file: `npx vitest run tests/rules/secrets.test.ts`
+
+`tests/cli-features.test.ts` and `tests/mcp-server.test.ts` run the built `dist/`
+(the MCP one talks JSON-RPC to `dist/mcp.js` over stdio), so build before testing.
 
 ## Architecture
 
@@ -178,7 +181,9 @@ Resume it from master instead — the npm steps skip versions that are already p
 gh workflow run release.yml --ref master -f tag=vX.Y.Z
 ```
 
-Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
+A resume only accepts the newest `vX.Y.Z` tag; resuming an older one (e.g. `v0.10.1`, which
+never reached npm) would publish that old version and move `v1` backwards, so the workflow
+refuses it. Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
 
 Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 - **npm**: trusted publishing. Both `prodlint` and `prodlint-mcp` have

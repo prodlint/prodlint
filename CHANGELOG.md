@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- An end-to-end test that drives the built MCP server over stdio, the way a client
+  does: the handshake, the tool list, a real scan, input validation, and the
+  working-directory and private-host refusals (682 tests total).
+
 ### Fixed
 - **0.10.2's first release run didn't reach the MCP registry.** It registered the server
   seconds after `npm publish`, while npm was still processing the new version. The
