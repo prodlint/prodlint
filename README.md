@@ -258,6 +258,15 @@ every prodlint release, so it always runs the matching scanner.
 
 Ask your AI: *"Run prodlint on this project"* and it calls the `scan` tool directly.
 
+| Tool | Inputs | Returns |
+|------|--------|---------|
+| `scan` | `path` (project directory), optional `ignore`, `minSeverity` (`critical` / `warning` / `info`), `categories`, `maxFindings` (default 30) | Score, category scores, and findings most severe first. Every critical finding is listed, even past `maxFindings`. |
+| `scan-web` | `url` | Site score, grade, and the 14 agent-readiness checks |
+
+Both tools return a Markdown summary plus structured output (`structuredContent` matching
+each tool's `outputSchema`), and both are marked read-only (`readOnlyHint`), which hosted
+reviewers such as GitHub Copilot code review require before they call an MCP tool.
+
 ## Site Score
 
 Check any deployed website for AI agent-readiness — 14 checks covering emerging standards like llms.txt, TDMRep, AgentCard, AI-Disclosure, HTTP Signatures (RFC 9421), and more.

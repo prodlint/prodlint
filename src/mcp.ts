@@ -6,20 +6,74 @@ import { resolve, sep } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
 import { runWebScan, normalizeUrl, isPrivateHost, resolvesToPrivateAddress } from './web-scanner/index.js'
+import type { Finding, Severity } from './types.js'
+
+const SEVERITIES = ['critical', 'warning', 'info'] as const
+const CATEGORIES = ['security', 'reliability', 'performance', 'ai-quality'] as const
+const SEVERITY_RANK: Record<Severity, number> = { critical: 3, warning: 2, info: 1 }
+
+// How many findings `scan` lists unless the caller asks for more. Critical findings are
+// listed in full even past this cap, so a folder full of info findings can't crowd them out.
+const DEFAULT_MAX_FINDINGS = 30
+
+// Most severe first, then by location, so the findings an agent should fix first lead the list
+function bySeverity(a: Finding, b: Finding): number {
+  return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]
+    || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)
+    || a.line - b.line
+    || a.column - b.column
+}
 
 const server = new McpServer({
   name: 'prodlint',
   version: getVersion(),
 })
 
-server.tool(
+server.registerTool(
   'scan',
-  'Check a vibe-coded project\'s production readiness. Returns a 0-100 score with findings across security, reliability, performance, and AI quality categories.',
   {
-    path: z.string().describe('Absolute path to the project directory to scan'),
-    ignore: z.array(z.string()).optional().describe('Glob patterns to ignore'),
+    title: 'Scan a project for production readiness',
+    description: 'Check a vibe-coded JS/TS project\'s production readiness. Returns a 0-100 score and findings across security, reliability, performance, and AI quality, most severe first. Every critical finding is always included; use minSeverity, categories, and maxFindings to narrow or widen the rest.',
+    inputSchema: {
+      path: z.string().describe('Absolute path to the project directory to scan; it must be inside the directory the server runs in'),
+      ignore: z.array(z.string()).optional().describe('Glob patterns to ignore'),
+      minSeverity: z.enum(SEVERITIES).optional().describe('Only list findings at this severity or higher (default: info, i.e. all)'),
+      categories: z.array(z.enum(CATEGORIES)).optional().describe('Only list findings in these categories (default: all)'),
+      maxFindings: z.number().int().min(1).max(500).optional()
+        .describe(`Maximum number of findings to list (default: ${DEFAULT_MAX_FINDINGS}). Critical findings are always listed, even past this limit.`),
+    },
+    outputSchema: {
+      version: z.string().describe('prodlint version that ran the scan'),
+      path: z.string().describe('Directory that was scanned'),
+      score: z.number().describe('Overall production-readiness score, 0-100'),
+      filesScanned: z.number(),
+      durationMs: z.number(),
+      categoryScores: z.array(z.object({
+        category: z.enum(CATEGORIES),
+        score: z.number(),
+        findingCount: z.number(),
+      })),
+      summary: z.object({
+        critical: z.number(),
+        warning: z.number(),
+        info: z.number(),
+      }).describe('Counts of all findings, before minSeverity and categories are applied'),
+      matched: z.number().describe('Findings that pass the minSeverity and categories filters'),
+      omitted: z.number().describe('Matching findings left out because of maxFindings'),
+      findings: z.array(z.object({
+        ruleId: z.string(),
+        severity: z.enum(SEVERITIES),
+        category: z.enum(CATEGORIES),
+        file: z.string(),
+        line: z.number(),
+        column: z.number(),
+        message: z.string(),
+        fix: z.string().optional(),
+      })).describe('Matching findings, most severe first'),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  async ({ path, ignore }) => {
+  async ({ path, ignore, minSeverity = 'info', categories, maxFindings = DEFAULT_MAX_FINDINGS }) => {
     // Validate the path exists and is a directory
     const resolved = resolve(path)
 
@@ -50,6 +104,14 @@ server.tool(
 
     const result = await scan({ path: resolved, ignore })
 
+    const minRank = SEVERITY_RANK[minSeverity]
+    const matching = result.findings
+      .filter(f => SEVERITY_RANK[f.severity] >= minRank && (!categories?.length || categories.includes(f.category)))
+      .sort(bySeverity)
+    const criticalCount = matching.filter(f => f.severity === 'critical').length
+    const listed = matching.slice(0, Math.max(maxFindings, criticalCount))
+    const omitted = matching.length - listed.length
+
     const summary = [
       `## Production Readiness: ${result.overallScore}/100`,
       '',
@@ -63,27 +125,81 @@ server.tool(
       `### Summary: ${result.summary.critical} critical, ${result.summary.warning} warnings, ${result.summary.info} info`,
     ]
 
-    if (result.findings.length > 0) {
-      summary.push('', '### Findings')
-      for (const f of result.findings.slice(0, 30)) {
+    if (listed.length > 0) {
+      const scope = [
+        minSeverity !== 'info' ? `${minSeverity} and above` : '',
+        categories?.length ? categories.join(', ') : '',
+      ].filter(Boolean).join('; ')
+      summary.push('', `### Findings${scope ? ` (${scope})` : ''}, most severe first`)
+      for (const f of listed) {
         const line = `- **[${f.severity}]** \`${f.ruleId}\` ${f.file}:${f.line} — ${f.message}`
         summary.push(f.fix ? `${line}\n  - _Fix: ${f.fix}_` : line)
       }
-      if (result.findings.length > 30) {
-        summary.push(`- ...and ${result.findings.length - 30} more findings`)
+      if (omitted > 0) {
+        summary.push(`- ...and ${omitted} more. Raise maxFindings, or narrow with minSeverity or categories.`)
       }
+    } else if (result.findings.length > 0) {
+      summary.push('', 'No findings match the minSeverity and categories filters.')
     }
 
     return {
       content: [{ type: 'text' as const, text: summary.join('\n') }],
+      structuredContent: {
+        version: result.version,
+        path: result.scannedPath,
+        score: result.overallScore,
+        filesScanned: result.filesScanned,
+        durationMs: result.scanDurationMs,
+        categoryScores: result.categoryScores.map(c => ({ category: c.category, score: c.score, findingCount: c.findingCount })),
+        summary: result.summary,
+        matched: matching.length,
+        omitted,
+        findings: listed.map(f => ({
+          ruleId: f.ruleId,
+          severity: f.severity,
+          category: f.category,
+          file: f.file,
+          line: f.line,
+          column: f.column,
+          message: f.message,
+          fix: f.fix,
+        })),
+      },
     }
   },
 )
 
-server.tool(
+server.registerTool(
   'scan-web',
-  'Check a deployed website\'s AI agent-readiness. Returns a 0-100 score across 14 checks including robots.txt AI directives, llms.txt, AgentCard, WebMCP, and more.',
-  { url: z.string().describe('URL of the website to scan (e.g. https://example.com)') },
+  {
+    title: 'Score a website\'s AI-agent readiness',
+    description: 'Check a deployed website\'s AI agent-readiness. Returns a 0-100 score across 14 checks including robots.txt AI directives, llms.txt, AgentCard, WebMCP, and more.',
+    inputSchema: {
+      url: z.string().describe('URL of the website to scan (e.g. https://example.com)'),
+    },
+    outputSchema: {
+      url: z.string(),
+      domain: z.string(),
+      score: z.number().describe('Agent-readiness score, 0-100'),
+      grade: z.string(),
+      summary: z.object({
+        passed: z.number(),
+        failed: z.number(),
+        warnings: z.number(),
+        totalChecks: z.number(),
+      }),
+      checks: z.array(z.object({
+        id: z.string(),
+        name: z.string(),
+        status: z.enum(['pass', 'fail', 'warn', 'info']),
+        points: z.number(),
+        maxPoints: z.number(),
+        details: z.string().optional(),
+      })),
+    },
+    // Read-only, but it fetches the given site over the network
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
   async ({ url }) => {
     let normalizedUrl: string
     try {
@@ -105,24 +221,39 @@ server.tool(
 
     const result = await runWebScan(normalizedUrl)
 
-    const STATUS_SYMBOLS: Record<string, string> = { pass: '\u2713', fail: '\u2717', warn: '!', info: 'i' }
+    const STATUS_SYMBOLS: Record<string, string> = { pass: '✓', fail: '✗', warn: '!', info: 'i' }
 
     const summary = [
       `## Site Score: ${result.overallScore}/100 (${result.grade})`,
       '',
-      `Scanned ${result.domain} \u00b7 ${result.summary.totalChecks} checks`,
+      `Scanned ${result.domain} · ${result.summary.totalChecks} checks`,
       '',
       '### Checks',
       ...result.checks.map(c => {
         const sym = STATUS_SYMBOLS[c.status] ?? '?'
-        return `- ${sym} **${c.name}** \u2014 ${c.details || 'No details'} (${c.points}/${c.maxPoints})`
+        return `- ${sym} **${c.name}** — ${c.details || 'No details'} (${c.points}/${c.maxPoints})`
       }),
       '',
-      `### Summary: ${result.summary.passed} passed \u00b7 ${result.summary.failed} failed \u00b7 ${result.summary.warnings} warnings`,
+      `### Summary: ${result.summary.passed} passed · ${result.summary.failed} failed · ${result.summary.warnings} warnings`,
     ]
 
     return {
       content: [{ type: 'text' as const, text: summary.join('\n') }],
+      structuredContent: {
+        url: result.url,
+        domain: result.domain,
+        score: result.overallScore,
+        grade: result.grade,
+        summary: result.summary,
+        checks: result.checks.map(c => ({
+          id: c.id,
+          name: c.name,
+          status: c.status,
+          points: c.points,
+          maxPoints: c.maxPoints,
+          details: c.details,
+        })),
+      },
     }
   },
 )

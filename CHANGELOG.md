@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- The MCP `scan` tool takes `minSeverity`, `categories` and `maxFindings` (default 30), so
+  an agent can ask for just the criticals, one category, or a longer list.
+- Both MCP tools return structured output (`structuredContent` matching a declared
+  `outputSchema`) alongside the Markdown, and declare `readOnlyHint` (`scan-web` also
+  `openWorldHint`). GitHub Copilot code review only calls MCP tools marked read-only, so it
+  skipped prodlint's tools before. They're now registered with the SDK's `registerTool`.
+
 ### Changed
 - **Behavior change: the GitHub Action now fails when the scan finds critical issues.**
   It ignored prodlint's exit code, and `threshold` defaults to `0`, so with default inputs
@@ -18,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `npx -y -p prodlint prodlint-mcp`; the launcher ships with every release.
 
 ### Fixed
+- **The MCP `scan` tool could leave out every critical finding.** It listed the first 30
+  findings in file order, so a folder of info findings that sorted first (say, `aaa/`
+  full of placeholder text) pushed the criticals out of the response; the summary
+  counted them, but the agent never saw where they were. Findings are now listed most
+  severe first, and every critical is listed even past `maxFindings`.
 - **`hallucinated-api` told agents to replace DOM `.contains()` with `.includes()`.**
   `classList.contains('open')` and `ref.current.contains(event.target)` are real DOM calls,
   and `DOMTokenList` and `Node` have no `.includes()`, so the hint broke working code.
