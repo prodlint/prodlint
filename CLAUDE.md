@@ -181,7 +181,9 @@ Resume it from master instead — the npm steps skip versions that are already p
 gh workflow run release.yml --ref master -f tag=vX.Y.Z
 ```
 
-Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
+A resume only accepts the newest `vX.Y.Z` tag; resuming an older one (e.g. `v0.10.1`, which
+never reached npm) would publish that old version and move `v1` backwards, so the workflow
+refuses it. Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
 
 Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 - **npm**: trusted publishing. Both `prodlint` and `prodlint-mcp` have
