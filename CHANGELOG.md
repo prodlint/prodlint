@@ -6,10 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- The MCP `scan` tool takes `minSeverity`, `categories` and `maxFindings` (default 30), so
+  an agent can ask for just the criticals, one category, or a longer list.
+- Both MCP tools return structured output (`structuredContent` matching a declared
+  `outputSchema`) alongside the Markdown, and declare `readOnlyHint` (`scan-web` also
+  `openWorldHint`). GitHub Copilot code review only calls MCP tools marked read-only, so it
+  skipped prodlint's tools before. They're now registered with the SDK's `registerTool`.
+
 ### Changed
 - The README and AGENTS.md set up the MCP server with `npx -y prodlint-mcp`, the same
   command prodlint.com and the MCP registry entry use. It runs the same server as the old
   `npx -y -p prodlint prodlint-mcp`; the launcher ships with every release.
+
+### Fixed
+- **The MCP `scan` tool could leave out every critical finding.** It listed the first 30
+  findings in file order, so a folder of info findings that sorted first (say, `aaa/`
+  full of placeholder text) pushed the criticals out of the response; the summary
+  counted them, but the agent never saw where they were. Findings are now listed most
+  severe first, and every critical is listed even past `maxFindings`.
 
 ## [0.10.3] - 2026-10-26
 

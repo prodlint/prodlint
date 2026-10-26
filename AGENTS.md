@@ -34,7 +34,12 @@ prodlint has a built-in MCP server. To add it:
 claude mcp add prodlint -- npx -y prodlint-mcp
 ```
 
-The server exposes a `scan` tool that takes a `path` (absolute directory path) and optional `ignore` (glob patterns). It returns a score breakdown and findings list. Runs locally via stdio — no data leaves the machine.
+The server exposes two read-only tools over stdio:
+
+- `scan` takes a `path` (absolute directory path) and optional `ignore` (glob patterns), `minSeverity` (`critical`, `warning` or `info`), `categories` and `maxFindings` (default 30). It returns a score breakdown and findings sorted most severe first; every critical finding is included even past `maxFindings`. It runs locally — no data leaves the machine.
+- `scan-web` takes a `url` and scores the deployed site's AI-agent readiness, so it fetches that site.
+
+Both return Markdown plus structured output (`structuredContent`) that matches each tool's `outputSchema`.
 
 ## Interpreting Results
 
