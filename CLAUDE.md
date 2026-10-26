@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (757 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (787 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -54,7 +54,7 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
-**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 13 (including `sql-injection`, `no-n-plus-one`, `hallucinated-imports`, and `redirect-in-try-catch`, migrated later).
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 14 (including `sql-injection`, `no-n-plus-one` and `hallucinated-imports`, plus two migrated later: `redirect-in-try-catch`, and `auth-checks` for route handler exports and their auth wrappers).
 
 ### Two-Phase Scanning
 

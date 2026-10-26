@@ -198,3 +198,227 @@ describe('auth-checks rule', () => {
     expect(findings).toHaveLength(1)
   })
 })
+
+// Handlers wrapped in an auth helper, and handlers exported as consts, on both code paths
+describe.each([
+  { path: 'AST', withAst: true },
+  { path: 'regex fallback', withAst: false },
+])('auth-checks handler exports ($path)', ({ withAst }) => {
+  const check = (lines: string[], relativePath = 'app/api/items/route.ts', project = makeProject()) =>
+    authChecksRule.check(makeFile(lines.join('\n'), { relativePath, withAst }), project)
+
+  it('passes handlers wrapped in a with* helper imported from the auth module', () => {
+    // dub's withWorkspace and withAdmin live in @/lib/auth
+    expect(check([
+      "import { withWorkspace } from '@/lib/auth'",
+      '',
+      'export const GET = withWorkspace(async ({ workspace }) => {',
+      '  return Response.json(workspace)',
+      '})',
+      '',
+      'export const POST = withWorkspace(',
+      '  async ({ req, workspace }) => Response.json(await createLink(workspace, await req.json())),',
+      "  { requiredPermissions: ['links.write'] },",
+      ')',
+    ])).toHaveLength(0)
+    expect(check([
+      'import { withAdmin } from "@/lib/auth/admin";',
+      'export const DELETE = withAdmin(async ({ params }) => Response.json(await ban(params.id)));',
+    ])).toHaveLength(0)
+  })
+
+  it('passes handlers wrapped in a helper whose name says auth or session', () => {
+    // NextAuth v5's auth(handler), Auth0's withApiAuthRequired, a local session helper
+    expect(check([
+      "import { auth } from '@/auth'",
+      'export const POST = auth(async (req) => {',
+      "  if (!req.auth) return Response.json({ error: 'Not signed in' }, { status: 401 })",
+      '  return Response.json(await save(await req.json()))',
+      '})',
+    ])).toHaveLength(0)
+    expect(check([
+      "import { withApiAuthRequired } from '@auth0/nextjs-auth0'",
+      'export default withApiAuthRequired(async function handler(req, res) {',
+      '  res.json(await listItems())',
+      '})',
+    ], 'pages/api/items.ts')).toHaveLength(0)
+    expect(check([
+      "import { withUserSession } from '@/lib/api'",
+      'export const DELETE = withUserSession(async ({ user }) => Response.json(await removeItem(user)))',
+    ])).toHaveLength(0)
+  })
+
+  it('follows curried and nested wrappers', () => {
+    expect(check([
+      "import { withTeam } from '@/lib/auth/team'",
+      "export const POST = withTeam({ role: 'owner' })(async ({ team }) => Response.json(await invite(team)))",
+    ])).toHaveLength(0)
+    expect(check([
+      "import { withAxiom } from 'next-axiom'",
+      "import { withWorkspace } from '@/lib/auth'",
+      'export const POST = withAxiom(withWorkspace(async ({ req }) => Response.json(await save(req))))',
+    ])).toHaveLength(0)
+  })
+
+  it('follows handlers bound to another name', () => {
+    expect(check([
+      "import { withWorkspace } from '@/lib/auth'",
+      'export const PATCH = withWorkspace(async ({ req }) => Response.json(await update(req)))',
+      'export const PUT = PATCH',
+    ])).toHaveLength(0)
+    expect(check([
+      "import { withSession } from '@/lib/auth'",
+      'const handler = withSession(async ({ req }) => Response.json(await save(req)))',
+      'export { handler as GET, handler as POST }',
+    ])).toHaveLength(0)
+  })
+
+  it('does not ask for auth on an OPTIONS (CORS preflight) handler', () => {
+    expect(check([
+      "import { withPublishableKey } from '@/lib/auth/publishable-key'",
+      'export const OPTIONS = () => new Response(null, { status: 204, headers: CORS_HEADERS })',
+      'export const POST = withPublishableKey(async ({ req }) => Response.json(await track(req)))',
+    ])).toHaveLength(0)
+  })
+
+  it('still flags handlers whose wrapper is not an auth helper', () => {
+    const wrappers = [
+      ["import { withAxiom } from 'next-axiom'", 'withAxiom('],
+      ["import { withErrorHandler } from '@/lib/api/errors'", 'withErrorHandler('],
+      // calcom's withMiddleware runs API-key checks, but only its config in another file says so
+      ["import { withMiddleware } from '~/lib/helpers/withMiddleware'", 'withMiddleware()('],
+      // hands the handler a service-role client; it doesn't check that the caller is an admin
+      ["import { withAdmin } from '@/lib/supabase/admin'", 'withAdmin('],
+      ["import { withPostAuthor } from '@/lib/blog'", 'withPostAuthor('],
+      ["import { withoutAuth } from '@/lib/auth'", 'withoutAuth('],
+      ["import { withPublicAccess } from '@/lib/auth'", 'withPublicAccess('],
+    ]
+    for (const [importLine, call] of wrappers) {
+      const findings = check([importLine, `export const POST = ${call}async (req) => Response.json(await save(req)))`])
+      expect(findings, call).toHaveLength(1)
+      expect(findings[0].severity, call).toBe('critical')
+      expect(findings[0].line, call).toBe(2)
+    }
+  })
+
+  it('flags the handler a wrapper does not cover', () => {
+    const findings = check([
+      "import { withWorkspace } from '@/lib/auth'",
+      'export const GET = withWorkspace(async ({ workspace }) => Response.json(workspace))',
+      '',
+      'export async function POST(req: Request) {',
+      '  return Response.json(await save(await req.json()))',
+      '}',
+    ])
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+    expect(findings[0].line).toBe(4)
+  })
+
+  it('flags an export const POST arrow as critical, at its line', () => {
+    const findings = check([
+      "import { NextResponse } from 'next/server'",
+      '',
+      'export const POST = async (req: Request) => {',
+      '  const body = await req.json()',
+      '  return NextResponse.json(await db.item.create({ data: body }))',
+      '}',
+    ])
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+    expect(findings[0].line).toBe(3)
+  })
+
+  it('treats PUT, PATCH and DELETE consts, typed or not, as mutations', () => {
+    for (const handler of [
+      'export const PUT = async () => Response.json({})',
+      'export const PATCH = async function () { return Response.json({}) }',
+      'export let DELETE = (req) => Response.json({})',
+      'export const POST: RouteHandler = async () => Response.json({})',
+      'export const DELETE = removeItem',
+    ]) {
+      const findings = check(['async function removeItem() { return Response.json({}) }', handler])
+      expect(findings, handler).toHaveLength(1)
+      expect(findings[0].severity, handler).toBe('critical')
+      expect(findings[0].line, handler).toBe(2)
+    }
+  })
+
+  it('reads a handler bound across lines and exported from a list', () => {
+    const findings = check([
+      'const execute = async (',
+      '  req: Request,',
+      ') => Response.json(await run(await req.json()))',
+      '',
+      'export {',
+      '  execute as GET,',
+      '  execute as POST,',
+      '}',
+    ])
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('critical')
+    expect(findings[0].line).toBe(6)
+  })
+
+  it('keeps a const mutation at info when its code is in another file', () => {
+    // the auth check may be in the imported handler, which this file can't see
+    for (const lines of [
+      ["import { removeItem } from '@/lib/items'", 'export const DELETE = removeItem'],
+      ["import { handler } from '@/lib/items'", 'export const POST = defaultResponder(handler)'],
+      ["export { POST } from '../items/route'"],
+    ]) {
+      const findings = check(lines)
+      expect(findings, lines.join('; ')).toHaveLength(1)
+      expect(findings[0].severity, lines.join('; ')).toBe('info')
+    }
+  })
+
+  it('keeps a tRPC route at info: the router checks auth per procedure', () => {
+    // create-t3-app's src/app/api/trpc/[trpc]/route.ts, and the same handler as a function
+    const t3 = check([
+      "import { fetchRequestHandler } from '@trpc/server/adapters/fetch'",
+      "import { appRouter } from '~/server/api/root'",
+      '',
+      'const handler = (req: Request) =>',
+      "  fetchRequestHandler({ endpoint: '/api/trpc', req, router: appRouter, createContext: () => ({}) })",
+      '',
+      'export { handler as GET, handler as POST }',
+    ], 'src/app/api/trpc/[trpc]/route.ts')
+    const fn = check([
+      "import { fetchRequestHandler } from '@trpc/server/adapters/fetch'",
+      'export async function POST(req: Request) {',
+      "  return fetchRequestHandler({ endpoint: '/api/trpc', req, router: appRouter, createContext: () => ({}) })",
+      '}',
+    ], 'app/api/trpc/[trpc]/route.ts')
+    for (const findings of [t3, fn]) {
+      expect(findings).toHaveLength(1)
+      expect(findings[0].severity).toBe('info')
+    }
+  })
+
+  it('keeps const GET handlers at info, at their line', () => {
+    const findings = check(["import { db } from '@/lib/db'", 'export const GET = async () => Response.json(await db.item.findMany())'])
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('info')
+    expect(findings[0].line).toBe(2)
+  })
+
+  it('keeps const mutations at info when middleware auth is detected', () => {
+    const findings = check(['export const POST = async () => Response.json({})'], 'app/api/items/route.ts', makeProject({ hasAuthMiddleware: true }))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('info')
+  })
+
+  it("reports a Pages Router handler at its default export's line", () => {
+    const findings = check([
+      "import type { NextApiRequest, NextApiResponse } from 'next'",
+      '',
+      'export default async function handler(req: NextApiRequest, res: NextApiResponse) {',
+      '  res.json(await listItems())',
+      '}',
+    ], 'pages/api/items.ts')
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('info')
+    expect(findings[0].line).toBe(3)
+  })
+})
