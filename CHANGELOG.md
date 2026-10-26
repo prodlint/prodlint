@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`server-action-auth` went silent for the whole project once it found auth middleware.**
+  A `middleware.ts` that mentions an auth library (`clerkMiddleware()`, Supabase's
+  `updateSession`, `getToken`) turned the rule off, but that doesn't show the middleware
+  guards the pages an action is posted to: `clerkMiddleware()` makes no route private by
+  default, and middleware lets public pages through. Next.js's authentication guide says
+  not to rely on middleware alone, and to treat server actions like public API endpoints
+  that check the user themselves. So when auth middleware is detected, a mutating server
+  action with no auth check of its own is now reported at info ("middleware auth detected —
+  verify coverage"), the way `auth-checks` already treats API routes. Without auth
+  middleware it's still a warning. **Scan results may change** for apps with auth
+  middleware: new info findings.
+<!-- Overlap with PR #51 (Next.js 16 proxy.ts), open when this entry was written: its entry
+says `server-action-auth` "doesn't report" when a proxy or middleware does auth. Whichever
+of the two merges second: change that to "reports at info", make #51's test 'skips when a
+Next.js 16 proxy does the auth' expect one info finding, and delete this comment. -->
+
 ## [0.10.4] - 2026-10-26
 
 ### Added

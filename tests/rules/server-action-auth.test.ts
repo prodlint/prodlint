@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { serverActionAuthRule } from '../../src/rules/server-action-auth.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
 
@@ -13,6 +13,8 @@ export async function deleteItem(id) {
     const findings = serverActionAuthRule.check(file, project)
     expect(findings).toHaveLength(1)
     expect(findings[0].ruleId).toBe('server-action-auth')
+    expect(findings[0].severity).toBe('warning')
+    expect(findings[0].message).toContain('anyone can call this action')
   })
 
   it('allows server action with auth check', () => {
@@ -53,14 +55,56 @@ export async function getItems() {
     expect(findings).toHaveLength(0)
   })
 
-  it('skips when auth middleware exists', () => {
+  // Next.js's auth guide: middleware/proxy shouldn't be the only line of defense, and server
+  // actions should be treated like public API endpoints that check the user themselves
+  it('still reports, at info, when auth middleware exists', () => {
     const proj = makeProject({ hasAuthMiddleware: true })
     const file = makeFile(`'use server'
 export async function deleteItem(id) {
   await db.delete(items).where({ id })
 }`)
     const findings = serverActionAuthRule.check(file, proj)
-    expect(findings).toHaveLength(0)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('info')
+    expect(findings[0].line).toBe(1)
+    expect(findings[0].message).toContain('middleware auth detected')
+    expect(findings[0].message).not.toContain('anyone can call this action')
+    expect(findings[0].fix).toContain('in the action')
+  })
+
+  it('with auth middleware, still skips actions that check auth, read-only actions and public actions', () => {
+    const proj = makeProject({ hasAuthMiddleware: true })
+    const files = [
+      makeFile(`'use server'
+export async function deleteItem(id) {
+  const session = await auth()
+  if (!session) throw new Error('Unauthorized')
+  await db.delete(items).where({ id })
+}`),
+      makeFile(`'use server'
+export async function getItems() {
+  return await db.query('SELECT * FROM items')
+}`),
+      makeFile(`'use server'
+export async function submitFeedback(data) {
+  await db.insert(feedback).values(data)
+}`, { relativePath: 'actions/feedback.ts' }),
+    ]
+    for (const file of files) {
+      expect(serverActionAuthRule.check(file, proj), file.content).toHaveLength(0)
+    }
+  })
+
+  // Through the scanner: clerkMiddleware() makes no route private until it's told to,
+  // so detecting it says nothing about the pages an action is posted to
+  it('reports at info when the root middleware.ts uses an auth library', async () => {
+    const action = { 'app/actions/items.ts': "'use server'\nexport async function deleteItem(id) {\n  await db.delete(items).where({ id })\n}\n" }
+    const findings = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth')
+
+    expect((await findings(action)).map(f => f.severity)).toEqual(['warning'])
+    const middleware = "import { clerkMiddleware } from '@clerk/nextjs/server'\nexport default clerkMiddleware()\n"
+    expect((await findings({ ...action, 'middleware.ts': middleware })).map(f => f.severity)).toEqual(['info'])
   })
 
   it('does not count a sessionId variable as an auth check', () => {
