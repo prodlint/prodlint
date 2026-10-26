@@ -80,6 +80,18 @@ class StdioClient {
 
 const textOf = (res: RpcResponse) => res.result?.content?.[0]?.text ?? ''
 
+interface ScanOutput {
+  score: number
+  summary: { critical: number; warning: number; info: number }
+  matched: number
+  omitted: number
+  findings: { ruleId: string; severity: 'critical' | 'warning' | 'info'; category: string; file: string; line: number }[]
+}
+
+const scanOutput = (res: RpcResponse) => res.result?.structuredContent as ScanOutput
+
+const RANK = { critical: 3, warning: 2, info: 1 }
+
 describe('MCP server over stdio (dist/mcp.js)', () => {
   let child: ChildProcessWithoutNullStreams
   let client: StdioClient
@@ -95,6 +107,7 @@ describe('MCP server over stdio (dist/mcp.js)', () => {
     // server runs from a throwaway project with one deliberate SQL injection.
     project = join(tmpdir(), `prodlint-mcp-test-${Date.now()}`)
     mkdirSync(join(project, 'app', 'api', 'users'), { recursive: true })
+    mkdirSync(join(project, 'aaa'), { recursive: true })
     writeFileSync(join(project, 'package.json'), '{ "name": "fixture", "private": true }\n')
     writeFileSync(
       join(project, 'app', 'api', 'users', 'route.ts'),
@@ -106,6 +119,25 @@ describe('MCP server over stdio (dist/mcp.js)', () => {
         '}',
         '',
       ].join('\n'),
+    )
+    // A second critical, so maxFindings: 1 can show that criticals are exempt from the cap
+    mkdirSync(join(project, 'app', 'api', 'orders'), { recursive: true })
+    writeFileSync(
+      join(project, 'app', 'api', 'orders', 'route.ts'),
+      [
+        'export async function GET(req: Request) {',
+        '  const user = new URL(req.url).searchParams.get("user")',
+        '  const rows = await db.query(`SELECT * FROM orders WHERE user_id = ${user}`)',
+        '  return Response.json(rows)',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    // 40 info findings in a folder that sorts before app/. Listed in file order and cut at
+    // 30, these used to push the critical SQL injection out of the response entirely.
+    writeFileSync(
+      join(project, 'aaa', 'copy.ts'),
+      Array.from({ length: 40 }, (_, i) => `export const copy${i} = 'Lorem ipsum dolor sit amet'\n`).join(''),
     )
 
     child = spawn(process.execPath, [MCP_PATH], { cwd: project, stdio: 'pipe' })
@@ -143,11 +175,81 @@ describe('MCP server over stdio (dist/mcp.js)', () => {
     expect(tools.find(t => t.name === 'scan-web')?.inputSchema.required).toEqual(['url'])
   })
 
+  it('marks both tools read-only and declares their output schemas', async () => {
+    // Copilot code review only calls MCP tools whose annotations set readOnlyHint
+    const res = await client.request('tools/list', {})
+    const tools = (res.result?.tools ?? []) as {
+      name: string
+      title?: string
+      annotations?: { readOnlyHint?: boolean; openWorldHint?: boolean }
+      outputSchema?: { type: string; properties?: Record<string, unknown> }
+    }[]
+    const scanTool = tools.find(t => t.name === 'scan')
+    const webTool = tools.find(t => t.name === 'scan-web')
+    expect(scanTool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false })
+    expect(webTool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true })
+    expect(scanTool?.title).toBeTruthy()
+    expect(webTool?.title).toBeTruthy()
+    expect(scanTool?.outputSchema?.type).toBe('object')
+    expect(Object.keys(scanTool?.outputSchema?.properties ?? {})).toEqual(
+      expect.arrayContaining(['score', 'summary', 'findings', 'matched', 'omitted']),
+    )
+    expect(Object.keys(webTool?.outputSchema?.properties ?? {})).toEqual(
+      expect.arrayContaining(['score', 'grade', 'checks']),
+    )
+  })
+
   it('scans a project inside its working directory and reports findings', async () => {
     const res = await client.callTool('scan', { path: project })
     expect(res.result?.isError).toBeFalsy()
     expect(textOf(res)).toContain('## Production Readiness:')
     expect(textOf(res)).toContain('`sql-injection`')
+  })
+
+  it('returns structured findings, most severe first', async () => {
+    const out = scanOutput(await client.callTool('scan', { path: project }))
+    expect(out.score).toBeGreaterThanOrEqual(0)
+    expect(out.summary.critical).toBeGreaterThan(0)
+    expect(out.findings.length).toBeGreaterThan(0)
+    for (let i = 1; i < out.findings.length; i++) {
+      expect(RANK[out.findings[i - 1].severity]).toBeGreaterThanOrEqual(RANK[out.findings[i].severity])
+    }
+    expect(out.findings[0]).toMatchObject({ ruleId: 'sql-injection', severity: 'critical' })
+  })
+
+  it('never cuts critical findings off, even below maxFindings', async () => {
+    const res = await client.callTool('scan', { path: project })
+    const out = scanOutput(res)
+    // The default cap applies, yet every critical is listed, and the cut is reported
+    expect(out.findings).toHaveLength(30)
+    expect(out.findings.filter(f => f.severity === 'critical')).toHaveLength(out.summary.critical)
+    expect(out.omitted).toBe(out.matched - 30)
+    expect(textOf(res)).toMatch(/### Findings, most severe first\n- \*\*\[critical\]\*\* `sql-injection`/)
+    expect(textOf(res)).toContain(`...and ${out.omitted} more`)
+
+    const tight = scanOutput(await client.callTool('scan', { path: project, maxFindings: 1 }))
+    expect(tight.findings.filter(f => f.severity === 'critical')).toHaveLength(tight.summary.critical)
+    expect(tight.findings.length).toBe(Math.max(1, tight.summary.critical))
+  })
+
+  it('filters findings by minSeverity and categories', async () => {
+    const criticalOnly = scanOutput(await client.callTool('scan', { path: project, minSeverity: 'critical' }))
+    expect(criticalOnly.findings.length).toBeGreaterThan(0)
+    expect(criticalOnly.findings.every(f => f.severity === 'critical')).toBe(true)
+    expect(criticalOnly.matched).toBe(criticalOnly.summary.critical)
+    expect(criticalOnly.omitted).toBe(0)
+
+    const aiQuality = await client.callTool('scan', { path: project, categories: ['ai-quality'], maxFindings: 100 })
+    const out = scanOutput(aiQuality)
+    expect(out.findings.length).toBeGreaterThan(0)
+    expect(out.findings.every(f => f.category === 'ai-quality')).toBe(true)
+    expect(out.omitted).toBe(0)
+    expect(textOf(aiQuality)).toContain('### Findings (ai-quality), most severe first')
+  })
+
+  it('rejects a maxFindings outside 1-500', async () => {
+    const res = await client.callTool('scan', { path: project, maxFindings: 0 })
+    expect(res.error !== undefined || res.result?.isError === true).toBe(true)
   })
 
   it('rejects arguments that fail the input schema', async () => {
