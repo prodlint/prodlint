@@ -7,12 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (675 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (682 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
 
 Run a single test file: `npx vitest run tests/rules/secrets.test.ts`
+
+`tests/cli-features.test.ts` and `tests/mcp-server.test.ts` run the built `dist/`
+(the MCP one talks JSON-RPC to `dist/mcp.js` over stdio), so build before testing.
 
 ## Architecture
 
@@ -169,6 +172,18 @@ It is three jobs, split by privilege — keep it that way:
 - **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
+
+**If a release run fails after npm** (MCP registry, `v1`), don't re-run it: a re-run
+reuses the tagged commit's workflow file and retries the npm publishes, which npm refuses.
+Resume it from master instead — the npm steps skip versions that are already published:
+
+```bash
+gh workflow run release.yml --ref master -f tag=vX.Y.Z
+```
+
+A resume only accepts the newest `vX.Y.Z` tag; resuming an older one (e.g. `v0.10.1`, which
+never reached npm) would publish that old version and move `v1` backwards, so the workflow
+refuses it. Only `vX.Y.Z` tags trigger a release; pushing `v1` by hand doesn't.
 
 Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 - **npm**: trusted publishing. Both `prodlint` and `prodlint-mcp` have
