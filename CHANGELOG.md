@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-26
+
+### Fixed
+- **0.10.1 never reached npm or the MCP registry.** The release workflow passed its
+  tarball to `npm publish` as `release/prodlint-0.10.1.tgz`, which npm read as the GitHub
+  repo `release/prodlint-0.10.1.tgz`. It now passes `./release/...`. 0.10.2 ships
+  everything listed under 0.10.1 below.
+
 ### Changed
 - Dependencies refreshed to clear all 13 `npm audit` findings (`npm audit`: 0
   vulnerabilities): `@modelcontextprotocol/sdk` 1.32.2, `zod` 4.6.7, transitive
@@ -14,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Node 18 and 20, which prodlint still supports at runtime, build and self-scan.
 
 ## [0.10.1] - 2026-10-25
+
+_Tagged but never published: the release workflow failed before `npm publish`
+succeeded, so 0.10.1 is not on npm or the MCP registry, and the GitHub Action's
+`v0.10.1` tag runs a version that doesn't exist. Use 0.10.2 (or the Action's `v1`)._
 
 ### Security
 - **`--web` and the MCP `scan-web` tool could be pointed at private hosts.** The guard

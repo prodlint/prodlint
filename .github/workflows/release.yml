@@ -85,13 +85,15 @@ jobs:
       # No NODE_AUTH_TOKEN: auth comes from the OIDC identity configured as a
       # trusted publisher on npmjs.com. Provenance is attested automatically.
       # Publishing a tarball runs none of the package's lifecycle scripts.
+      # Keep the leading ./ on the tarball paths: npm reads a bare "release/x.tgz" as
+      # the GitHub repo release/x.tgz, which is why 0.10.1 never reached npm.
       - name: Publish prodlint to npm
-        run: npm publish "release/prodlint-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        run: npm publish "./release/prodlint-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
 
       # Published second so its `prodlint` dependency already exists on the registry.
       # Keeping it in this workflow is what stops it drifting from the scanner again.
       - name: Publish prodlint-mcp launcher to npm
-        run: npm publish "release/prodlint-mcp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        run: npm publish "./release/prodlint-mcp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
 
       # Registry auth is OIDC too, so this needs no stored credential. Previously this
       # step was manual and awkward: mcp-publisher's registry JWT expires within
