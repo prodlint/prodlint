@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { authChecksRule } from '../../src/rules/auth-checks.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 describe('auth-checks rule', () => {
   it('flags POST API route without auth as critical (mutation)', () => {
@@ -120,6 +120,17 @@ describe('auth-checks rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].severity).toBe('info')
     expect(findings[0].message).toContain('middleware')
+  })
+
+  // Through the scanner: Next.js 16 renamed middleware.ts to proxy.ts
+  it('downgrades to info when a Next.js 16 proxy does the auth', async () => {
+    const route = { 'app/api/items/route.ts': 'export async function POST() {\n  return Response.json({ ok: true })\n}\n' }
+    const severities = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'auth-checks').map(f => f.severity)
+
+    expect(await severities(route)).toEqual(['critical'])
+    expect(await severities({ ...route, 'proxy.ts': "import { clerkMiddleware } from '@clerk/nextjs/server'\n\nexport default clerkMiddleware()\n" })).toEqual(['info'])
+    expect(await severities({ ...route, 'proxy.ts': "export { auth as proxy } from '@/auth'\n" })).toEqual(['info'])
   })
 
   it('skips non-API files', () => {
