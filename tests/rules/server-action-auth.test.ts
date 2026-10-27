@@ -107,6 +107,16 @@ export async function submitFeedback(data) {
     expect((await findings({ ...action, 'middleware.ts': middleware })).map(f => f.severity)).toEqual(['info'])
   })
 
+  // Through the scanner: Next.js 16 renamed middleware.ts to proxy.ts
+  it('reports at info when a Next.js 16 proxy does the auth', async () => {
+    const action = { 'app/actions/items.ts': "'use server'\nexport async function deleteItem(id) {\n  await db.delete(items).where({ id })\n}\n" }
+    const findings = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth')
+
+    expect((await findings(action)).map(f => f.severity)).toEqual(['warning'])
+    expect((await findings({ ...action, 'proxy.ts': "export { auth as proxy } from '@/auth'\n" })).map(f => f.severity)).toEqual(['info'])
+  })
+
   it('does not count a sessionId variable as an auth check', () => {
     const file = makeFile(`'use server'
 export async function saveCart(formData: FormData) {

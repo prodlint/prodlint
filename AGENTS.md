@@ -82,7 +82,7 @@ const key = "sk_test_example_for_docs"
 
 prodlint detects and adjusts for:
 - **ORMs**: Prisma, Drizzle, Supabase, Knex, Sequelize (prevents false SQL injection flags)
-- **Auth middleware**: Clerk, NextAuth, Supabase (downgrades auth findings when middleware exists)
+- **Auth middleware**: Clerk, NextAuth, Supabase in `middleware.ts` or Next.js 16's `proxy.ts` (downgrades auth findings when middleware exists)
 - **Monorepos**: npm, yarn, pnpm workspaces (resolves cross-package dependencies)
 - **Path aliases**: `@/`, `~/`, tsconfig paths (not flagged as hallucinated imports)
 - **Route exemptions**: auth, webhook, health, cron routes exempt from auth/rate-limit checks

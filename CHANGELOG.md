@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **A Next.js 16 `proxy.ts` wasn't read as middleware, and neither was Auth.js's `auth`.**
+  Next.js 16 renamed `middleware.ts` to `proxy.ts`, but prodlint only looked for auth and
+  rate limiting in `middleware.(ts|js)` and `src/middleware.(ts|js)`. It now reads
+  `proxy.(ts|js)` and `src/proxy.(ts|js)` the same way. In either file, Auth.js counts as
+  auth now: `export { auth as proxy } from '@/auth'` (or `as middleware`, `as default`),
+  `export default auth((req) => …)`, and NextAuth v4's `export { default } from
+  'next-auth/middleware'`. When one of these files does auth, `auth-checks` rates unchecked
+  routes info, not critical, and `server-action-auth` rates unchecked actions info, not
+  warning; when it rate-limits, `rate-limiting` doesn't report. That's what a
+  `middleware.ts` does. Only the scanned folder's own proxy or middleware is read (at its
+  root or in `src/`), so in a monorepo, scan the app's folder (`apps/web`) to have its
+  proxy read. **Scan results may change** for Next.js 16 apps and apps with Auth.js
+  middleware.
 - **`server-action-auth` went silent for the whole project once it found auth middleware.**
   A `middleware.ts` that mentions an auth library (`clerkMiddleware()`, Supabase's
   `updateSession`, `getToken`) turned the rule off, but that doesn't show the middleware
@@ -18,10 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   verify coverage"), the way `auth-checks` already treats API routes. Without auth
   middleware it's still a warning. **Scan results may change** for apps with auth
   middleware: new info findings.
-<!-- Overlap with PR #51 (Next.js 16 proxy.ts), open when this entry was written: its entry
-says `server-action-auth` "doesn't report" when a proxy or middleware does auth. Whichever
-of the two merges second: change that to "reports at info", make #51's test 'skips when a
-Next.js 16 proxy does the auth' expect one info finding, and delete this comment. -->
+- **`dead-exports` counted a Next.js 16 `proxy.ts`'s exports as dead.** Next.js 16 renamed
+  `middleware.ts` to `proxy.ts`. The rule skips Next.js's special files by name, but it
+  didn't know the new one, so a proxy's `proxy` and `config` exports counted toward the
+  rule's threshold even though Next.js itself uses them. `proxy.(ts|tsx|js|jsx)` is now
+  skipped where Next.js runs it: the scanned root, a folder with its own `package.json`
+  (an app in a monorepo), or either one's `src/`. Anywhere else `proxy` is an ordinary
+  module name, so a file like Supabase's `lib/supabase/proxy.ts` session helper is still
+  checked.
 
 ## [0.10.4] - 2026-10-26
 

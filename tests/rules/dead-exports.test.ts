@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { deadExportsRule } from '../../src/rules/dead-exports.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
 
@@ -206,5 +206,67 @@ describe('dead-exports rule', () => {
 
     const findings = deadExportsRule.checkProject!([sixExports, consumer], project)
     expect(findings).toHaveLength(0)
+  })
+
+  // Next.js 16 renamed middleware.ts to proxy.ts. Next.js imports its `proxy` and `config`
+  // itself, but only from an app's root or its src/.
+  describe('Next.js 16 proxy', () => {
+    const helpers = [
+      'export const one = 1',
+      'export const two = 2',
+      'export const three = 3',
+    ].join('\n')
+
+    const proxy = [
+      "import { NextResponse } from 'next/server'",
+      '',
+      'export function proxy(request) {',
+      '  return NextResponse.next()',
+      '}',
+      '',
+      "export const config = { matcher: ['/dashboard/:path*'] }",
+    ].join('\n')
+
+    // Three dead exports in lib/helpers.ts: under the threshold alone, at it with the proxy's two
+    const check = (relativePath: string, allFiles: string[] = []) => deadExportsRule.checkProject!(
+      [makeFile(helpers, { relativePath: 'lib/helpers.ts' }), makeFile(proxy, { relativePath })],
+      makeProject({ allFiles }),
+    )
+
+    it.each(['proxy.ts', 'proxy.js', 'src/proxy.ts', 'src/proxy.tsx'])('skips %s at the scanned root', (path) => {
+      expect(check(path)).toHaveLength(0)
+    })
+
+    it.each(['apps/web/proxy.ts', 'apps/web/src/proxy.ts'])('skips %s in an app with its own package.json', (path) => {
+      expect(check(path, ['package.json', 'apps/web/package.json'])).toHaveLength(0)
+    })
+
+    // `proxy` is also a common module name: Supabase's Next.js template keeps its
+    // session helper in lib/supabase/proxy.ts
+    it.each([
+      { path: 'lib/supabase/proxy.ts', allFiles: ['package.json'] },
+      { path: 'src/lib/proxy.ts', allFiles: ['package.json'] },
+      { path: 'apps/web/proxy.ts', allFiles: ['package.json'] },
+      { path: 'apps/web/lib/proxy.ts', allFiles: ['package.json', 'apps/web/package.json'] },
+      { path: 'apps/web/src/lib/proxy.ts', allFiles: ['package.json', 'apps/web/package.json'] },
+    ])('still checks $path', ({ path, allFiles }) => {
+      const findings = check(path, allFiles)
+      expect(findings).toHaveLength(1)
+      expect(findings[0].message).toMatch(/^5 exported symbols/)
+      expect(findings[0].message).toContain(`${path} (2)`)
+    })
+
+    // Through the scanner: app roots come from the package.json files it walked
+    it('finds app roots from the package.json files in the scan', async () => {
+      const files = {
+        'apps/web/proxy.ts': proxy,
+        'apps/web/lib/helpers.ts': helpers,
+      }
+      const deadExports = async (extra: Record<string, string>) =>
+        (await scanFiles({ ...files, ...extra })).findings.filter(f => f.ruleId === 'dead-exports')
+
+      expect(await deadExports({ 'apps/web/package.json': '{}' })).toHaveLength(0)
+      expect(await deadExports({})).toHaveLength(1)
+    })
   })
 })
