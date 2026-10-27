@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { serverActionAuthRule } from '../../src/rules/server-action-auth.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
 
@@ -61,6 +61,16 @@ export async function deleteItem(id) {
 }`)
     const findings = serverActionAuthRule.check(file, proj)
     expect(findings).toHaveLength(0)
+  })
+
+  // Through the scanner: Next.js 16 renamed middleware.ts to proxy.ts
+  it('skips when a Next.js 16 proxy does the auth', async () => {
+    const action = { 'app/actions/items.ts': "'use server'\nexport async function deleteItem(id) {\n  await db.delete(items).where({ id })\n}\n" }
+    const findings = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth')
+
+    expect(await findings(action)).toHaveLength(1)
+    expect(await findings({ ...action, 'proxy.ts': "export { auth as proxy } from '@/auth'\n" })).toHaveLength(0)
   })
 
   it('does not count a sessionId variable as an auth check', () => {

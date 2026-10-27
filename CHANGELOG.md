@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **A Next.js 16 `proxy.ts` wasn't read as middleware, and neither was Auth.js's `auth`.**
+  Next.js 16 renamed `middleware.ts` to `proxy.ts`, but prodlint only looked for auth and
+  rate limiting in `middleware.(ts|js)` and `src/middleware.(ts|js)`. It now reads
+  `proxy.(ts|js)` and `src/proxy.(ts|js)` the same way. In either file, Auth.js counts as
+  auth now: `export { auth as proxy } from '@/auth'` (or `as middleware`, `as default`),
+  `export default auth((req) => …)`, and NextAuth v4's `export { default } from
+  'next-auth/middleware'`. When one of these files does auth, `auth-checks` rates unchecked
+  routes info, not critical, and `server-action-auth` doesn't report; when it rate-limits,
+  `rate-limiting` doesn't report. That's what a `middleware.ts` already did. Only the
+  scanned folder's own proxy or middleware is read (at its root or in `src/`), so in a
+  monorepo, scan the app's folder (`apps/web`) to have its proxy read. **Scan results may
+  change** for Next.js 16 apps and apps with Auth.js middleware.
 - **`dead-exports` counted a Next.js 16 `proxy.ts`'s exports as dead.** Next.js 16 renamed
   `middleware.ts` to `proxy.ts`. The rule skips Next.js's special files by name, but it
   didn't know the new one, so a proxy's `proxy` and `config` exports counted toward the
