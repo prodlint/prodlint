@@ -122,6 +122,17 @@ describe('auth-checks rule', () => {
     expect(findings[0].message).toContain('middleware')
   })
 
+  // Through the scanner: Next.js 16 renamed middleware.ts to proxy.ts
+  it('downgrades to info when a Next.js 16 proxy does the auth', async () => {
+    const route = { 'app/api/items/route.ts': 'export async function POST() {\n  return Response.json({ ok: true })\n}\n' }
+    const severities = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'auth-checks').map(f => f.severity)
+
+    expect(await severities(route)).toEqual(['critical'])
+    expect(await severities({ ...route, 'proxy.ts': "import { clerkMiddleware } from '@clerk/nextjs/server'\n\nexport default clerkMiddleware()\n" })).toEqual(['info'])
+    expect(await severities({ ...route, 'proxy.ts': "export { auth as proxy } from '@/auth'\n" })).toEqual(['info'])
+  })
+
   it('skips non-API files', () => {
     const file = makeFile(
       `export function Page() { return <div>Hello</div> }`,
@@ -457,9 +468,10 @@ describe('auth-checks when the auth middleware matcher excludes /api', () => {
   })
 
   // Through the scanner: Auth.js's docs leave /api out of the middleware with this matcher
-  it("reads the matcher from the project's middleware", async () => {
+  it("reads the matcher from the project's middleware or proxy", async () => {
     const route = { 'app/api/items/route.ts': `${POST}\n` }
     const middleware = "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n"
+    const proxy = "export { auth as proxy } from '@/auth'\n"
     const config = "\nexport const config = {\n  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],\n}\n"
     const severities = async (files: Record<string, string>) =>
       (await scanFiles(files)).findings.filter(f => f.ruleId === 'auth-checks').map(f => f.severity)
@@ -467,5 +479,8 @@ describe('auth-checks when the auth middleware matcher excludes /api', () => {
     expect(await severities(route)).toEqual(['critical'])
     expect(await severities({ ...route, 'middleware.ts': middleware })).toEqual(['info'])
     expect(await severities({ ...route, 'middleware.ts': middleware + config })).toEqual(['critical'])
+    // Next.js 16's proxy.ts
+    expect(await severities({ ...route, 'proxy.ts': proxy })).toEqual(['info'])
+    expect(await severities({ ...route, 'proxy.ts': proxy + config })).toEqual(['critical'])
   })
 })

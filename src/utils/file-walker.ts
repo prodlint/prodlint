@@ -33,6 +33,25 @@ const AST_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'])
 
 const MAX_FILE_SIZE = 1024 * 1024 // 1MB
 
+// Next.js runs middleware from the app root or src/. Next.js 16 renamed the file to proxy.
+const MIDDLEWARE_FILES = [
+  'middleware.ts', 'middleware.js', 'src/middleware.ts', 'src/middleware.js',
+  'proxy.ts', 'proxy.js', 'src/proxy.ts', 'src/proxy.js',
+]
+
+const MIDDLEWARE_AUTH_PATTERNS = [
+  /getSession/i, /getUser/i, /auth\(\)/, /withAuth/i,
+  /clerkMiddleware/i, /authMiddleware/i, /NextAuth/i,
+  /supabase.*auth/i, /createMiddlewareClient/i,
+  /getToken/i, /verifyToken/i, /jwt/i, /updateSession/i,
+  // Auth.js: export { auth as proxy } from '@/auth', export default auth((req) => …)
+  /\bauth\s+as\s+(?:proxy|middleware|default)\b/, /\bauth\(/,
+  // NextAuth v4: export { default } from 'next-auth/middleware'
+  /['"]next-auth\/middleware['"]/,
+]
+
+const MIDDLEWARE_RATE_LIMIT_PATTERNS = [/rateLimit/i, /throttle/i]
+
 export async function walkFiles(
   root: string,
   extraIgnores: string[] = [],
@@ -297,43 +316,20 @@ export async function buildProjectContext(
     // No tsconfig.json
   }
 
-  // Check for auth middleware (middleware.ts or middleware.js in root)
-  try {
-    for (const name of ['middleware.ts', 'middleware.js', 'src/middleware.ts', 'src/middleware.js']) {
-      try {
-        const content = await readFile(resolve(root, name), 'utf-8')
-        const authPatterns = [
-          /getSession/i, /getUser/i, /auth\(\)/, /withAuth/i,
-          /clerkMiddleware/i, /authMiddleware/i, /NextAuth/i,
-          /supabase.*auth/i, /createMiddlewareClient/i,
-          /getToken/i, /verifyToken/i, /jwt/i, /updateSession/i,
-        ]
-        if (authPatterns.some(p => p.test(content))) {
-          hasAuthMiddleware = true
-          authMiddlewareExcludesApi = matcherExcludesApi(content, name)
-          break
-        }
-      } catch {
-        // File doesn't exist
-      }
+  // Check the middleware for auth and rate limiting that cover every route
+  for (const name of MIDDLEWARE_FILES) {
+    let content: string
+    try {
+      content = await readFile(resolve(root, name), 'utf-8')
+    } catch {
+      continue // File doesn't exist
     }
-  } catch {
-    // No middleware
-  }
-
-  // Also check for rate limiting in middleware files if not already detected from deps
-  if (!hasRateLimiting) {
-    for (const name of ['middleware.ts', 'middleware.js', 'src/middleware.ts', 'src/middleware.js']) {
-      try {
-        const content = await readFile(resolve(root, name), 'utf-8')
-        if (/rateLimit/i.test(content) || /throttle/i.test(content)) {
-          hasRateLimiting = true
-          break
-        }
-      } catch {
-        // File doesn't exist
-      }
+    if (MIDDLEWARE_AUTH_PATTERNS.some(p => p.test(content))) {
+      // Its matcher may keep it off /api; with two auth files, both must
+      authMiddlewareExcludesApi = (!hasAuthMiddleware || authMiddlewareExcludesApi) && matcherExcludesApi(content, name)
+      hasAuthMiddleware = true
     }
+    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) hasRateLimiting = true
   }
 
   // Read .gitignore

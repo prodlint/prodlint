@@ -77,6 +77,118 @@ describe('buildProjectContext — dependency discovery', () => {
   })
 })
 
+// Next.js 16 renamed middleware.ts to proxy.ts: the same file, exporting `proxy` or a default
+const CLERK = `import { clerkMiddleware } from '@clerk/nextjs/server'
+
+export default clerkMiddleware()
+
+export const config = {
+  matcher: ['/((?!_next|favicon.ico).*)', '/(api|trpc)(.*)'],
+}
+`
+const SUPABASE = `import { type NextRequest } from 'next/server'
+import { updateSession } from '@/lib/supabase/proxy'
+
+export async function proxy(request: NextRequest) {
+  return await updateSession(request)
+}
+`
+const I18N = `import { NextResponse, type NextRequest } from 'next/server'
+
+export function proxy(request: NextRequest) {
+  if (!request.nextUrl.pathname.startsWith('/en')) {
+    return NextResponse.redirect(new URL('/en' + request.nextUrl.pathname, request.url))
+  }
+}
+`
+const RATE_LIMIT = `import { Ratelimit } from '@upstash/ratelimit'
+import { Redis } from '@upstash/redis'
+import { NextResponse, type NextRequest } from 'next/server'
+
+const ratelimit = new Ratelimit({ redis: Redis.fromEnv(), limiter: Ratelimit.slidingWindow(10, '10 s') })
+
+export async function proxy(request: NextRequest) {
+  const { success } = await ratelimit.limit(request.headers.get('x-forwarded-for') ?? 'anonymous')
+  return success ? NextResponse.next() : new NextResponse('Too many requests', { status: 429 })
+}
+`
+
+// A fresh project per case, so one case's file can't answer for the next
+async function contextOf(files: Record<string, string>) {
+  rmSync(dir, { recursive: true, force: true })
+  for (const [relPath, content] of Object.entries(files)) {
+    mkdirSync(join(dir, relPath, '..'), { recursive: true })
+    writeFileSync(join(dir, relPath), content)
+  }
+  return buildProjectContext(dir, [])
+}
+
+describe('buildProjectContext — middleware and proxy', () => {
+  it('reads auth from middleware or a Next.js 16 proxy, at the root or in src/', async () => {
+    for (const name of ['middleware.ts', 'src/middleware.js', 'proxy.ts', 'proxy.js', 'src/proxy.ts', 'src/proxy.js']) {
+      expect((await contextOf({ [name]: CLERK })).hasAuthMiddleware, name).toBe(true)
+    }
+  })
+
+  it('reads Supabase session handling from a proxy', async () => {
+    expect((await contextOf({ 'src/proxy.ts': SUPABASE })).hasAuthMiddleware).toBe(true)
+  })
+
+  it("recognizes Auth.js's auth exported or called as the proxy or middleware", async () => {
+    const files = {
+      'proxy.ts': "export { auth as proxy } from '@/auth'\n",
+      'middleware.ts': "export { auth as middleware } from '@/auth'\n",
+      'src/middleware.ts': 'export { auth as default } from "./auth";\n\nexport const config = { matcher: ["/((?!api|_next/static).*)"] };\n',
+      'proxy.js': "import { auth } from './auth'\n\nexport default auth((req) => {\n  if (!req.auth) return Response.redirect(new URL('/login', req.nextUrl.origin))\n})\n",
+      // NextAuth v4
+      'src/proxy.js': "export { default } from 'next-auth/middleware'\n",
+    }
+    for (const [name, content] of Object.entries(files)) {
+      expect((await contextOf({ [name]: content })).hasAuthMiddleware, content).toBe(true)
+    }
+  })
+
+  it("doesn't count a proxy that does no auth", async () => {
+    expect((await contextOf({ 'proxy.ts': I18N })).hasAuthMiddleware).toBe(false)
+  })
+
+  it('reads rate limiting from a proxy', async () => {
+    const project = await contextOf({ 'proxy.ts': RATE_LIMIT })
+    expect(project.hasRateLimiting).toBe(true)
+    expect(project.hasAuthMiddleware).toBe(false)
+  })
+
+  it('reads auth and rate limiting from the same proxy', async () => {
+    const project = await contextOf({
+      'src/proxy.ts': `import { clerkMiddleware } from '@clerk/nextjs/server'
+import { Ratelimit } from '@upstash/ratelimit'
+import { Redis } from '@upstash/redis'
+
+const ratelimit = new Ratelimit({ redis: Redis.fromEnv(), limiter: Ratelimit.slidingWindow(10, '10 s') })
+
+export default clerkMiddleware(async (auth, req) => {
+  const { success } = await ratelimit.limit(req.headers.get('x-forwarded-for') ?? 'anonymous')
+  if (!success) return new Response('Too many requests', { status: 429 })
+})
+`,
+    })
+    expect(project.hasAuthMiddleware).toBe(true)
+    expect(project.hasRateLimiting).toBe(true)
+  })
+
+  // Next.js only runs a proxy at the app root or in src/. A helper module named proxy.ts
+  // (Supabase's lib/supabase/proxy.ts) isn't one, and in a monorepo an app's proxy covers
+  // that app alone, so it can't vouch for the rest of the repo.
+  it('only reads the proxy and middleware of the scanned root', async () => {
+    const project = await contextOf({
+      'lib/supabase/proxy.ts': 'export async function updateSession(request) {\n  const { data } = await supabase.auth.getUser()\n}\n',
+      'apps/web/proxy.ts': CLERK,
+      'apps/admin/src/middleware.ts': CLERK,
+    })
+    expect(project.hasAuthMiddleware).toBe(false)
+  })
+})
+
 describe('readFileContext — extensions', () => {
   // extname() sees no extension in `.env` and `local` in `.env.local`, which no rule listed
   it("gives every dotenv file the ext 'env'", async () => {
@@ -97,17 +209,9 @@ describe('readFileContext — extensions', () => {
 describe('buildProjectContext — the auth middleware matcher', () => {
   // Auth.js's middleware, from its edge compatibility guide
   const AUTHJS = "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n"
+  const OFF_API = "\nexport const config = {\n  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],\n}\n"
 
-  // A fresh project per case, so one case's middleware can't answer for the next
-  async function contextWith(files: Record<string, string>) {
-    rmSync(dir, { recursive: true, force: true })
-    for (const [relPath, content] of Object.entries(files)) {
-      mkdirSync(join(dir, relPath, '..'), { recursive: true })
-      writeFileSync(join(dir, relPath), content)
-    }
-    return buildProjectContext(dir, [])
-  }
-  const withConfig = (config: string) => contextWith({ 'middleware.ts': `${AUTHJS}\n${config}\n` })
+  const withConfig = (config: string) => contextOf({ 'middleware.ts': `${AUTHJS}\n${config}\n` })
   const withMatcher = (matcher: string) => withConfig(`export const config = {\n  matcher: ${matcher},\n}`)
 
   it('notes a matcher that keeps the middleware off /api', async () => {
@@ -141,8 +245,40 @@ describe('buildProjectContext — the auth middleware matcher', () => {
     ]) {
       expect((await withConfig(config)).authMiddlewareExcludesApi, config).toBe(true)
     }
-    const project = await contextWith({ 'src/middleware.ts': `${AUTHJS}\nexport const config = { matcher: ${matcher} }\n` })
+    const project = await contextOf({ 'src/middleware.ts': `${AUTHJS}\nexport const config = { matcher: ${matcher} }\n` })
     expect(project.authMiddlewareExcludesApi).toBe(true)
+  })
+
+  it("reads a Next.js 16 proxy's matcher, and Next.js's examples/auth", async () => {
+    for (const [name, content] of Object.entries({
+      'proxy.ts': `export { auth as proxy } from '@/auth'\n${OFF_API}`,
+      'src/proxy.ts': `import { clerkMiddleware } from '@clerk/nextjs/server'\n\nexport default clerkMiddleware()\n${OFF_API}`,
+      // next-js examples/auth/middleware.ts
+      'middleware.ts': 'export { auth as default } from "./auth";\n\n// Optionally, don\'t invoke Middleware on some paths\nexport const config = {\n  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],\n};\n',
+    })) {
+      const project = await contextOf({ [name]: content })
+      expect(project.hasAuthMiddleware, name).toBe(true)
+      expect(project.authMiddlewareExcludesApi, name).toBe(true)
+    }
+    // Clerk's own matcher reaches /api
+    expect((await contextOf({ 'proxy.ts': CLERK })).authMiddlewareExcludesApi).toBe(false)
+  })
+
+  // Next.js runs only one of these files, the one beside app/ or pages/. prodlint doesn't
+  // work out which, so a matcher counts only when every file that does auth keeps off /api.
+  it('needs every middleware file that does auth to keep off /api', async () => {
+    const offApi = `${AUTHJS}${OFF_API}`
+    for (const [files, excludes] of [
+      [{ 'middleware.ts': offApi, 'src/middleware.ts': CLERK }, false],
+      [{ 'middleware.ts': CLERK, 'src/proxy.ts': offApi }, false],
+      [{ 'middleware.ts': offApi, 'proxy.ts': offApi }, true],
+      // a proxy that does no auth doesn't count
+      [{ 'middleware.ts': offApi, 'src/proxy.ts': I18N }, true],
+    ] as const) {
+      const project = await contextOf(files)
+      expect(project.hasAuthMiddleware, Object.keys(files).join(' + ')).toBe(true)
+      expect(project.authMiddlewareExcludesApi, Object.keys(files).join(' + ')).toBe(excludes)
+    }
   })
 
   it("doesn't when the matcher reaches /api", async () => {
@@ -194,7 +330,7 @@ describe('buildProjectContext — the auth middleware matcher', () => {
 
   it('reads the matcher only of middleware that does auth', async () => {
     const i18n = "import createMiddleware from 'next-intl/middleware'\n\nexport default createMiddleware(routing)\n\nexport const config = { matcher: ['/((?!api|_next|_vercel).*)'] }\n"
-    const project = await contextWith({ 'middleware.ts': i18n })
+    const project = await contextOf({ 'middleware.ts': i18n })
     expect(project.hasAuthMiddleware).toBe(false)
     expect(project.authMiddlewareExcludesApi).toBe(false)
   })
