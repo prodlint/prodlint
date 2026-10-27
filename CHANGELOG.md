@@ -19,6 +19,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   scanned folder's own proxy or middleware is read (at its root or in `src/`), so in a
   monorepo, scan the app's folder (`apps/web`) to have its proxy read. **Scan results may
   change** for Next.js 16 apps and apps with Auth.js middleware.
+- **`dead-exports` counted a Next.js 16 `proxy.ts`'s exports as dead.** Next.js 16 renamed
+  `middleware.ts` to `proxy.ts`. The rule skips Next.js's special files by name, but it
+  didn't know the new one, so a proxy's `proxy` and `config` exports counted toward the
+  rule's threshold even though Next.js itself uses them. `proxy.(ts|tsx|js|jsx)` is now
+  skipped where Next.js runs it: the scanned root, a folder with its own `package.json`
+  (an app in a monorepo), or either one's `src/`. Anywhere else `proxy` is an ordinary
+  module name, so a file like Supabase's `lib/supabase/proxy.ts` session helper is still
+  checked.
 
 ## [0.10.4] - 2026-10-26
 
