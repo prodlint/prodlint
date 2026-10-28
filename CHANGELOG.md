@@ -14,11 +14,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   auth now: `export { auth as proxy } from '@/auth'` (or `as middleware`, `as default`),
   `export default auth((req) => …)`, and NextAuth v4's `export { default } from
   'next-auth/middleware'`. When one of these files does auth, `auth-checks` rates unchecked
-  routes info, not critical, and `server-action-auth` doesn't report; when it rate-limits,
-  `rate-limiting` doesn't report. That's what a `middleware.ts` already did. Only the
-  scanned folder's own proxy or middleware is read (at its root or in `src/`), so in a
-  monorepo, scan the app's folder (`apps/web`) to have its proxy read. **Scan results may
-  change** for Next.js 16 apps and apps with Auth.js middleware.
+  routes info, not critical, and `server-action-auth` rates unchecked actions info, not
+  warning; when it rate-limits, `rate-limiting` doesn't report. That's what a
+  `middleware.ts` does. Only the scanned folder's own proxy or middleware is read (at its
+  root or in `src/`), so in a monorepo, scan the app's folder (`apps/web`) to have its
+  proxy read. **Scan results may change** for Next.js 16 apps and apps with Auth.js
+  middleware.
+- **`server-action-auth` went silent for the whole project once it found auth middleware.**
+  A `middleware.ts` that mentions an auth library (`clerkMiddleware()`, Supabase's
+  `updateSession`, `getToken`) turned the rule off, but that doesn't show the middleware
+  guards the pages an action is posted to: `clerkMiddleware()` makes no route private by
+  default, and middleware lets public pages through. Next.js's authentication guide says
+  not to rely on middleware alone, and to treat server actions like public API endpoints
+  that check the user themselves. So when auth middleware is detected, a mutating server
+  action with no auth check of its own is now reported at info ("middleware auth detected —
+  verify coverage"), the way `auth-checks` already treats API routes. Without auth
+  middleware it's still a warning. **Scan results may change** for apps with auth
+  middleware: new info findings.
 - **`dead-exports` counted a Next.js 16 `proxy.ts`'s exports as dead.** Next.js 16 renamed
   `middleware.ts` to `proxy.ts`. The rule skips Next.js's special files by name, but it
   didn't know the new one, so a proxy's `proxy` and `config` exports counted toward the

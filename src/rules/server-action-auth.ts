@@ -52,7 +52,6 @@ export const serverActionAuthRule: Rule = {
   check(file: FileContext, project: ProjectContext): Finding[] {
     if (isTestFile(file.relativePath)) return []
     if (!USE_SERVER.test(file.content)) return []
-    if (project.hasAuthMiddleware) return []
 
     // Check if path suggests public actions
     for (const p of PUBLIC_ACTION_NAMES) {
@@ -77,15 +76,25 @@ export const serverActionAuthRule: Rule = {
       }
     }
 
+    // Auth middleware lowers the severity but doesn't clear the finding. An action is a POST
+    // to a page path, and middleware lets public pages through (clerkMiddleware() makes none
+    // private by default). Next.js's auth guide says not to rely on middleware alone, and to
+    // treat server actions like public API endpoints that check the user themselves.
+    const middleware = project.hasAuthMiddleware
+
     return [{
       ruleId: 'server-action-auth',
       file: file.relativePath,
       line: reportLine,
       column: 1,
-      message: 'Server action performs mutations without any authentication check — anyone can call this action',
-      severity: 'warning',
+      message: middleware
+        ? 'Server action performs mutations without an inline auth check (middleware auth detected — verify coverage)'
+        : 'Server action performs mutations without any authentication check — anyone can call this action',
+      severity: middleware ? 'info' : 'warning',
       category: 'security',
-      fix: 'Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")',
+      fix: middleware
+        ? 'Check the user in the action too, not only in middleware: const session = await auth(); if (!session) throw new Error("Unauthorized")'
+        : 'Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")',
     }]
   },
 }
