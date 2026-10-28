@@ -8,7 +8,10 @@ function isEntryPoint(relativePath: string, appRoots: Set<string>): boolean {
     isBarrel(relativePath) ||
     name === 'global-error.tsx' ||
     name === 'global-error.jsx' ||
-    isNextProxy(relativePath, appRoots)
+    // SvelteKit's route files: +page.ts, +page.server.ts, +layout.ts, +server.ts
+    /^\+(page|layout|server)(\.server)?\.(ts|js)$/.test(name) ||
+    isNextProxy(relativePath, appRoots) ||
+    isPagesRoute(relativePath, appRoots)
 }
 
 /** An index file: its exports are skipped, but what it re-exports counts only when imported */
@@ -16,14 +19,25 @@ function isBarrel(relativePath: string): boolean {
   return /(?:^|\/)index\.(tsx?|jsx?)$/.test(relativePath)
 }
 
+/** An app root or its src/: where Next.js looks for its special files and folders */
+function isAppFolder(dir: string, appRoots: Set<string>): boolean {
+  return appRoots.has(dir) || appRoots.has(dir.replace(/(?:^|\/)src$/, ''))
+}
+
 // Next.js 16's middleware. Next.js runs it only from an app root or the root's src/, so the
 // name is exempt only there. Elsewhere `proxy` is an ordinary module whose exports count,
 // like the session helper in Supabase's lib/supabase/proxy.ts.
 function isNextProxy(relativePath: string, appRoots: Set<string>): boolean {
   const match = /^(?:(.*)\/)?proxy\.(tsx?|jsx?)$/.exec(relativePath)
-  if (!match) return false
-  const dir = match[1] ?? ''
-  return appRoots.has(dir) || appRoots.has(dir.replace(/(?:^|\/)src$/, ''))
+  return match !== null && isAppFolder(match[1] ?? '', appRoots)
+}
+
+// The Pages Router: every module under an app root's pages/ (or src/pages/) is a route. A
+// pages/ folder anywhere else, like components/pages/, is an ordinary one.
+function isPagesRoute(relativePath: string, appRoots: Set<string>): boolean {
+  if (!/\.(tsx?|jsx?)$/.test(relativePath)) return false
+  const parts = relativePath.split('/')
+  return parts.some((part, i) => part === 'pages' && isAppFolder(parts.slice(0, i).join('/'), appRoots))
 }
 
 /** The scanned root (`''`) and every folder with a package.json: where an app can live */

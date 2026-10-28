@@ -447,6 +447,49 @@ describe('dead-exports rule', () => {
     })
   })
 
+  // The Pages Router: Next.js routes every module under pages/ (or src/pages/) at an app's root,
+  // and reads their exports itself: the page, getServerSideProps, an API route's config
+  describe('Next.js Pages Router', () => {
+    const route = (relativePath: string) => makeFile(
+      'export const config = { api: { bodyParser: false } }\nexport async function getServerSideProps() {}',
+      { relativePath },
+    )
+    const monorepo = makeProject({ allFiles: ['package.json', 'apps/web/package.json'] })
+
+    it.each(['pages/api/upload.ts', 'pages/blog/[slug].tsx', 'src/pages/_app.tsx', 'apps/web/pages/settings.tsx'])(
+      'skips %s',
+      (path) => {
+        expect(deadByFile([route(path)], monorepo)).toEqual({})
+      },
+    )
+
+    it.each(['components/pages/home.tsx', 'apps/web/lib/pages/auth.ts', 'apps/docs/pages/index-helpers.ts'])(
+      'still checks %s',
+      (path) => {
+        expect(deadByFile([route(path)], monorepo)).toEqual({ [path]: 2 })
+      },
+    )
+
+    // calcom's pages/api/integrations/*/webhook.ts are `export { default } from '…'` and a config
+    it('counts what a route re-exports', () => {
+      const webhook = makeFile(
+        'export const config = {}\nexport function verifySignature() {}\nconst handler = () => {}\nexport { handler as default }',
+        { relativePath: 'lib/webhook.ts' },
+      )
+      const shim = makeFile(`export { default, config } from '@/lib/webhook'`, { relativePath: 'pages/api/webhook.ts' })
+      expect(deadByFile([webhook, shim])).toEqual({ 'lib/webhook.ts': 1 })
+    })
+  })
+
+  // SvelteKit keeps the + prefix for its route files, and reads their exports itself
+  it.each(['src/routes/+page.server.ts', 'src/routes/+layout.ts', 'src/routes/api/+server.js'])(
+    'skips SvelteKit route file %s',
+    (path) => {
+      const file = makeFile('export const load = async () => ({})\nexport const GET = async () => new Response()', { relativePath: path })
+      expect(deadByFile([file])).toEqual({})
+    },
+  )
+
   // Next.js 16 renamed middleware.ts to proxy.ts. Next.js imports its `proxy` and `config`
   // itself, but only from an app's root or its src/.
   describe('Next.js 16 proxy', () => {

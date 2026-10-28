@@ -72,6 +72,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `bin`, read back from `dist/` to `src/`), whose exports are its API. **Scan results will
   change:** `dead-exports` counts go up where a same-named import hid dead exports, and
   down where exports are used through `import()` or a published package's entry point.
+- **`dead-exports` counted the exports of Pages Router and SvelteKit routes.** Next.js
+  reads a Pages Router route's exports itself (`getServerSideProps`, `getStaticProps`, an
+  API route's `config`), but only the App Router's special files were skipped. Every module
+  under `pages/` or `src/pages/` at an app root (the scanned root, or a folder with its own
+  `package.json`) is now skipped, and so are SvelteKit's `+page`, `+layout` and `+server`
+  files. A `pages/` folder anywhere else, like `components/pages/`, is still checked.
+  **Scan results may change** for apps that use either.
 
 ## [0.10.4] - 2026-10-26
 
