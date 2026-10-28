@@ -79,8 +79,10 @@ export const serverActionAuthRule: Rule = {
     // Auth middleware lowers the severity but doesn't clear the finding. An action is a POST
     // to a page path, and middleware lets public pages through (clerkMiddleware() makes none
     // private by default). Next.js's auth guide says not to rely on middleware alone, and to
-    // treat server actions like public API endpoints that check the user themselves.
-    const middleware = project.hasAuthMiddleware
+    // treat server actions like public API endpoints that check the user themselves. A
+    // matcher that keeps the middleware on /api means it never runs on those POSTs.
+    const middlewareSkipsPages = project.hasAuthMiddleware && project.authMiddlewareExcludesPages === true
+    const middleware = project.hasAuthMiddleware && !middlewareSkipsPages
 
     return [{
       ruleId: 'server-action-auth',
@@ -89,7 +91,9 @@ export const serverActionAuthRule: Rule = {
       column: 1,
       message: middleware
         ? 'Server action performs mutations without an inline auth check (middleware auth detected — verify coverage)'
-        : 'Server action performs mutations without any authentication check — anyone can call this action',
+        : middlewareSkipsPages
+          ? "Server action performs mutations without any authentication check (middleware auth detected, but its matcher doesn't cover pages)"
+          : 'Server action performs mutations without any authentication check — anyone can call this action',
       severity: middleware ? 'info' : 'warning',
       category: 'security',
       fix: middleware

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (891 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (898 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -92,13 +92,14 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 
 **`src/utils/middleware-matcher.ts`** — Next.js middleware `config.matcher`:
 - `matcherExcludesApi(content, fileName)` — reads a literal `export const config = { matcher }` and compiles each source as Next.js does (a port of path-to-regexp 6.3.0). True only when no source can reach a path under /api; no matcher or an unreadable one is false. Sets `ProjectContext.authMiddlewareExcludesApi`, which auth-checks uses to stop downgrading `app/api/**` and `pages/api/**`
+- `matcherExcludesPages(content, fileName)` — the mirror: true only when no source can reach a path outside /api, which only a literal start (`/api/…`) can pin; no matcher or an unreadable one is false. Sets `ProjectContext.authMiddlewareExcludesPages`, which server-action-auth uses to keep its warning, since an action is posted to the page that calls it
 
 ### Key Patterns
 
 - **Comment skipping**: All rules use `file.commentMap` (precomputed block comment map) + `isCommentLine()` to skip comments
 - **Suppression**: `// prodlint-disable <ruleId>` (file-level) and `// prodlint-disable-next-line <ruleId>` (line-level), checked in `src/utils/patterns.ts`
 - **Context-aware severity**: Some rules downgrade severity based on project context (e.g., auth-checks and server-action-auth → info, not cleared, if auth middleware is detected)
-- **Middleware detection**: `hasAuthMiddleware` / the middleware half of `hasRateLimiting` come from `middleware.(ts|js)` or Next.js 16's `proxy.(ts|js)`, at the scanned root or in `src/` only. A monorepo app's own middleware (`apps/web/proxy.ts`) isn't read, so it can't vouch for the rest of the repo. `authMiddlewareExcludesApi` comes from the same files' `config.matcher`; when two of them do auth, both matchers must keep off /api
+- **Middleware detection**: `hasAuthMiddleware` / the middleware half of `hasRateLimiting` come from `middleware.(ts|js)` or Next.js 16's `proxy.(ts|js)`, at the scanned root or in `src/` only. A monorepo app's own middleware (`apps/web/proxy.ts`) isn't read, so it can't vouch for the rest of the repo. `authMiddlewareExcludesApi` and `authMiddlewareExcludesPages` come from the same files' `config.matcher`; when two of them do auth, both matchers must agree
 - **Threshold aggregation**: Rules like ai-smells count occurrences across a file, report once at line 1 if threshold exceeded
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
