@@ -14,12 +14,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   auth now: `export { auth as proxy } from '@/auth'` (or `as middleware`, `as default`),
   `export default auth((req) => …)`, and NextAuth v4's `export { default } from
   'next-auth/middleware'`. When one of these files does auth, `auth-checks` rates unchecked
-  routes info, not critical, and `server-action-auth` rates unchecked actions info, not
-  warning; when it rate-limits, `rate-limiting` doesn't report. That's what a
-  `middleware.ts` does. Only the scanned folder's own proxy or middleware is read (at its
-  root or in `src/`), so in a monorepo, scan the app's folder (`apps/web`) to have its
-  proxy read. **Scan results may change** for Next.js 16 apps and apps with Auth.js
-  middleware.
+  routes info, not critical (unless its matcher leaves out /api; see below), and
+  `server-action-auth` rates unchecked actions info, not warning; when it rate-limits,
+  `rate-limiting` doesn't report. That's what a `middleware.ts` does. Only the scanned
+  folder's own proxy or middleware is read (at its root or in `src/`), so in a monorepo,
+  scan the app's folder (`apps/web`) to have its proxy read. **Scan results may change**
+  for Next.js 16 apps and apps with Auth.js middleware.
+- **`auth-checks` downgraded API routes that the auth middleware never runs on.** When
+  `middleware.ts` did auth, every unchecked route was rated info ("middleware auth detected
+  — verify coverage"), whatever the middleware's `config.matcher` said. Many matchers
+  leave out /api: Auth.js's documented `/((?!api|_next/static|_next/image|favicon.ico).*)`,
+  dub's `/((?!api/|_next/|…).*)`, or a list of the pages the middleware guards
+  (`['/dashboard/:path*']`). prodlint now reads a literal `export const config = { matcher }`
+  in `middleware.ts` or `proxy.ts` and compiles it the way Next.js does. When no part of
+  the matcher can reach a path under /api/, the routes there (`app/api/**/route.ts`,
+  `pages/api/**`) are rated as they would be with no middleware: an unchecked mutation is
+  critical again, and the message says the matcher excludes /api. Route handlers elsewhere
+  keep the downgrade. A matcher that reaches any of /api (`/api/:path*`, Clerk's
+  `/(api|trpc)(.*)`), one that isn't a literal, and middleware with no matcher keep
+  today's rating. `ProjectContext` has a new optional field, `authMiddlewareExcludesApi`.
+  **Scan results may change** for apps whose auth middleware skips /api.
 - **`server-action-auth` went silent for the whole project once it found auth middleware.**
   A `middleware.ts` that mentions an auth library (`clerkMiddleware()`, Supabase's
   `updateSession`, `getToken`) turned the rule off, but that doesn't show the middleware

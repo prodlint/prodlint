@@ -204,3 +204,134 @@ describe('readFileContext — extensions', () => {
     expect((await readFileContext(dir, '.env.example.ts'))?.ext).toBe('ts')
   })
 })
+
+// Next.js runs middleware only on the paths its config.matcher matches
+describe('buildProjectContext — the auth middleware matcher', () => {
+  // Auth.js's middleware, from its edge compatibility guide
+  const AUTHJS = "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n"
+  const OFF_API = "\nexport const config = {\n  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],\n}\n"
+
+  const withConfig = (config: string) => contextOf({ 'middleware.ts': `${AUTHJS}\n${config}\n` })
+  const withMatcher = (matcher: string) => withConfig(`export const config = {\n  matcher: ${matcher},\n}`)
+
+  it('notes a matcher that keeps the middleware off /api', async () => {
+    for (const matcher of [
+      // Auth.js's docs and Next.js's examples/auth
+      "['/((?!api|_next/static|_next/image|favicon.ico).*)']",
+      // dub's apps/web/middleware.ts
+      "['/((?!api/|_next/|_proxy/|favicon.ico|sitemap.xml|robots.txt|manifest.webmanifest).*)']",
+      // next-intl's
+      String.raw`'/((?!api|_next|_vercel|.*\\..*).*)'`,
+      // only the pages it guards
+      "['/dashboard/:path*', '/settings/:path*']",
+      "['/dashboard/:path*', '/settings/api-keys']",
+      "'/dashboard/:path*'",
+      "['/', '/account/:path*']",
+      // the object form, and a template literal
+      "[{ source: '/((?!api|_next/static|_next/image|favicon.ico).*)', missing: [{ type: 'header', key: 'next-router-prefetch' }] }]",
+      '[`/((?!api|_next/static|_next/image|favicon.ico).*)`]',
+    ]) {
+      const project = await withMatcher(matcher)
+      expect(project.hasAuthMiddleware, matcher).toBe(true)
+      expect(project.authMiddlewareExcludesApi, matcher).toBe(true)
+    }
+  })
+
+  it('reads a typed config, and middleware in src/', async () => {
+    const matcher = "['/((?!api|_next/static|_next/image|favicon.ico).*)']"
+    for (const config of [
+      `export const config: MiddlewareConfig = { matcher: ${matcher} }`,
+      `export const config = { matcher: ${matcher} } satisfies MiddlewareConfig`,
+    ]) {
+      expect((await withConfig(config)).authMiddlewareExcludesApi, config).toBe(true)
+    }
+    const project = await contextOf({ 'src/middleware.ts': `${AUTHJS}\nexport const config = { matcher: ${matcher} }\n` })
+    expect(project.authMiddlewareExcludesApi).toBe(true)
+  })
+
+  it("reads a Next.js 16 proxy's matcher, and Next.js's examples/auth", async () => {
+    for (const [name, content] of Object.entries({
+      'proxy.ts': `export { auth as proxy } from '@/auth'\n${OFF_API}`,
+      'src/proxy.ts': `import { clerkMiddleware } from '@clerk/nextjs/server'\n\nexport default clerkMiddleware()\n${OFF_API}`,
+      // next-js examples/auth/middleware.ts
+      'middleware.ts': 'export { auth as default } from "./auth";\n\n// Optionally, don\'t invoke Middleware on some paths\nexport const config = {\n  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],\n};\n',
+    })) {
+      const project = await contextOf({ [name]: content })
+      expect(project.hasAuthMiddleware, name).toBe(true)
+      expect(project.authMiddlewareExcludesApi, name).toBe(true)
+    }
+    // Clerk's own matcher reaches /api
+    expect((await contextOf({ 'proxy.ts': CLERK })).authMiddlewareExcludesApi).toBe(false)
+  })
+
+  // Next.js runs only one of these files, the one beside app/ or pages/. prodlint doesn't
+  // work out which, so a matcher counts only when every file that does auth keeps off /api.
+  it('needs every middleware file that does auth to keep off /api', async () => {
+    const offApi = `${AUTHJS}${OFF_API}`
+    for (const [files, excludes] of [
+      [{ 'middleware.ts': offApi, 'src/middleware.ts': CLERK }, false],
+      [{ 'middleware.ts': CLERK, 'src/proxy.ts': offApi }, false],
+      [{ 'middleware.ts': offApi, 'proxy.ts': offApi }, true],
+      // a proxy that does no auth doesn't count
+      [{ 'middleware.ts': offApi, 'src/proxy.ts': I18N }, true],
+    ] as const) {
+      const project = await contextOf(files)
+      expect(project.hasAuthMiddleware, Object.keys(files).join(' + ')).toBe(true)
+      expect(project.authMiddlewareExcludesApi, Object.keys(files).join(' + ')).toBe(excludes)
+    }
+  })
+
+  it("doesn't when the matcher reaches /api", async () => {
+    for (const matcher of [
+      // Clerk's
+      String.raw`['/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)', '/(api|trpc)(.*)']`,
+      // Supabase's
+      String.raw`['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)']`,
+      "'/api/:path*'",
+      "['/dashboard/:path*', '/api/:path*']",
+      // part of /api: the routes it reaches are covered
+      "['/dashboard/:path*', '/api/admin/:path*']",
+      "['/(dashboard|api/admin)/:path*']",
+      // cal.com's API proxy: /api/bookings/_get, but not /api/bookings
+      "['/:path*/_get', '/:path*/_post']",
+      // only Auth.js's own routes are left out
+      "['/((?!api/auth|_next/static|_next/image|favicon.ico).*)']",
+      "'/:path*'",
+      "'/(.*)'",
+    ]) {
+      const project = await withMatcher(matcher)
+      expect(project.hasAuthMiddleware, matcher).toBe(true)
+      expect(project.authMiddlewareExcludesApi, matcher).toBe(false)
+    }
+  })
+
+  // Middleware with no matcher runs on every path. When the matcher can't be read, it's
+  // taken to as well, as before.
+  it("doesn't when there's no matcher, or it can't be read", async () => {
+    for (const config of [
+      '',
+      "// export const config = { matcher: ['/dashboard/:path*'] }",
+      "export const config = { runtime: 'nodejs' }",
+      // Next.js reads only an exported const
+      "const config = { matcher: ['/dashboard/:path*'] }\nexport { config }",
+      'export const config = { matcher: PROTECTED_PATHS }',
+      "export const config = { matcher: [...PROTECTED_PATHS, '/settings/:path*'] }",
+      'export const config = { matcher: [`/${BASE}/:path*`] }',
+      'export const config = makeConfig()',
+      // sources Next.js rejects
+      "export const config = { matcher: ['/((?!api).*'] }",
+      "export const config = { matcher: ['dashboard/:path*'] }",
+    ]) {
+      const project = await withConfig(config)
+      expect(project.hasAuthMiddleware, config).toBe(true)
+      expect(project.authMiddlewareExcludesApi, config).toBe(false)
+    }
+  })
+
+  it('reads the matcher only of middleware that does auth', async () => {
+    const i18n = "import createMiddleware from 'next-intl/middleware'\n\nexport default createMiddleware(routing)\n\nexport const config = { matcher: ['/((?!api|_next|_vercel).*)'] }\n"
+    const project = await contextOf({ 'middleware.ts': i18n })
+    expect(project.hasAuthMiddleware).toBe(false)
+    expect(project.authMiddlewareExcludesApi).toBe(false)
+  })
+})

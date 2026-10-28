@@ -29,6 +29,8 @@ export interface ProjectContext {
   declaredDependencies: Set<string>
   tsconfigPaths: Set<string>
   hasAuthMiddleware: boolean
+  /** The auth middleware's `config.matcher` keeps it off /api, so it doesn't cover API routes */
+  authMiddlewareExcludesApi?: boolean
   hasRateLimiting: boolean
   detectedFrameworks: Set<string>
   gitignoreContent: string | null
