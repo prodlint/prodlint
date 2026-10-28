@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { deadExportsRule } from '../../src/rules/dead-exports.js'
+import type { FileContext, ProjectContext } from '../../src/types.js'
 import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
@@ -206,6 +207,311 @@ describe('dead-exports rule', () => {
 
     const findings = deadExportsRule.checkProject!([sixExports, consumer], project)
     expect(findings).toHaveLength(0)
+  })
+
+  // lib/padding.ts's five unused exports put every check over the threshold, so the finding
+  // lists each file that has dead exports, with its count
+  const padding = makeFile(
+    ['one', 'two', 'three', 'four', 'five'].map(n => `export const ${n} = 1`).join('\n'),
+    { relativePath: 'lib/padding.ts' },
+  )
+
+  /** File → its dead exports, read from the finding; lib/padding.ts is left out */
+  const deadByFile = (files: FileContext[], proj: ProjectContext = project): Record<string, number> => {
+    const [finding] = deadExportsRule.checkProject!([padding, ...files], proj)
+    const listed = finding.message.split('Top files: ')[1]
+    return Object.fromEntries([...listed.matchAll(/(\S+) \((\d+)\)/g)]
+      .filter(m => m[1] !== 'lib/padding.ts')
+      .map(m => [m[1], Number(m[2])]))
+  }
+
+  // Which imports use which exports
+  describe('import resolution', () => {
+    it('does not count a package import as using a project export of the same name', () => {
+      const store = makeFile('export const proxy = (value) => value', { relativePath: 'lib/store.ts' })
+      const consumer = makeFile(`import { proxy } from 'valtio'`, { relativePath: 'app/state.ts' })
+      const withValtio = makeProject({ declaredDependencies: new Set(['valtio']) })
+      expect(deadByFile([store, consumer], withValtio)).toEqual({ 'lib/store.ts': 1 })
+    })
+
+    it.each(['node:path', 'path', 'npm:pathe', 'https://deno.land/std/path/mod.ts'])(
+      'does not count an import from %s as using a project export',
+      (source) => {
+        const paths = makeFile('export function join() {}', { relativePath: 'lib/paths.ts' })
+        const consumer = makeFile(`import { join } from '${source}'`, { relativePath: 'app/files.ts' })
+        expect(deadByFile([paths, consumer])).toEqual({ 'lib/paths.ts': 1 })
+      },
+    )
+
+    it('does not count an import as using a same-named export in another file', () => {
+      const config = makeFile('export const config = { retries: 3 }', { relativePath: 'lib/config.ts' })
+      const upload = makeFile('export const config = { maxSize: 10 }', { relativePath: 'lib/upload.ts' })
+      const consumer = makeFile(`import { config } from './config'`, { relativePath: 'lib/client.ts' })
+      expect(deadByFile([config, upload, consumer])).toEqual({ 'lib/upload.ts': 1 })
+    })
+
+    it('resolves a relative import to one file, not to every file with that name', () => {
+      const web = makeFile('export function format() {}', { relativePath: 'apps/web/lib/utils.ts' })
+      const docs = makeFile('export function format() {}', { relativePath: 'apps/docs/lib/utils.ts' })
+      const consumer = makeFile(`import { format } from '../lib/utils'`, { relativePath: 'apps/web/components/date.tsx' })
+      expect(deadByFile([web, docs, consumer])).toEqual({ 'apps/docs/lib/utils.ts': 1 })
+    })
+
+    it('matches an @/ import by its path, not just its file name', () => {
+      const web = makeFile('export function format() {}', { relativePath: 'apps/web/lib/utils.ts' })
+      const ui = makeFile('export function format() {}', { relativePath: 'packages/ui/src/utils.ts' })
+      const consumer = makeFile(`import { format } from '@/lib/utils'`, { relativePath: 'apps/web/components/date.tsx' })
+      expect(deadByFile([web, ui, consumer])).toEqual({ 'packages/ui/src/utils.ts': 1 })
+    })
+
+    it.each([
+      { source: './format.js', path: 'lib/format.ts', from: 'lib/date.ts' }, // TypeScript's ESM style
+      { source: './format', path: 'lib/format.tsx', from: 'lib/date.ts' },
+      { source: '../lib/format', path: 'lib/format.ts', from: 'app/date.ts' },
+      { source: '@/lib/format', path: 'src/lib/format.ts', from: 'src/app/date.ts' },
+      { source: '~/lib/format', path: 'lib/format.ts', from: 'app/date.ts' },
+      { source: '@components/format', path: 'src/components/format.ts', from: 'src/app/date.ts' },
+      { source: 'components/format', path: 'src/components/format.ts', from: 'src/app/date.ts' }, // baseUrl
+    ])('counts an import from $source in $from as using $path', ({ source, path, from }) => {
+      const format = makeFile('export function format() {}', { relativePath: path })
+      const consumer = makeFile(`import { format } from '${source}'`, { relativePath: from })
+      expect(deadByFile([format, consumer])).toEqual({})
+    })
+
+    it('counts a default import as using the export of the same name', () => {
+      // export const Chart … export default Chart
+      const chart = makeFile('export const Chart = () => null\nexport default Chart', { relativePath: 'lib/chart.ts' })
+      const consumer = makeFile(`import Chart from './chart'`, { relativePath: 'lib/report.ts' })
+      expect(deadByFile([chart, consumer])).toEqual({})
+    })
+
+    describe('modules loaded with import() or require()', () => {
+      const chart = makeFile('export function renderChart() {}\nexport class Chart {}', { relativePath: 'lib/chart.ts' })
+      const load = (code: string) => deadByFile([chart, makeFile(code, { relativePath: 'lib/report.ts' })])
+
+      it.each([
+        `const chart = await import('./chart')`,
+        `const Chart = dynamic(() => import('@/lib/chart').then(m => m.Chart))`,
+        `const chart = require('./chart')`,
+      ])('counts every export of the module for %s', (code) => {
+        expect(load(code)).toEqual({})
+      })
+
+      it.each([
+        `const { renderChart } = await import('./chart')`,
+        `const { renderChart: render } = require('./chart')`,
+        `require('./chart').renderChart()`,
+        `/** @type {import('./chart').Chart} */`,
+      ])('counts just the export it names for %s', (code) => {
+        expect(load(code)).toEqual({ 'lib/chart.ts': 1 })
+      })
+
+      it('counts nothing for typeof import(), a type', () => {
+        expect(load(`type ChartModule = typeof import('./chart')`)).toEqual({ 'lib/chart.ts': 2 })
+      })
+
+      // shadcn/ui loads its icon sets with import(`./__${libraryName}__`)
+      it('counts every module a template literal can load', () => {
+        const files = [
+          makeFile('export const ArrowIcon = 1\nexport const CheckIcon = 2', { relativePath: 'registry/icons/__lucide__.ts' }),
+          makeFile('export const ArrowIcon = 1', { relativePath: 'registry/icons/__tabler__.ts' }),
+          makeFile('export function iconName() {}', { relativePath: 'registry/icons/names.ts' }),
+          makeFile('const load = (library) => import(`./__${library}__`)', { relativePath: 'registry/icons/loader.tsx' }),
+        ]
+        expect(deadByFile(files)).toEqual({ 'registry/icons/names.ts': 1 })
+      })
+    })
+
+    it('still counts a name imported from a source no scanned file matches', () => {
+      // '@acme/ui' is neither a declared dependency nor a package in the scan: an alias, say
+      const button = makeFile('export function Button() {}', { relativePath: 'packages/ui/src/button.tsx' })
+      const consumer = makeFile(`import { Button } from '@acme/ui'`, { relativePath: 'app/form.tsx' })
+      expect(deadByFile([button, consumer])).toEqual({})
+    })
+
+    // fumadocs generates .source/, which re-exports source.config.ts; a scan seldom has it
+    it.each(['@/.source', './.source'])('still counts a name imported from a generated folder, %s', (source) => {
+      const config = makeFile('export const docs = defineDocs({ dir: "content" })', { relativePath: 'source.config.ts' })
+      const consumer = makeFile(`import { docs } from '${source}'`, { relativePath: 'lib/source.ts' })
+      expect(deadByFile([config, consumer])).toEqual({})
+    })
+
+    // create-t3-app's templates import ~/server/api/trpc, the file they become once generated
+    it('still counts a name anywhere when an alias matches a file name but none of its folders', () => {
+      const installer = makeFile('export const trpcInstaller = 1', { relativePath: 'cli/src/installers/trpc.ts' })
+      const template = makeFile('export const createTRPCRouter = 1', { relativePath: 'cli/template/src/server/api/trpc-base.ts' })
+      const consumer = makeFile(`import { createTRPCRouter } from '~/server/api/trpc'`, { relativePath: 'cli/template/src/server/api/root.ts' })
+      expect(deadByFile([installer, template, consumer])).toEqual({ 'cli/src/installers/trpc.ts': 1 })
+    })
+
+    describe('package entry points', () => {
+      const client = makeFile('export function createClient() {}\nexport function internalHelper() {}', { relativePath: 'packages/sdk/src/client.ts' })
+      const index = makeFile(`export { createClient } from './client'`, { relativePath: 'packages/sdk/src/index.ts' })
+      const manifest = (fields: Record<string, unknown>) =>
+        makeFile(JSON.stringify({ name: '@acme/sdk', ...fields }), { relativePath: 'packages/sdk/package.json' })
+
+      // Built from src/: dist/index.js stands for src/index.ts
+      it.each([
+        { main: './dist/index.js' },
+        { exports: { '.': { types: './dist/index.d.ts', import: './dist/index.mjs' } } },
+        { types: './dist/index.d.ts' },
+      ])('counts what a published package re-exports from its entry point, given %j', (fields) => {
+        expect(deadByFile([manifest(fields), index, client])).toEqual({ 'packages/sdk/src/client.ts': 1 })
+      })
+
+      it('skips the exports of a published package entry point that is no index file', () => {
+        const sdk = makeFile('export function createClient() {}', { relativePath: 'packages/sdk/src/sdk.ts' })
+        expect(deadByFile([manifest({ exports: { '.': './dist/sdk.js' } }), sdk])).toEqual({})
+      })
+
+      // A workspace's own packages: private, or naming TypeScript source no npm user could run.
+      // What their index re-exports counts once something imports it
+      it.each([{ private: true, main: './dist/index.js' }, { main: './src/index.ts' }, {}])(
+        'counts the re-exports of a package entry point only as far as something imports them, given %j',
+        (fields) => {
+          expect(deadByFile([manifest(fields), index, client])).toEqual({ 'packages/sdk/src/client.ts': 2 })
+        },
+      )
+    })
+
+    it('counts what a Next.js route re-exports, since Next.js imports the route', () => {
+      const auth = makeFile('export const GET = 1\nexport const POST = 2\nexport const authOptions = {}', { relativePath: 'lib/auth.ts' })
+      const route = makeFile(`export { GET, POST } from '@/lib/auth'`, { relativePath: 'app/api/auth/[...nextauth]/route.ts' })
+      expect(deadByFile([auth, route])).toEqual({ 'lib/auth.ts': 1 })
+    })
+
+    it('counts an import from a workspace package against that package only', () => {
+      const files = [
+        makeFile(JSON.stringify({ name: '@acme/ui' }), { relativePath: 'packages/ui/package.json' }),
+        makeFile(`export * from './button'`, { relativePath: 'packages/ui/src/index.ts' }),
+        makeFile('export function Button() {}', { relativePath: 'packages/ui/src/button.tsx' }),
+        makeFile('export function Button() {}', { relativePath: 'apps/web/components/button.tsx' }),
+        makeFile(`import { Button } from '@acme/ui'`, { relativePath: 'apps/web/app/form.tsx' }),
+      ]
+      // A scan declares workspace packages as dependencies too
+      const withUi = makeProject({ declaredDependencies: new Set(['@acme/ui']) })
+      expect(deadByFile(files, withUi)).toEqual({ 'apps/web/components/button.tsx': 1 })
+    })
+
+    describe('re-exports', () => {
+      const lib = [
+        makeFile([
+          `export { alpha } from './alpha'`,
+          `export { internal as beta } from './beta'`,
+          `export * from './gamma'`,
+          `export * as delta from './delta'`,
+        ].join('\n'), { relativePath: 'lib/index.ts' }),
+        makeFile('export const alpha = 1\nexport const alphaHelper = 2', { relativePath: 'lib/alpha.ts' }),
+        makeFile('export const internal = 1', { relativePath: 'lib/beta.ts' }),
+        makeFile('export const gamma = 1\nexport const gammaHelper = 2', { relativePath: 'lib/gamma.ts' }),
+        makeFile('export const d1 = 1\nexport const d2 = 2', { relativePath: 'lib/delta.ts' }),
+      ]
+
+      it.each(['@/lib', '../lib'])('follows a barrel imported as %s to the modules it re-exports', (source) => {
+        const consumer = makeFile(`import { alpha, beta, gamma, delta } from '${source}'`, { relativePath: 'app/data.ts' })
+        expect(deadByFile([...lib, consumer])).toEqual({ 'lib/alpha.ts': 1, 'lib/gamma.ts': 1 })
+      })
+
+      it('counts no re-exported name that nothing imports through the barrel', () => {
+        const consumer = makeFile(`import { alpha, gamma } from 'valtio'`, { relativePath: 'app/data.ts' })
+        const withValtio = makeProject({ declaredDependencies: new Set(['valtio']) })
+        expect(deadByFile([...lib, consumer], withValtio))
+          .toEqual({ 'lib/alpha.ts': 2, 'lib/beta.ts': 1, 'lib/gamma.ts': 2, 'lib/delta.ts': 2 })
+      })
+
+      it('follows a chain of barrels, and stops at a cycle', () => {
+        const files = [
+          makeFile(`export * from './ui'`, { relativePath: 'components/index.ts' }),
+          makeFile(`export * from './button'\nexport * from '..'`, { relativePath: 'components/ui/index.ts' }),
+          makeFile('export function Button() {}\nexport function ButtonGroup() {}', { relativePath: 'components/ui/button.tsx' }),
+          makeFile(`import { Button } from '../components'`, { relativePath: 'app/form.tsx' }),
+        ]
+        expect(deadByFile(files)).toEqual({ 'components/ui/button.tsx': 1 })
+      })
+    })
+
+    // Through the scanner: package names and dependencies come from the walked package.json files
+    it('reads package names and dependencies from the scan', async () => {
+      const result = await scanFiles({
+        'package.json': JSON.stringify({ dependencies: { valtio: '^2.0.0', '@acme/ui': 'workspace:*' } }),
+        'packages/ui/package.json': JSON.stringify({ name: '@acme/ui' }),
+        'packages/ui/src/index.ts': `export * from './button'`,
+        'packages/ui/src/button.tsx': 'export function Button() {}',
+        'lib/store.ts': ['proxy', 'a', 'b', 'c', 'd'].map(n => `export const ${n} = 1`).join('\n'),
+        'app/form.tsx': `import { proxy } from 'valtio'\nimport { Button } from '@acme/ui'`,
+      })
+      const deadExports = result.findings.filter(f => f.ruleId === 'dead-exports')
+      expect(deadExports).toHaveLength(1)
+      expect(deadExports[0].message).toMatch(/^5 exported symbols/)
+      expect(deadExports[0].message).toContain('lib/store.ts (5)')
+    })
+  })
+
+  // The Pages Router: Next.js routes every module under pages/ (or src/pages/) at an app's root,
+  // and reads their exports itself: the page, getServerSideProps, an API route's config
+  describe('Next.js Pages Router', () => {
+    const route = (relativePath: string) => makeFile(
+      'export const config = { api: { bodyParser: false } }\nexport async function getServerSideProps() {}',
+      { relativePath },
+    )
+    const monorepo = makeProject({ allFiles: ['package.json', 'apps/web/package.json'] })
+
+    it.each(['pages/api/upload.ts', 'pages/blog/[slug].tsx', 'src/pages/_app.tsx', 'apps/web/pages/settings.tsx'])(
+      'skips %s',
+      (path) => {
+        expect(deadByFile([route(path)], monorepo)).toEqual({})
+      },
+    )
+
+    it.each(['components/pages/home.tsx', 'apps/web/lib/pages/auth.ts', 'apps/docs/pages/index-helpers.ts'])(
+      'still checks %s',
+      (path) => {
+        expect(deadByFile([route(path)], monorepo)).toEqual({ [path]: 2 })
+      },
+    )
+
+    // calcom's pages/api/integrations/*/webhook.ts are `export { default } from '…'` and a config
+    it('counts what a route re-exports', () => {
+      const webhook = makeFile(
+        'export const config = {}\nexport function verifySignature() {}\nconst handler = () => {}\nexport { handler as default }',
+        { relativePath: 'lib/webhook.ts' },
+      )
+      const shim = makeFile(`export { default, config } from '@/lib/webhook'`, { relativePath: 'pages/api/webhook.ts' })
+      expect(deadByFile([webhook, shim])).toEqual({ 'lib/webhook.ts': 1 })
+    })
+  })
+
+  // SvelteKit keeps the + prefix for its route files, and reads their exports itself
+  it.each(['src/routes/+page.server.ts', 'src/routes/+layout.ts', 'src/routes/api/+server.js'])(
+    'skips SvelteKit route file %s',
+    (path) => {
+      const file = makeFile('export const load = async () => ({})\nexport const GET = async () => new Response()', { relativePath: path })
+      expect(deadByFile([file])).toEqual({})
+    },
+  )
+
+  // Next.js runs middleware and instrumentation only from an app's root or its src/, and reads
+  // their exports itself. Elsewhere the names are ordinary modules
+  describe('Next.js middleware and instrumentation', () => {
+    const twoExports = (relativePath: string) =>
+      makeFile('export function register() {}\nexport const config = {}', { relativePath })
+    const monorepo = makeProject({ allFiles: ['package.json', 'apps/web/package.json'] })
+
+    it.each([
+      'middleware.ts', 'src/middleware.js', 'instrumentation.ts', 'src/instrumentation.ts',
+      'instrumentation-client.ts', 'apps/web/middleware.ts', 'apps/web/src/instrumentation.ts',
+    ])('skips %s', (path) => {
+      expect(deadByFile([twoExports(path)], monorepo)).toEqual({})
+    })
+
+    it.each([
+      'packages/utils/src/constants/middleware.ts', // dub's constants module
+      'apps/ui-library/registry/default/blocks/password-auth-nextjs/middleware.ts', // a registry template
+      'lib/supabase/middleware.ts', // Supabase's Next.js 15 session helper
+      'apps/web/lib/instrumentation.ts',
+    ])('still checks %s', (path) => {
+      expect(deadByFile([twoExports(path)], monorepo)).toEqual({ [path]: 2 })
+    })
   })
 
   // Next.js 16 renamed middleware.ts to proxy.ts. Next.js imports its `proxy` and `config`
