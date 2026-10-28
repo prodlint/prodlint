@@ -84,6 +84,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   names are now skipped only there, and a module like dub's
   `packages/utils/src/constants/middleware.ts` is checked. Next.js 15.3's
   `instrumentation-client.*` is skipped in the same places.
+- **`dead-exports` counted the exports of Storybook stories and React Router routes.**
+  Storybook reads a story file's exports itself (the default export is the meta, and each
+  named export a story), and React Router reads a route module's: `loader`, `action`,
+  `meta`, `links`, `ErrorBoundary` and the rest. Nothing imports either, so their exports
+  counted as dead. Now `*.stories.(ts|tsx|js|jsx|mjs)` files are skipped, and so is what
+  React Router's framework mode (or Remix) loads in an app: `app/root.tsx`,
+  `app/entry.server.tsx`, every module under `app/routes/`, and any other module that React
+  Router 7's route config, `app/routes.ts`, names (`route('about', './about.tsx')`). An app
+  here is an app root (the scanned root, or a folder with its own `package.json`) that has
+  `app/root.tsx`, the root route every such app has. So a Next.js app's `app/routes/`
+  segment, or a server's `routes/` folder, is still checked. **Scan results may change** for
+  projects with stories or React Router routes.
 
 ## [0.10.4] - 2026-10-26
 

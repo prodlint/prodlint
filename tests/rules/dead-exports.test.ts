@@ -575,4 +575,117 @@ describe('dead-exports rule', () => {
       expect(await deadExports({})).toHaveLength(1)
     })
   })
+
+  // Storybook reads a CSF file's exports itself: the default export is the meta, and each named
+  // export a story
+  describe('Storybook stories', () => {
+    const stories = (relativePath: string) => makeFile(
+      "export default { title: 'Button' }\nexport const Primary = {}\nexport const Secondary = {}",
+      { relativePath },
+    )
+
+    it.each([
+      'stories/Button.stories.ts',
+      'components/button/button.stories.tsx',
+      'src/Header.stories.jsx',
+      'packages/ui/src/card.stories.js',
+    ])('skips %s', (path) => {
+      expect(deadByFile([stories(path)])).toEqual({})
+    })
+
+    // A stories/ folder, or a module named for a feature, is an ordinary one
+    it.each(['stories/Button.tsx', 'lib/stories.ts', 'components/user-stories.tsx'])('still checks %s', (path) => {
+      expect(deadByFile([stories(path)])).toEqual({ [path]: 2 })
+    })
+  })
+
+  // React Router's framework mode, and Remix before it, loads an app's root route (app/root.tsx),
+  // the route modules under app/routes/ and the server entry, and reads their exports itself:
+  // loader, action, meta, links, ErrorBoundary, …
+  describe('React Router route modules', () => {
+    const route = (relativePath: string) => makeFile(
+      'export async function loader() {}\nexport const action = async () => null\nexport default function Route() {}',
+      { relativePath },
+    )
+    const apps = makeProject({
+      allFiles: [
+        'package.json', 'app/root.tsx',
+        'apps/web/package.json', 'apps/web/app/root.tsx',
+        'apps/site/package.json', // a Next.js app: no root route
+        'apps/admin/app/root.tsx', 'src/app/root.tsx', // root routes outside an app root
+      ],
+    })
+
+    it.each([
+      'app/root.tsx',
+      'app/entry.server.tsx',
+      'app/routes/_index.tsx',
+      'app/routes/notes.$noteId.tsx',
+      'app/routes/dashboard/settings.tsx', // Remix v1 nests routes in folders
+      'app/routes/_auth+/login.tsx', // remix-flat-routes
+      'apps/web/app/routes/login.jsx',
+    ])('skips %s', (path) => {
+      expect(deadByFile([route(path)], apps)).toEqual({})
+    })
+
+    it.each([
+      'app/models/note.server.ts',
+      'app/entry.client.tsx', // React Router reads none of its exports
+      // routes/ folders outside a React Router app
+      'src/routes/users.ts', // a server's routers
+      'server/routes/api.ts',
+      'components/app/routes/list.tsx',
+      'src/app/routes/login.tsx', // React Router's default app folder is app/, not src/app/
+      'apps/admin/app/routes/login.tsx', // apps/admin has no package.json
+      'apps/site/app/routes/route-card.tsx', // a Next.js app's routes segment
+    ])('still checks %s', (path) => {
+      expect(deadByFile([route(path)], apps)).toEqual({ [path]: 2 })
+    })
+
+    // A route can share another module's loader
+    it('counts what a route module re-exports', () => {
+      const notes = makeFile('export async function loader() {}\nexport async function getNotes() {}', { relativePath: 'app/models/notes.server.ts' })
+      const reexport = makeFile(`export { loader } from '~/models/notes.server'`, { relativePath: 'app/routes/notes.tsx' })
+      expect(deadByFile([notes, reexport], apps)).toEqual({ 'app/models/notes.server.ts': 1 })
+    })
+
+    // React Router 7's route config, app/routes.ts, can name a route module anywhere in app/
+    describe('route config', () => {
+      const config = (relativePath: string) => makeFile([
+        "import { type RouteConfig, index, layout, route } from '@react-router/dev/routes'",
+        '',
+        'export default [',
+        "  index('./home.tsx'),",
+        "  layout('./auth/layout.tsx', [route('login', './auth/login.tsx')]),",
+        "  route('concerts/:city', 'concerts/city.tsx'),",
+        '] satisfies RouteConfig',
+      ].join('\n'), { relativePath })
+
+      it('skips the modules it names', () => {
+        const modules = ['app/home.tsx', 'app/auth/layout.tsx', 'app/auth/login.tsx', 'app/concerts/city.tsx'].map(route)
+        expect(deadByFile([config('app/routes.ts'), ...modules, route('app/auth/session.ts')], apps))
+          .toEqual({ 'app/auth/session.ts': 2 })
+      })
+
+      // supabase's registry keeps React Router templates in folders that are no app
+      it('names nothing outside a React Router app', () => {
+        const templates = 'registry/blocks/auth-react-router/app'
+        const files = [config(`${templates}/routes.ts`), route(`${templates}/home.tsx`), route(`${templates}/routes/login.tsx`)]
+        expect(deadByFile(files, apps)).toEqual({ [`${templates}/home.tsx`]: 2, [`${templates}/routes/login.tsx`]: 2 })
+      })
+    })
+
+    // Through the scanner: app roots and root routes come from the files it walked
+    it('finds React Router apps from the files in the scan', async () => {
+      const files = {
+        'apps/web/package.json': '{}',
+        'apps/web/app/routes/notes.tsx': ['loader', 'action', 'meta', 'links', 'headers'].map(n => `export const ${n} = () => null`).join('\n'),
+      }
+      const deadExports = async (extra: Record<string, string>) =>
+        (await scanFiles({ ...files, ...extra })).findings.filter(f => f.ruleId === 'dead-exports')
+
+      expect(await deadExports({ 'apps/web/app/root.tsx': 'export default function App() {}' })).toHaveLength(0)
+      expect(await deadExports({})).toHaveLength(1)
+    })
+  })
 })

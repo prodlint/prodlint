@@ -2,7 +2,7 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isTestFile, isScriptFile, NODE_BUILTINS } from '../utils/patterns.js'
 
 // Files that are entry points — their exports are consumed externally
-function isEntryPoint(relativePath: string, appRoots: Set<string>): boolean {
+function isEntryPoint(relativePath: string, appRoots: Set<string>, routeModules: Set<string>): boolean {
   const name = relativePath.split('/').pop() ?? ''
   return /^(page|layout|loading|error|not-found|route|opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\.(tsx?|jsx?)$/.test(name) ||
     isBarrel(relativePath) ||
@@ -10,8 +10,12 @@ function isEntryPoint(relativePath: string, appRoots: Set<string>): boolean {
     name === 'global-error.jsx' ||
     // SvelteKit's route files: +page.ts, +page.server.ts, +layout.ts, +server.ts
     /^\+(page|layout|server)(\.server)?\.(ts|js)$/.test(name) ||
+    // Storybook's stories: it reads a CSF file's default export as the meta, and each named
+    // export as a story
+    /\.stories\.(tsx?|jsx?|mjs)$/.test(name) ||
     isNextRootFile(relativePath, appRoots) ||
-    isPagesRoute(relativePath, appRoots)
+    isPagesRoute(relativePath, appRoots) ||
+    routeModules.has(relativePath)
 }
 
 /** An index file: its exports are skipped, but what it re-exports counts only when imported */
@@ -49,6 +53,37 @@ function findAppRoots(paths: string[]): Set<string> {
     if (match) roots.add(match[1] ?? '')
   }
   return roots
+}
+
+// React Router's framework mode, and Remix before it, loads an app's root route (app/root.tsx),
+// its server entry and its route modules, and reads their exports itself: loader, action, meta,
+// links, ErrorBoundary, … Every such app has the root route, which tells its app/routes/ from a
+// Next.js app's routes segment or a server's routers. Only an app root's app/, React Router's
+// default app folder, counts.
+function findRouteModules(files: FileContext[], paths: string[], appRoots: Set<string>): Set<string> {
+  const appFolders: string[] = []
+  for (const path of paths) {
+    const match = /^(?:(.*)\/)?app\/root\.(tsx?|jsx?)$/.exec(path)
+    if (match && appRoots.has(match[1] ?? '')) appFolders.push(path.slice(0, path.lastIndexOf('/')))
+  }
+
+  const modules = new Set<string>()
+  for (const { relativePath, content } of files) {
+    const folder = appFolders.find(f => relativePath.startsWith(`${f}/`))
+    if (folder === undefined) continue
+    const path = relativePath.slice(folder.length + 1)
+    if (/^(?:root|entry\.server|routes\/.+)\.(tsx?|jsx?)$/.test(path)) {
+      modules.add(relativePath)
+    } else if (/^routes\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) {
+      // React Router 7's route config names its route modules, which can be anywhere in app/:
+      // index('routes/home.tsx'), route('about', './about.tsx'), layout('./auth/layout.tsx', […])
+      for (const match of content.matchAll(/['"`]([^'"`\n]+\.(?:tsx?|jsx?))['"`]/g)) {
+        const module = normalizePath(`${folder}/${match[1]}`)
+        if (module !== null) modules.add(module)
+      }
+    }
+  }
+  return modules
 }
 
 const EXPORT_NAMED = /export\s+(?:async\s+)?(?:function|const|let|class|enum)\s+(\w+)/g
@@ -281,13 +316,14 @@ export const deadExportsRule: Rule = {
       !isScriptFile(f.relativePath),
     )
     const appRoots = findAppRoots(project.allFiles)
+    const routeModules = findRouteModules(files, project.allFiles, appRoots)
     const { resolve, packageEntries } = createResolver(files, project)
 
     // Collect all exported symbols with their locations
     const exports = new Map<string, { file: string; line: number }>()
 
     for (const file of sourceFiles) {
-      if (isEntryPoint(file.relativePath, appRoots) || packageEntries.has(file.relativePath)) continue
+      if (isEntryPoint(file.relativePath, appRoots, routeModules) || packageEntries.has(file.relativePath)) continue
 
       // Collect named exports
       let inTemplateLiteral = false
@@ -426,8 +462,8 @@ export const deadExportsRule: Rule = {
         useLoaded(resolve(source, from), destructured, member, false)
       }
 
-      // Next.js imports an entry point's exports itself, re-exports included
-      if (isEntryPoint(from, appRoots) && !isBarrel(from)) use({ files: [from], folders: [] }, '*')
+      // The framework imports an entry point's exports itself, re-exports included
+      if (isEntryPoint(from, appRoots, routeModules) && !isBarrel(from)) use({ files: [from], folders: [] }, '*')
     }
 
     // So does whoever installs a published package
