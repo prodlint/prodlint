@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (828 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (893 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -103,6 +103,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Threshold aggregation**: Rules like ai-smells count occurrences across a file, report once at line 1 if threshold exceeded
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
+- **Import resolution (dead-exports)**: imports are resolved to the scanned modules they load (relative path, alias by path suffix, workspace package from the walked `package.json` names), and re-exports pass a use on. An import from a declared dependency, a Node built-in or a URL uses no project export; only an import that matches no scanned file still counts by name everywhere. Keep that fallback: it covers aliases and layouts the resolver can't follow
 - **Line/column numbering**: 1-indexed throughout
 
 ### Scoring (v0.5.0)
