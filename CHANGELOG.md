@@ -79,6 +79,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `package.json`) is now skipped, and so are SvelteKit's `+page`, `+layout` and `+server`
   files. A `pages/` folder anywhere else, like `components/pages/`, is still checked.
   **Scan results may change** for apps that use either.
+- **`dead-exports` skipped any file named `middleware.*` or `instrumentation.*`.** Next.js
+  runs them only from an app root or its `src/`, as with a Next.js 16 `proxy.ts`, so the
+  names are now skipped only there, and a module like dub's
+  `packages/utils/src/constants/middleware.ts` is checked. Next.js 15.3's
+  `instrumentation-client.*` is skipped in the same places.
 
 ## [0.10.4] - 2026-10-26
 

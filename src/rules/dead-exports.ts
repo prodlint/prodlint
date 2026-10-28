@@ -4,13 +4,13 @@ import { isTestFile, isScriptFile, NODE_BUILTINS } from '../utils/patterns.js'
 // Files that are entry points — their exports are consumed externally
 function isEntryPoint(relativePath: string, appRoots: Set<string>): boolean {
   const name = relativePath.split('/').pop() ?? ''
-  return /^(page|layout|loading|error|not-found|route|middleware|instrumentation|opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\.(tsx?|jsx?)$/.test(name) ||
+  return /^(page|layout|loading|error|not-found|route|opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\.(tsx?|jsx?)$/.test(name) ||
     isBarrel(relativePath) ||
     name === 'global-error.tsx' ||
     name === 'global-error.jsx' ||
     // SvelteKit's route files: +page.ts, +page.server.ts, +layout.ts, +server.ts
     /^\+(page|layout|server)(\.server)?\.(ts|js)$/.test(name) ||
-    isNextProxy(relativePath, appRoots) ||
+    isNextRootFile(relativePath, appRoots) ||
     isPagesRoute(relativePath, appRoots)
 }
 
@@ -24,11 +24,12 @@ function isAppFolder(dir: string, appRoots: Set<string>): boolean {
   return appRoots.has(dir) || appRoots.has(dir.replace(/(?:^|\/)src$/, ''))
 }
 
-// Next.js 16's middleware. Next.js runs it only from an app root or the root's src/, so the
-// name is exempt only there. Elsewhere `proxy` is an ordinary module whose exports count,
-// like the session helper in Supabase's lib/supabase/proxy.ts.
-function isNextProxy(relativePath: string, appRoots: Set<string>): boolean {
-  const match = /^(?:(.*)\/)?proxy\.(tsx?|jsx?)$/.exec(relativePath)
+// Middleware (proxy since Next.js 16), instrumentation and Next.js 15.3's instrumentation-client.
+// Next.js runs them only from an app root or the root's src/, so the names are exempt only
+// there. Elsewhere they're ordinary modules whose exports count, like the session helper in
+// Supabase's lib/supabase/proxy.ts or dub's packages/utils/src/constants/middleware.ts.
+function isNextRootFile(relativePath: string, appRoots: Set<string>): boolean {
+  const match = /^(?:(.*)\/)?(?:middleware|proxy|instrumentation|instrumentation-client)\.(tsx?|jsx?)$/.exec(relativePath)
   return match !== null && isAppFolder(match[1] ?? '', appRoots)
 }
 

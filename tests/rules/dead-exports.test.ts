@@ -490,6 +490,30 @@ describe('dead-exports rule', () => {
     },
   )
 
+  // Next.js runs middleware and instrumentation only from an app's root or its src/, and reads
+  // their exports itself. Elsewhere the names are ordinary modules
+  describe('Next.js middleware and instrumentation', () => {
+    const twoExports = (relativePath: string) =>
+      makeFile('export function register() {}\nexport const config = {}', { relativePath })
+    const monorepo = makeProject({ allFiles: ['package.json', 'apps/web/package.json'] })
+
+    it.each([
+      'middleware.ts', 'src/middleware.js', 'instrumentation.ts', 'src/instrumentation.ts',
+      'instrumentation-client.ts', 'apps/web/middleware.ts', 'apps/web/src/instrumentation.ts',
+    ])('skips %s', (path) => {
+      expect(deadByFile([twoExports(path)], monorepo)).toEqual({})
+    })
+
+    it.each([
+      'packages/utils/src/constants/middleware.ts', // dub's constants module
+      'apps/ui-library/registry/default/blocks/password-auth-nextjs/middleware.ts', // a registry template
+      'lib/supabase/middleware.ts', // Supabase's Next.js 15 session helper
+      'apps/web/lib/instrumentation.ts',
+    ])('still checks %s', (path) => {
+      expect(deadByFile([twoExports(path)], monorepo)).toEqual({ [path]: 2 })
+    })
+  })
+
   // Next.js 16 renamed middleware.ts to proxy.ts. Next.js imports its `proxy` and `config`
   // itself, but only from an app's root or its src/.
   describe('Next.js 16 proxy', () => {
