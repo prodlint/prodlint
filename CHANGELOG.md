@@ -53,6 +53,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (an app in a monorepo), or either one's `src/`. Anywhere else `proxy` is an ordinary
   module name, so a file like Supabase's `lib/supabase/proxy.ts` session helper is still
   checked.
+- **`dead-exports` counted an export as used when anything anywhere imported its name.**
+  Its fallback read `import { proxy } from 'valtio'`, or any `import { config } from
+  './config'`, as a use of every export named `proxy` or `config` in the project, so in
+  big repos it hid most dead exports. Imports are now resolved to the modules they load:
+  a relative import to its file (`./utils.js` and `./utils` load `utils.ts`, `../lib` loads
+  `lib/index.ts`), an alias by its path (`@/lib/utils` loads the modules whose path ends in
+  `lib/utils`), and a workspace package to its module or, failing that, its folder. An npm
+  package, a Node built-in or a URL uses none of the project's exports. Only when an
+  import matches no scanned file does its name still count wherever it's exported.
+  Re-exports are followed (`export { a } from`, `export { a as b } from`, `export * from`,
+  `export * as ns from`), so what a barrel re-exports counts once something imports it
+  through the barrel. Also read now: `import()` and `require()`, which may use any export
+  of the module, and only `a` for `import('./x').a` or `const { a } = await import('./x')`
+  (`typeof import('./x')` uses none); a template-literal ``import(`./icons/${name}`)``,
+  which may load every module that fits; what a Next.js route or page re-exports, which
+  Next.js imports; and a published package's entry points (`main`, `module`, `exports`,
+  `bin`, read back from `dist/` to `src/`), whose exports are its API. **Scan results will
+  change:** `dead-exports` counts go up where a same-named import hid dead exports, and
+  down where exports are used through `import()` or a published package's entry point.
 
 ## [0.10.4] - 2026-10-26
 
