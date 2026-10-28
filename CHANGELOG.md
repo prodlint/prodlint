@@ -53,6 +53,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (an app in a monorepo), or either one's `src/`. Anywhere else `proxy` is an ordinary
   module name, so a file like Supabase's `lib/supabase/proxy.ts` session helper is still
   checked.
+- **Codemod fixtures and `__mocks__` folders were checked as app code.** `isTestFile()`,
+  which most rules use to skip test code, knew `__tests__/`, `test(s)/`, `fixture(s)/` and
+  `mock(s)/` folders, but not jscodeshift's `__testfixtures__/` or the `__fixtures__/` and
+  `__mocks__/` folders that Jest and Vitest projects keep next to their code. So a
+  codemod's input and output fixtures counted toward `dead-exports` (they export `config`,
+  `middleware` and `metadata` like the apps they rewrite), packages they import that the
+  repo doesn't depend on were critical `hallucinated-imports`, and mock data was reported
+  by `placeholder-content`. Files in those three folders are test files now: rules that
+  skip test code skip them, and `hallucinated-imports` rates their unlisted packages
+  warning, not critical. **Scan results may change** for repos with these folders: fewer
+  findings in them, fewer criticals, and a lower `dead-exports` total.
 
 ## [0.10.4] - 2026-10-26
 
