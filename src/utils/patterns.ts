@@ -136,7 +136,8 @@ export function isLineSuppressed(
  */
 export function isTestFile(relativePath: string): boolean {
   return /\.(test|spec)\.[jt]sx?$/.test(relativePath) ||
-    /(?:^|\/)__tests__\//.test(relativePath) ||
+    // Jest's __tests__ and __mocks__, jscodeshift's __testfixtures__
+    /(?:^|\/)__(?:tests|testfixtures|fixtures|mocks)__\//.test(relativePath) ||
     /(?:^|\/)tests?\//.test(relativePath) ||
     /(?:^|\/)fixtures?\//.test(relativePath) ||
     /(?:^|\/)mocks?\//.test(relativePath)

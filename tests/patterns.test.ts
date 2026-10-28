@@ -5,6 +5,7 @@ import {
   buildCommentMap,
   isCommentLine,
   isLineSuppressed,
+  isTestFile,
 } from '../src/utils/patterns.js'
 
 describe('isApiRoute', () => {
@@ -141,5 +142,38 @@ describe('isLineSuppressed', () => {
   it('returns false with no suppress comments', () => {
     const lines = ['const x = 1', 'const y = 2']
     expect(isLineSuppressed(lines, 1, 'secrets')).toBe(false)
+  })
+})
+
+describe('isTestFile', () => {
+  it('detects test and spec files', () => {
+    expect(isTestFile('src/utils.test.ts')).toBe(true)
+    expect(isTestFile('src/button.spec.tsx')).toBe(true)
+  })
+
+  it('detects test, fixture and mock folders', () => {
+    expect(isTestFile('src/__tests__/utils.ts')).toBe(true)
+    expect(isTestFile('test/helpers.ts')).toBe(true)
+    expect(isTestFile('packages/api/tests/setup.ts')).toBe(true)
+    expect(isTestFile('src/fixtures/user.json')).toBe(true)
+    expect(isTestFile('src/mocks/handlers.ts')).toBe(true)
+  })
+
+  it("detects jscodeshift's __testfixtures__ folders", () => {
+    expect(isTestFile('packages/codemod/transforms/__testfixtures__/metadata/basic.input.tsx')).toBe(true)
+    expect(isTestFile('__testfixtures__/rename.output.js')).toBe(true)
+  })
+
+  it('detects __fixtures__ and Jest __mocks__ folders', () => {
+    expect(isTestFile('packages/provider/src/__fixtures__/chat-response.json')).toBe(true)
+    expect(isTestFile('packages/lib/__mocks__/logger.ts')).toBe(true)
+    expect(isTestFile('__mocks__/fileMock.js')).toBe(true)
+  })
+
+  it('rejects app code', () => {
+    expect(isTestFile('src/app/page.tsx')).toBe(false)
+    expect(isTestFile('src/testimonials/card.tsx')).toBe(false)
+    expect(isTestFile('src/mockups/hero.tsx')).toBe(false)
+    expect(isTestFile('src/__generated__/schema.ts')).toBe(false)
   })
 })
