@@ -17,6 +17,38 @@ export function matcherExcludesApi(content: string, fileName: string): boolean {
   })
 }
 
+/**
+ * Whether the matcher in middleware `content` keeps the middleware on /api alone, off the
+ * pages outside it: the mirror of matcherExcludesApi. False when there's no matcher and when
+ * it can't be read.
+ */
+export function matcherExcludesPages(content: string, fileName: string): boolean {
+  const sources = matcherSources(content, fileName)
+  if (!sources || sources.length === 0) return false
+  return sources.every(source => {
+    const matcher = compile(source)
+    return matcher !== null && underApi(matcher.tokens)
+  })
+}
+
+// Whether every path a source matches is /api or under it. Only a literal start pins that:
+// /api/:path* and /api/(.*) do, but /api(.*) also matches /apikeys, and a source that
+// starts with a pattern, like /(api|trpc)(.*), counts as reaching pages.
+function underApi(tokens: (string | Key)[]): boolean {
+  const [head, ...rest] = tokens
+  if (typeof head !== 'string') return false
+  if (head.startsWith('/api/')) return true
+  if (head !== '/api') return false
+  // After /api the path must end or go on with a /. A token that can match nothing, like
+  // the :id? in /api/:id?.json, leaves that to the next one.
+  for (const token of rest) {
+    const start = typeof token === 'string' ? token : token.pattern ? prefixOf(token) : token.prefix + token.suffix
+    if (!start.startsWith('/')) return false
+    if (typeof token === 'string' || (token.modifier !== '?' && token.modifier !== '*')) return true
+  }
+  return true
+}
+
 // API paths to try a matcher on: two samples, and paths built from the source's literal
 // parts, which a parameter before them can put under /api (/:path*/_get matches
 // /api/x/_get). A bare /api isn't one: dub's /((?!api/|_next/).*) skips every API route
@@ -117,6 +149,10 @@ const PREFIXES = './'
 interface Key { prefix: string; suffix: string; pattern: string; modifier: string }
 
 const escape = (s: string) => s.replace(/([.+*?=^!:${}()[\]|/\\])/g, '\\$1')
+
+// A parameter's prefix, with the / Next.js gives a repeat that has no prefix or suffix
+const prefixOf = (token: Key) =>
+  (token.modifier === '*' || token.modifier === '+') && !token.prefix && !token.suffix ? '/' : token.prefix
 
 function lex(source: string): { type: string; value: string }[] {
   const tokens: { type: string; value: string }[] = []
@@ -233,7 +269,7 @@ function parse(source: string): (string | Key)[] {
   return result
 }
 
-function compile(source: string): { regexp: RegExp; literals: string[]; patterns: string[] } | null {
+function compile(source: string): { regexp: RegExp; tokens: (string | Key)[]; literals: string[]; patterns: string[] } | null {
   if (!source.startsWith('/')) return null
   try {
     const tokens = parse(source)
@@ -248,7 +284,7 @@ function compile(source: string): { regexp: RegExp; literals: string[]; patterns
         continue
       }
       const repeat = token.modifier === '*' || token.modifier === '+'
-      const prefix = escape(repeat && !token.prefix && !token.suffix ? '/' : token.prefix)
+      const prefix = escape(prefixOf(token))
       const suffix = escape(token.suffix)
       if (!prefix && !suffix) {
         route += `(${token.pattern})${token.modifier}`
@@ -260,6 +296,7 @@ function compile(source: string): { regexp: RegExp; literals: string[]; patterns
     }
     return {
       regexp: new RegExp(`${route}[${escape(DELIMITER)}]?$`),
+      tokens,
       literals: tokens.filter((token): token is string => typeof token === 'string'),
       patterns: tokens.flatMap(token => (typeof token === 'string' ? [] : [token.pattern])),
     }

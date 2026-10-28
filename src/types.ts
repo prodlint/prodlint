@@ -31,6 +31,8 @@ export interface ProjectContext {
   hasAuthMiddleware: boolean
   /** The auth middleware's `config.matcher` keeps it off /api, so it doesn't cover API routes */
   authMiddlewareExcludesApi?: boolean
+  /** The auth middleware's `config.matcher` keeps it on /api, so it doesn't cover the pages server actions are posted to */
+  authMiddlewareExcludesPages?: boolean
   hasRateLimiting: boolean
   detectedFrameworks: Set<string>
   gitignoreContent: string | null
