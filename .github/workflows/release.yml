@@ -191,6 +191,22 @@ jobs:
           done
           exit 1
 
+      # npm lists a new version before it serves the tarball: 0.10.6's still returned 404
+      # over three minutes after it was listed, after v1 had moved, so an action run on
+      # @v1 in that gap couldn't download its scanner. This job has to finish before v1 moves.
+      - name: Wait for npm to serve prodlint's tarball
+        run: |
+          TARBALL="https://registry.npmjs.org/prodlint/-/prodlint-${RELEASE_TAG#v}.tgz"
+          for i in $(seq 1 60); do
+            if curl -fsI -o /dev/null "$TARBALL"; then
+              exit 0
+            fi
+            echo "npm isn't serving $TARBALL yet ($i/60); waiting 10s."
+            sleep 10
+          done
+          echo "npm still isn't serving $TARBALL. v1 hasn't moved: resume the release once it does." >&2
+          exit 1
+
   # The only job that can write to the repo, and it runs nothing but git.
   update-v1-tag:
     needs: publish
@@ -209,7 +225,8 @@ jobs:
           git push origin v1 --force
 
   # Last on purpose: everything is published by now, so a failure here can't hurt a release.
-  # A resume skips it when the Release already exists. It runs gh and awk, nothing third-party.
+  # A resume skips it when the Release already exists. It runs gh and a script from this repo,
+  # nothing third-party.
   github-release:
     needs: update-v1-tag
     runs-on: ubuntu-latest
