@@ -249,6 +249,7 @@ export async function buildProjectContext(
   let authMiddlewareExcludesApi = false
   let authMiddlewareExcludesPages = false
   let hasRateLimiting = false
+  let rateLimitsInMiddleware = false
   const detectedFrameworks = new Set<string>()
   let gitignoreContent: string | null = null
   let envInGitignore = false
@@ -331,7 +332,10 @@ export async function buildProjectContext(
       authMiddlewareExcludesPages = (!hasAuthMiddleware || authMiddlewareExcludesPages) && matcherExcludesPages(content, name)
       hasAuthMiddleware = true
     }
-    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) hasRateLimiting = true
+    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) {
+      hasRateLimiting = true
+      rateLimitsInMiddleware = true
+    }
   }
 
   // Read .gitignore
@@ -354,6 +358,7 @@ export async function buildProjectContext(
     authMiddlewareExcludesApi,
     authMiddlewareExcludesPages,
     hasRateLimiting,
+    rateLimitsInMiddleware,
     detectedFrameworks,
     gitignoreContent,
     envInGitignore,

@@ -291,21 +291,27 @@ export function findUseEffectRanges(ast: ParseResult<File>): Array<{ start: numb
 }
 
 /**
- * Check if any node in a subtree matches a predicate.
+ * Check if any node in a subtree matches a predicate, not going into the nodes in `skip`.
  */
-export function subtreeContains(node: Node, predicate: (n: Node) => boolean): boolean {
-  if (predicate(node)) return true
+export function subtreeContains(
+  node: Node,
+  predicate: (n: Node, parent: Node | null) => boolean,
+  skip?: Set<Node>,
+  parent: Node | null = null,
+): boolean {
+  if (skip?.has(node)) return false
+  if (predicate(node, parent)) return true
   for (const key of Object.keys(node)) {
     if (key === 'start' || key === 'end' || key === 'loc' || key === 'type') continue
     const val = (node as any)[key]
     if (Array.isArray(val)) {
       for (const item of val) {
         if (item && typeof item === 'object' && item.type) {
-          if (subtreeContains(item, predicate)) return true
+          if (subtreeContains(item, predicate, skip, node)) return true
         }
       }
     } else if (val && typeof val === 'object' && val.type) {
-      if (subtreeContains(val, predicate)) return true
+      if (subtreeContains(val, predicate, skip, node)) return true
     }
   }
   return false

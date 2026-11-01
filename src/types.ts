@@ -34,6 +34,8 @@ export interface ProjectContext {
   /** The auth middleware's `config.matcher` keeps it on /api, so it doesn't cover the pages server actions are posted to */
   authMiddlewareExcludesPages?: boolean
   hasRateLimiting: boolean
+  /** middleware.ts or proxy.ts rate-limits, not just a rate-limiting package in the dependencies */
+  rateLimitsInMiddleware?: boolean
   detectedFrameworks: Set<string>
   gitignoreContent: string | null
   envInGitignore: boolean

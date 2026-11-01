@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import type { CallExpression, ImportSpecifier, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
+import type { CallExpression, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
 import { subtreeContains, unwrapExpression, walkAST } from '../utils/ast.js'
 import { isTestFile, nameWords, saysAuth, saysNoAuth } from '../utils/patterns.js'
 
@@ -22,7 +22,7 @@ const AUTH_PATTERNS = [
   /createServerComponentClient/,
   /currentUser\s*\(/,
   /getAuth\s*\(/,
-  /cookies\(\).*auth/s,
+  /cookies\(\).*auth(?!or(?:s|ed|ing|ship|Id|_id)?\b)/s,
   // Session lookups, not just any "session" text (a `sessionId` form field isn't auth):
   // verifySession(), getIronSession(), lucia.validateSession(), getServerAuthSession()...
   /\w*session\w*\s*\(/i,
@@ -77,25 +77,42 @@ interface Client {
 const propertyName = (node: MemberExpression | OptionalMemberExpression): string =>
   !node.computed && node.property.type === 'Identifier' ? node.property.name : ''
 
-const exportedName = (s: ImportSpecifier): string => s.imported.type === 'Identifier' ? s.imported.name : s.imported.value
-
-// local name → the name it was exported under
-function importedNames(program: Program): Map<string, string> {
-  const imported = new Map<string, string>()
-  for (const st of program.body) {
-    if (st.type !== 'ImportDeclaration') continue
-    for (const s of st.specifiers) {
-      if (s.type === 'ImportSpecifier') imported.set(s.local.name, exportedName(s))
-    }
-  }
-  return imported
+interface Import {
+  source: string
+  name: string // what it was exported under; 'default' and '*' for those imports
 }
 
-// Sorts what a 'use server' file exports: the actions built on an auth-checking client or a guest
-// guard, and how many other exports there are. Only the callee chain counts: an argument like
+function readImports(program: Program): Map<string, Import> {
+  const imports = new Map<string, Import>()
+  for (const st of program.body) {
+    if (st.type !== 'ImportDeclaration' || st.importKind === 'type') continue
+    for (const s of st.specifiers) {
+      if (s.type === 'ImportSpecifier' && s.importKind === 'type') continue
+      const name = s.type === 'ImportDefaultSpecifier' ? 'default' : s.type === 'ImportNamespaceSpecifier' ? '*'
+        : s.imported.type === 'Identifier' ? s.imported.name : s.imported.value
+      imports.set(s.local.name, { source: st.source.value, name })
+    }
+  }
+  return imports
+}
+
+// A renamed import keeps its real name: actionClient as authActionClient is still plain.
+// A default or namespace import has only the local one.
+function importedName(imports: Map<string, Import>, local: string): string {
+  const source = imports.get(local)
+  return source && source.name !== 'default' && source.name !== '*' ? source.name : local
+}
+
+interface Exports {
+  checked: Node[] // built on an auth-checking client
+  guests: Node[] // behind a guard that turns signed-in users away
+  open: Node[] // the code of the rest
+  others: number // how many other exports there are, with code here or not
+}
+
+// Sorts what a 'use server' file exports. Only the callee chain counts: an argument like
 // inputSchema(authSchema), or an action's own name, says nothing about a check.
-function readExports(program: Program): { checked: Node[]; others: number } {
-  const imported = importedNames(program)
+function readExports(program: Program, imports: Map<string, Import>): Exports {
   const defined = new Map<string, Node>() // const client = …, but not functions: only a name to go on there
   for (const st of program.body) {
     if (st.type === 'ImportDeclaration') continue
@@ -110,6 +127,7 @@ function readExports(program: Program): { checked: Node[]; others: number } {
 
   // Walks a chain from its root: authActionClient, .inputSchema(s), .action(fn)
   const read = (expression: Node, seen: Set<string>): Client => {
+    if (seen.size > MAX_DEPTH) return { checked: false, middleware: false }
     const node = unwrapExpression(expression)
     if (node.type === 'CallExpression') {
       const callee = unwrapExpression(node.callee)
@@ -119,10 +137,7 @@ function readExports(program: Program): { checked: Node[]; others: number } {
       return {
         checked: client.checked || node.arguments.some(arg => read(arg, seen).checked),
         middleware: true,
-        guestOnly: client.guestOnly || node.arguments.some(arg => {
-          const name = lastName(arg)
-          return GUEST_ONLY.test(imported.get(name) ?? name)
-        }),
+        guestOnly: client.guestOnly || node.arguments.some(arg => GUEST_ONLY.test(importedName(imports, lastName(arg)))),
       }
     }
     if (node.type === 'MemberExpression') {
@@ -131,8 +146,7 @@ function readExports(program: Program): { checked: Node[]; others: number } {
       return { ...client, checked: !saysNoAuth(name) && (client.checked || saysChecked(name)) }
     }
     if (node.type === 'Identifier') {
-      // A renamed import keeps its real name: actionClient as authActionClient is still plain
-      const name = imported.get(node.name) ?? node.name
+      const name = importedName(imports, node.name)
       const definition = seen.has(node.name) ? undefined : defined.get(node.name)
       if (!definition) return { checked: saysChecked(name), middleware: false }
       // Defined here, so the definition shows what it's built with. createSafeActionClient()
@@ -157,12 +171,18 @@ function readExports(program: Program): { checked: Node[]; others: number } {
   }
 
   const checked: Node[] = []
+  const guests: Node[] = []
+  const open: Node[] = []
   let others = 0
   const add = (exported: Node | null | undefined) => {
     const value = exported && valueOf(exported)
     const client = value?.type === 'CallExpression' ? read(value, new Set()) : undefined
-    if (value && (client?.checked || client?.guestOnly)) checked.push(value)
-    else others++
+    if (value && client?.checked) checked.push(value)
+    else if (value && client?.guestOnly) guests.push(value)
+    else {
+      others++
+      if (exported) open.push(exported)
+    }
   }
   for (const st of program.body) {
     if (st.type === 'ExportDefaultDeclaration') {
@@ -173,7 +193,7 @@ function readExports(program: Program): { checked: Node[]; others: number } {
       if (st.declaration?.type === 'VariableDeclaration') {
         for (const d of st.declaration.declarations) add(d.init)
       } else if (st.declaration) {
-        others++ // export async function deleteItem() {…}
+        add(st.declaration) // export async function deleteItem() {…}
       } else {
         for (const s of st.specifiers) {
           if (s.type === 'ExportSpecifier' && s.exportKind === 'type') continue
@@ -184,57 +204,85 @@ function readExports(program: Program): { checked: Node[]; others: number } {
       }
     }
   }
-  return { checked, others }
+  return { checked, guests, open, others }
 }
 
 // The source with these nodes' code blanked out, keeping offsets
 function blankNodes(content: string, nodes: { start?: number | null; end?: number | null }[]): string {
-  let code = content
-  for (const { start, end } of nodes) {
-    if (typeof start === 'number' && typeof end === 'number') {
-      code = code.slice(0, start) + ' '.repeat(end - start) + code.slice(end)
-    }
+  const ranges = nodes.filter(n => typeof n.start === 'number' && typeof n.end === 'number').sort((a, b) => a.start! - b.start!)
+  let code = ''
+  let at = 0
+  for (const { start, end } of ranges) {
+    if (end! <= at) continue
+    const from = Math.max(start!, at)
+    code += content.slice(at, from) + ' '.repeat(end! - from)
+    at = end!
   }
-  return code
+  return code + content.slice(at)
 }
 
-// The methods a write is called by, and SQL in a string. A file Babel can't parse is read as text.
+// The text check this rule started as: these methods, and SQL words. A file Babel can't parse is
+// read by it alone. In one it can, it finds what might be a write, and the checks below say if it is.
 const WRITE_CALL = /\.(insert|update|delete|create|upsert|remove|destroy|save|push|set)\s*\(/i
 const SQL_WORD = /\b(INSERT|UPDATE|DELETE)\b/
-const WRITE_METHOD = /^(?:insert|update|delete|create|upsert|remove|destroy|save|set)$/i
 
-// Effects outside the process that aren't read as writes on their own, because so many aren't: a
-// POST can be a GraphQL read, a token exchange or a captcha check, and a file a temp file. But one
-// keeps the finding the text check gave its file, since reading calls properly mustn't lose it:
-// a signed POST that places an order was only ever reported for its hash's update().
-const OUTWARD_METHOD = /^(?:post|put|patch)$/i // axios.post(), env.KV.put()
-const OUTWARD_HTTP_METHOD = /^(?:post|put|patch|delete)$/i // fetch(url, { method: 'POST' })
-const OUTWARD_CALL = /^(?:writeFile|appendFile|unlink|rm|sendMail|sendEmail)(?:Sync)?$/
-const OUTWARD_COMMAND = /^(?:Put|Delete|Copy|Create|Update)\w*Command$/ // s3.send(new PutObjectCommand(params))
+// What's a write by itself: a statement in a string, and these methods and functions, unless what
+// they're called on stays local. 'UPDATE' alone could be a label, or a type.
+const SQL_STATEMENT = /\bINSERT\b[\s\S]{0,40}?\bINTO\b|\bDELETE\b[\s\S]{0,40}?\bFROM\b|\bUPDATE\b[\s\S]{0,200}?\bSET\b/
+const WRITE_METHOD = /^(?:insert|update|delete|create|upsert|remove|destroy|save|set|createMany(?:AndReturn)?|updateMany(?:AndReturn)?|deleteMany|\$executeRaw(?:Unsafe)?|insertOne|insertMany|updateOne|deleteOne|replaceOne|bulkWrite|findOneAnd(?:Update|Delete|Replace)|findByIdAnd(?:Update|Delete|Remove)|hset|hdel|sadd|srem|lpush|rpush|zadd|incr|incrby|decr|decrby|del|setex|mset)$/i
+const FIRESTORE_WRITE = /^(?:setDoc|addDoc|updateDoc|deleteDoc)$/
 
 // A write outlives the request. These don't, whatever their methods are called: a hash, a stream
 // to the browser, AI state, a collection, a request or response being built. Neither does a cookie:
 // it changes only the caller's own browser, and they can send any cookie they like. It's often a
 // login, a password gate or a locale switch, which an auth check would only break.
-const LOCAL_CALL = /^(?:create(?:Hash|Hmac|Sign|Verify|Cipheriv|Decipheriv|StreamableValue|StreamableUI)|getMutableAIState|cookies)$/
-const LOCAL_CLASS = /^(?:Map|WeakMap|Set|WeakSet|Headers|URLSearchParams|FormData|Uint8Array)$/
-// A response's or a URL's, with no definition to read: res.headers.set(), url.searchParams.delete()
-const LOCAL_PROPERTY = /^(?:headers|searchParams)$/
-// They make no record: Object.create(null), axios.create({ baseURL })
-const CREATES_NO_RECORD = /^(?:Object|[Aa]xios)$/
-// A push() is an array's, unless it's on a Firebase reference or an event client:
-// db.ref('items').push(item), hatchet.event.push('order:created', order)
-const PUSHES_OUT = /^(?:ref|child|event)$|Ref$/
+const AI_SDK = /^(?:ai|ai\/rsc|@ai-sdk\/rsc)$/
+const CRYPTO_CALL = /^create(?:Hash|Hmac|Sign|Verify|Cipheriv|Decipheriv)$/
+const LOCAL_CALLS: [name: RegExp, source: RegExp][] = [
+  [CRYPTO_CALL, /^(?:node:)?crypto$/],
+  [/^cookies$/, /^next\/headers$/],
+  [/^(?:createStreamable(?:Value|UI)|getMutableAIState)$/, AI_SDK],
+]
+const LOCAL_CLASS = /^(?:Map|WeakMap|Set|WeakSet|Headers|URLSearchParams|FormData|URL|Request|Response|(?:Big)?(?:Ui|I)nt\d+Array|Uint8ClampedArray|Float\d+Array)$/
+// With no definition to read: res.headers.set(), response.cookies.delete(), url.searchParams.set()
+const REQUEST_OR_RESPONSE = /^(?:res|resp|response|req|request|next|init|options|opts|config)$/i
+const URL_NAME = /url|uri|href/i
+// A push() is an array's, unless it's on a Firebase reference: db.ref('items').push(item)
+const FIREBASE_REF = /^(?:ref|child)$/
+const FIREBASE_REF_NAME = /^(?:ref|child)$|Ref$/
+
+// At module level a collection outlives the request, and every caller sees it. One holding the
+// app's data is a store. A cache or a limit map is shared too, but it holds nothing to lose.
+const MODULE_COLLECTION = /^(?:Map|Set)$/
+const CACHE_NAME = /cache|memo|limit|hits|attempts|banned/i
+
+// What isn't read as a write on its own, because so much of it isn't: a POST can be a GraphQL read,
+// a token exchange or a captcha check, a file a temp file, and a name is only a name. But it keeps
+// the finding the text check gave its file, since reading calls properly mustn't lose one: a signed
+// POST that places an order was only ever reported for its hash's update(), and deletePhoto() for
+// a cookie next to it. It can't add a finding, so it can afford to be broad.
+const OUTWARD_HTTP_METHOD = /^(?:POST|PUT|PATCH|DELETE)$/
+const OUTWARD_COMMAND = /^(?!Get|List|Describe|Head|Query|Scan)\w+Command$/ // s3.send(new PutObjectCommand(params))
+const WRITE_WORD = /^(?:create|update|delete|insert|upsert|remove|destroy|save|set|add|push|put|patch|post|POST|PUT|PATCH|send|publish|enqueue|mark|store|write|record|increment|decrement|mutate|mutation|transaction|rpc|execute|approve|ban|invite|grant|revoke|submit|cancel|charge|refund|upload|sync|rename|copyFile|mkdir|rm|unlink|appendFile|expire|expireat|commit)(?:$|[A-Z_0-9])/
+const NOT_A_WRITE = /Cookie|^create(?!Write)\w*(?:Client|Middleware|Transport|Fetch|Stream|Hash|Hmac|Cipheriv|Decipheriv|Sign|Verify|Context|Instance|Schema|Logger|Error|URL|Element|Ref|Router|Action)\w*$|^set(?:Timeout|Interval|Immediate|Headers?|Locale|Theme|Time|(?:UTC)?(?:FullYear|Month|Date|Hours|Minutes|Seconds|Milliseconds))$|^updateTag$/
 
 // A model call spends the app's credits on whatever the caller sends: the AI SDK's functions, a
-// client the file makes, or the two APIs most code calls on a client from anywhere,
-// openai.chat.completions.create(), which other providers copy, and anthropic.messages.create().
-// Any other .create() on a client from another file reads as a write.
-const AI_SDK = /^(?:ai|ai\/rsc|@ai-sdk\/rsc)$/
-const AI_SDK_CALL = /^(?:experimental_)?(?:generate(?:Text|Object|Image|Speech|Video)|stream(?:Text|Object|UI)|embed(?:Many)?|transcribe|rerank)$/
-const AI_CLIENT = /^(?:openai|@anthropic-ai\/sdk|@google\/generative-ai|@google\/genai|groq-sdk|@langchain\/(?:openai|anthropic|google-genai))$/
-// A public action can limit that instead. The provider's own limit, rate_limit_error, is no such thing.
-const RATE_LIMITED = /rate[-_]?limit(?![-_])|throttle/i
+// client the file makes, or a .create() or the like on a client that says what it is. The SDK's
+// stream and AI state count too: with a model behind a helper or a fetch(), they're what's left of it.
+const AI_SDK_CALL = /^(?:(?:experimental_)?(?:generate(?:Text|Object|Image|Speech|Video)|stream(?:Text|Object|UI)|embed(?:Many)?|transcribe|rerank)|createStreamable(?:Value|UI)|getMutableAIState)$/
+const AI_CLIENT = /^(?:openai|@anthropic-ai\/sdk|@google\/generative-ai|@google\/genai|groq-sdk|together-ai|cohere-ai|replicate|ollama|@mistralai\/mistralai|@huggingface\/inference|@aws-sdk\/client-bedrock-runtime|@langchain\/(?!core|community|langgraph|textsplitters)[\w-]+)$/
+const AI_CLIENT_NAME = /^(?:open_?ai|anthropic|groq|mistral|together|deepseek|cohere|gemini)(?:Client)?$/i
+const MODEL_API_METHOD = /^(?:create|stream|parse)$/
+
+// A public action can limit that instead, and a limit is a call on its path, not a word in its file:
+// OpenAI.RateLimitError is the provider's, lodash's throttle() paces a stream, and "generate" ends in "rate"
+const LIMIT_CALL = /(?:^r|R|[-_]r)ate[-_]?[lL]imit|(?:^l|L)imiter$|^(?:slidingWindow|fixedWindow|tokenBucket)$/
+const NOT_A_LIMIT = /Error|Header/
+const LIMIT_METHOD = /^(?:limit|consume|check|take|hit|removeTokens|tryRemoveTokens|blockIfExceeded)$/
+const LIMITER = /(?:^r|R|[-_]r)ate[-_]?[lL]imit|(?:^l|L)imit(?:er)?$/
+
+// How far to follow a name or a chain. Past it, in a generated file, it's a write: the safe direction.
+const MAX_DEPTH = 64
 
 const isCall = (node: Node): node is CallExpression | OptionalCallExpression =>
   node.type === 'CallExpression' || node.type === 'OptionalCallExpression'
@@ -249,103 +297,270 @@ function lastName(expression: Node): string {
   return node.type === 'Identifier' ? node.name : ''
 }
 
-function callsModelApi(call: CallExpression | OptionalCallExpression): boolean {
-  const callee = unwrapExpression(call.callee)
-  if (!isMember(callee) || !/^(?:create|stream|parse)$/.test(propertyName(callee))) return false
-  const api = unwrapExpression(callee.object)
-  if (!isMember(api)) return false
-  const name = propertyName(api)
-  return (name === 'completions' && lastName(api.object) === 'chat') || (name === 'messages' && /^anthropic/i.test(lastName(api.object)))
+// The name a chain starts from: openai.chat.completions → openai
+function rootName(expression: Node): string {
+  let node = unwrapExpression(expression)
+  while (isCall(node) || isMember(node)) node = unwrapExpression(isCall(node) ? node.callee : node.object)
+  return node.type === 'Identifier' ? node.name : ''
 }
 
-// Whether a node outside these passes the test
-function someNode(program: Program, skip: Node[], test: (node: Node) => boolean): boolean {
-  let found = false
-  walkAST(program, node => {
-    if (found || !test(node)) return
-    found = !skip.some(({ start, end }) => node.start! >= start! && node.end! <= end!)
-  })
-  return found
-}
+const hasDirective = (directives: { value: { value: string } }[] | undefined): boolean =>
+  directives?.some(d => d.value.value === 'use server') ?? false
 
-function hasModelCall(program: Program, skip: Node[]): boolean {
-  const calls = new Set<string>()
-  const clients = new Set<string>()
-  for (const st of program.body) {
-    if (st.type !== 'ImportDeclaration') continue
-    for (const s of st.specifiers) {
-      if (AI_CLIENT.test(st.source.value)) clients.add(s.local.name)
-      else if (AI_SDK.test(st.source.value) && s.type === 'ImportSpecifier' && AI_SDK_CALL.test(exportedName(s))) calls.add(s.local.name)
-    }
-  }
-  return someNode(program, skip, node => {
-    if (node.type === 'NewExpression') return node.callee.type === 'Identifier' && clients.has(node.callee.name)
-    return isCall(node) && (callsModelApi(node) || (node.callee.type === 'Identifier' && calls.has(node.callee.name)))
-  })
-}
-
-// Whether a call in this code writes to anything that outlives the request. A name is read from
-// what the file defines it as, in any scope: one that also stands for something else, or for a
-// parameter or a destructured value, counts as a write, as does one defined out of sight.
-function hasWriteCall(program: Program, skip: Node[]): boolean {
-  const imported = importedNames(program)
+// What the calls in a file do. A name is read from everything the file binds it to, in any scope:
+// one that also stands for something else, or for a parameter or a destructured value, isn't known
+// to be local, and neither is an import or a name defined out of sight.
+function readCalls(program: Program, imports: Map<string, Import>) {
   const values = new Map<string, (Node | null)[]>()
-  const bind = (name: string, value: Node | null) => values.set(name, [...(values.get(name) ?? []), value])
-  const bindUnknown = (pattern: Node) => walkAST(pattern, node => { if (node.type === 'Identifier') bind(node.name, null) })
+  const bind = (name: string, value: Node | null) => {
+    const bound = values.get(name)
+    if (bound) bound.push(value)
+    else values.set(name, [value])
+  }
+  const bindPattern = (pattern: Node | null): void => {
+    if (pattern?.type === 'Identifier') bind(pattern.name, null)
+    else if (pattern?.type === 'ObjectPattern') pattern.properties.forEach(p => bindPattern(p.type === 'RestElement' ? p.argument : p.value))
+    else if (pattern?.type === 'ArrayPattern') pattern.elements.forEach(e => bindPattern(e))
+    else if (pattern?.type === 'AssignmentPattern') bindPattern(pattern.left)
+    else if (pattern?.type === 'RestElement') bindPattern(pattern.argument)
+    else if (pattern?.type === 'TSParameterProperty') bindPattern(pattern.parameter)
+  }
   walkAST(program, node => {
     if (node.type === 'VariableDeclarator') {
-      if (node.id.type !== 'Identifier') bindUnknown(node.id)
+      if (node.id.type !== 'Identifier') bindPattern(node.id)
       else if (node.init) bind(node.id.name, node.init)
     } else if (node.type === 'AssignmentExpression') {
       if (node.left.type === 'Identifier') bind(node.left.name, node.right)
-    } else if ('params' in node && 'body' in node) {
-      node.params.forEach(bindUnknown)
+      else bindPattern(node.left)
+    } else if (node.type === 'ForOfStatement' || node.type === 'ForInStatement') {
+      if (node.left.type === 'VariableDeclaration') node.left.declarations.forEach(d => bindPattern(d.id))
+      else bindPattern(node.left)
+    } else if (node.type === 'CatchClause') {
+      bindPattern(node.param ?? null)
+    } else if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') {
+      bindPattern(node.id ?? null)
+    }
+    if ('params' in node && 'body' in node) {
+      for (const param of node.params) {
+        // formData: FormData is what it says
+        const annotation = param.type === 'Identifier' && param.typeAnnotation?.type === 'TSTypeAnnotation' ? param.typeAnnotation.typeAnnotation : null
+        if (param.type === 'Identifier' && annotation?.type === 'TSTypeReference') bind(param.name, annotation)
+        else bindPattern(param)
+      }
     }
   })
 
-  const isLocal = (expression: Node, seen: Set<string>): boolean => {
+  const definitions = new Map<string, Node>() // what an action can reach by name
+  const shared = new Set<string>() // collections that hold the app's data
+  for (const st of program.body) {
+    const decl = st.type === 'ExportNamedDeclaration' ? st.declaration : st
+    if (decl?.type === 'FunctionDeclaration' || decl?.type === 'ClassDeclaration') {
+      if (decl.id) definitions.set(decl.id.name, decl)
+    } else if (decl?.type === 'VariableDeclaration') {
+      for (const d of decl.declarations) {
+        if (d.id.type !== 'Identifier' || !d.init) continue
+        definitions.set(d.id.name, d.init)
+        const value = unwrapExpression(d.init)
+        const collection = value.type === 'ArrayExpression' || (value.type === 'NewExpression' && MODULE_COLLECTION.test(lastName(value.callee)))
+        if (collection && !CACHE_NAME.test(d.id.name)) shared.add(d.id.name)
+      }
+    }
+  }
+
+  const isGlobal = (name: string) => !imports.has(name) && !values.has(name)
+  const realName = (name: string) => importedName(imports, name)
+
+  const makesLocal = (callee: Node, depth: number): boolean => {
+    if (isMember(callee)) return CRYPTO_CALL.test(propertyName(callee)) && /crypto/i.test(lastName(callee.object))
+    if (callee.type !== 'Identifier' || depth > MAX_DEPTH) return false
+    const source = imports.get(callee.name)
+    if (source) return LOCAL_CALLS.some(([name, from]) => name.test(source.name) && from.test(source.source))
+    const bound = values.get(callee.name)
+    if (!bound) return LOCAL_CALLS.some(([name]) => name.test(callee.name))
+    // const getMutableAIState = $getMutableAIState<AI>, in the AI SDK's own examples
+    const alias = bound.length === 1 && bound[0] ? unwrapExpression(bound[0]) : null
+    return alias?.type === 'TSInstantiationExpression' || alias?.type === 'Identifier'
+      ? makesLocal(alias.type === 'Identifier' ? alias : unwrapExpression(alias.expression), depth + 1)
+      : false
+  }
+
+  const localNames = new Map<string, boolean>()
+  const isLocal = (expression: Node, depth = 0): boolean => {
+    if (depth > MAX_DEPTH) return false
     const node = unwrapExpression(expression)
-    if (node.type === 'NewExpression') return LOCAL_CLASS.test(lastName(node.callee))
+    if (node.type === 'TSTypeReference') return node.typeName.type === 'Identifier' && LOCAL_CLASS.test(node.typeName.name)
+    if (node.type === 'NewExpression') return node.callee.type === 'Identifier' && isGlobal(node.callee.name) && LOCAL_CLASS.test(node.callee.name)
     if (isCall(node)) {
       const callee = unwrapExpression(node.callee)
       // These return what they're called on: hash.update(a).update(b), new Map().set(a, b).set(c, d)
-      if (isMember(callee) && WRITE_METHOD.test(propertyName(callee))) return isLocal(callee.object, seen)
-      // A renamed import keeps its real name: { db as cookies } is still a database
-      const name = callee.type === 'Identifier' ? imported.get(callee.name) ?? callee.name : lastName(callee)
-      return LOCAL_CALL.test(name)
+      if (isMember(callee) && WRITE_METHOD.test(propertyName(callee))) return isLocal(callee.object, depth + 1)
+      return makesLocal(callee, depth + 1)
     }
-    if (node.type !== 'Identifier' || seen.has(node.name)) return false
+    if (node.type !== 'Identifier' || imports.has(node.name) || shared.has(node.name)) return false
+    const known = localNames.get(node.name)
+    if (known !== undefined) return known
+    localNames.set(node.name, false) // defined in terms of itself, it's not known to be anything
     const bound = values.get(node.name)
-    return !!bound && bound.every(value => value !== null && isLocal(value, new Set(seen).add(node.name)))
+    const local = !!bound && bound.every(value => value !== null && isLocal(value, depth + 1))
+    localNames.set(node.name, local)
+    return local
+  }
+
+  // res.headers.set(), but not prisma.headers.delete(args): a table can have that name
+  const isRequestPart = (receiver: Node): boolean => {
+    if (!isMember(receiver)) return false
+    const part = propertyName(receiver)
+    if (part === 'searchParams') return URL_NAME.test(lastName(receiver.object)) || isLocal(receiver.object)
+    return (part === 'headers' || part === 'cookies') && (REQUEST_OR_RESPONSE.test(lastName(receiver.object)) || isLocal(receiver.object))
+  }
+
+  // Object.create(null), axios.create({ baseURL }): they make no record
+  const createsNoRecord = (receiver: Node): boolean => {
+    if (receiver.type !== 'Identifier') return false
+    const source = imports.get(receiver.name)
+    if (source) return source.source === 'axios'
+    return isGlobal(receiver.name) && /^(?:Object|[Aa]xios)$/.test(receiver.name)
+  }
+
+  const pushesOut = (receiver: Node, call: CallExpression | OptionalCallExpression): boolean => {
+    if (receiver.type === 'Identifier') {
+      if (shared.has(receiver.name)) return true
+      const bound = (values.get(receiver.name) ?? []).map(value => value && unwrapExpression(value))
+      if (bound.some(value => value?.type === 'ArrayExpression')) return false
+      if (bound.some(value => value && isCall(value) && FIREBASE_REF.test(lastName(value.callee)))) return true
+    }
+    // A named event, not an array's items: hatchet.events.push('order:created', order)
+    const [first, second] = call.arguments
+    if (second && (first.type === 'StringLiteral' || first.type === 'TemplateLiteral')) return true
+    return FIREBASE_REF_NAME.test(lastName(receiver))
+  }
+
+  const isClient = (expression: Node | null): boolean => {
+    const node = expression && unwrapExpression(expression)
+    if (node?.type !== 'NewExpression') return false
+    const source = imports.get(rootName(node.callee))
+    return !!source && AI_CLIENT.test(source.source) && !/Error$/.test(lastName(node.callee))
+  }
+
+  const callsModelApi = (call: CallExpression | OptionalCallExpression): boolean => {
+    const callee = unwrapExpression(call.callee)
+    if (!isMember(callee) || !MODEL_API_METHOD.test(propertyName(callee))) return false
+    const api = unwrapExpression(callee.object)
+    if (isMember(api) && propertyName(api) === 'completions' && lastName(api.object) === 'chat') return true
+    const root = rootName(api)
+    return AI_CLIENT_NAME.test(root) || (values.get(root)?.every(isClient) ?? false)
   }
 
   const writes = (call: CallExpression | OptionalCallExpression): boolean => {
     const callee = unwrapExpression(call.callee)
+    if (callee.type === 'Identifier') {
+      const source = imports.get(callee.name)
+      return !values.has(callee.name) && FIRESTORE_WRITE.test(realName(callee.name)) && (!source || /firebase/.test(source.source))
+    }
     if (!isMember(callee)) return false
     const method = propertyName(callee)
     const receiver = unwrapExpression(callee.object)
-    if (/^push$/i.test(method)) return PUSHES_OUT.test(lastName(receiver))
+    if (/^push$/i.test(method)) return pushesOut(receiver, call)
     if (!WRITE_METHOD.test(method) || callsModelApi(call)) return false
-    if (/^create$/i.test(method) && receiver.type === 'Identifier' && CREATES_NO_RECORD.test(receiver.name)) return false
-    // The argument tells these from a table of that name: prisma.headers.delete({ where })
-    if (isMember(receiver) && LOCAL_PROPERTY.test(propertyName(receiver)) && /^(?:set|delete)$/i.test(method) && call.arguments[0]?.type !== 'ObjectExpression') return false
-    return !isLocal(receiver, new Set())
+    if (/^(?:set|delete)$/i.test(method) && isRequestPart(receiver)) return false
+    if (/^create$/i.test(method) && createsNoRecord(receiver)) return false
+    return !isLocal(receiver)
   }
 
-  return someNode(program, skip, node => isCall(node) && writes(node))
-}
-
-function hasOutwardCall(program: Program, skip: Node[]): boolean {
-  return someNode(program, skip, node => {
+  const isOutward = (node: Node, parent: Node | null): boolean => {
     if (node.type === 'NewExpression') return OUTWARD_COMMAND.test(lastName(node.callee))
-    if (isCall(node)) {
-      const callee = unwrapExpression(node.callee)
-      return OUTWARD_CALL.test(lastName(callee)) || (isMember(callee) && OUTWARD_METHOD.test(propertyName(callee)))
+    if (node.type === 'StringLiteral' || node.type === 'TemplateLiteral') {
+      const value = node.type === 'StringLiteral' ? node.value : node.expressions.length === 0 ? node.quasis[0].value.raw : ''
+      // Passed along or typed, as a generic fetch helper's is. Not compared, and not a form's: <form method="post">
+      if (parent?.type === 'JSXAttribute' || parent?.type === 'BinaryExpression' || parent?.type === 'SwitchCase') return false
+      return OUTWARD_HTTP_METHOD.test(value) || (parent?.type === 'ObjectProperty' && lastName(parent.key) === 'method' && OUTWARD_HTTP_METHOD.test(value.toUpperCase()))
     }
-    // Wherever the options are built, and whichever way: { method: id ? 'PUT' : 'POST' }
-    return node.type === 'ObjectProperty' && lastName(node.key) === 'method' &&
-      subtreeContains(node.value, value => value.type === 'StringLiteral' && OUTWARD_HTTP_METHOD.test(value.value))
-  })
+    if (!isCall(node)) return false
+    const callee = unwrapExpression(node.callee)
+    // Only a name from elsewhere: the body of one defined here is read for itself
+    if (callee.type === 'Identifier') return !values.has(callee.name) && WRITE_WORD.test(realName(callee.name)) && !NOT_A_WRITE.test(realName(callee.name))
+    if (!isMember(callee)) return false
+    const name = propertyName(callee)
+    // Those were read above, and a command says for itself: s3.send(new GetObjectCommand(params))
+    if (WRITE_METHOD.test(name) || name === 'push') return false
+    if (name === 'send' && node.arguments[0]?.type === 'NewExpression' && /Command$/.test(lastName(node.arguments[0].callee))) return false
+    return WRITE_WORD.test(name) && !NOT_A_WRITE.test(name) && !isLocal(callee.object)
+  }
+
+  const isModelCall = (node: Node): boolean => {
+    if (node.type === 'NewExpression') return isClient(node)
+    if (!isCall(node)) return false
+    if (callsModelApi(node)) return true
+    const callee = unwrapExpression(node.callee)
+    if (callee.type === 'Import') {
+      const [source] = node.arguments
+      return source?.type === 'StringLiteral' && (AI_SDK.test(source.value) || AI_CLIENT.test(source.value))
+    }
+    if (callee.type === 'Identifier') {
+      const source = imports.get(callee.name)
+      return !!source && !values.has(callee.name) && AI_SDK.test(source.source) && AI_SDK_CALL.test(source.name)
+    }
+    if (!isMember(callee) || callee.object.type !== 'Identifier') return false
+    // import * as ai from 'ai'
+    const source = imports.get(callee.object.name)
+    return source?.name === '*' && AI_SDK.test(source.source) && AI_SDK_CALL.test(propertyName(callee))
+  }
+
+  const isLimit = (node: Node): boolean => {
+    if (!isCall(node)) return false
+    const callee = unwrapExpression(node.callee)
+    const name = lastName(callee)
+    const says = (word: string) => LIMIT_CALL.test(word) && !NOT_A_LIMIT.test(word)
+    if (says(name)) return true
+    if (!isMember(callee)) return false
+    if (name === 'use') return node.arguments.some(arg => says(lastName(arg))) // .use(rateLimitMiddleware)
+    if (!LIMIT_METHOD.test(name)) return false
+    if (LIMITER.test(lastName(callee.object))) return true
+    // const rl = new Ratelimit(options); rl.limit(ip)
+    const receiver = unwrapExpression(callee.object)
+    if (receiver.type !== 'Identifier') return false
+    return (values.get(receiver.name) ?? []).some(value => {
+      const made = value && unwrapExpression(value)
+      return made?.type === 'NewExpression' && LIMITER.test(lastName(made.callee))
+    })
+  }
+
+  // Whether this action reaches a model with no limit on the way, following it into the helpers and
+  // clients it names in the file
+  const reachesUnlimitedModel = (entry: Node): boolean => {
+    let model = false
+    let limit = false
+    const seen = new Set<string>()
+    const stack = [entry]
+    while (stack.length > 0 && !limit) {
+      walkAST(stack.pop(), node => {
+        if (isModelCall(node)) model = true
+        else if (isLimit(node)) limit = true
+        else if (node.type === 'Identifier' && !seen.has(node.name)) {
+          seen.add(node.name)
+          const definition = definitions.get(node.name)
+          if (definition) stack.push(definition)
+        }
+      })
+    }
+    return model && !limit
+  }
+
+  return {
+    hasWrite: (skip: Set<Node>) => subtreeContains(program, node => isCall(node) && writes(node), skip),
+    hasOutward: (skip: Set<Node>) => subtreeContains(program, isOutward, skip),
+    // Which actions call a model with no limit: 'open' ones could check the user, 'public' ones can't
+    modelCalls(open: Node[], guests: Node[]): 'open' | 'public' | null {
+      if (!subtreeContains(program, isModelCall)) return null
+      const inline: Node[] = []
+      walkAST(program, node => {
+        if ('body' in node && node.body && typeof node.body === 'object' && 'directives' in node.body && hasDirective(node.body.directives)) inline.push(node)
+      })
+      const fileLevel = hasDirective(program.directives) || inline.length === 0
+      if ((fileLevel ? [...open, ...inline] : inline).some(reachesUnlimitedModel)) return 'open'
+      return fileLevel && guests.some(reachesUnlimitedModel) ? 'public' : null
+    },
+  }
 }
 
 export const serverActionAuthRule: Rule = {
@@ -360,30 +575,40 @@ export const serverActionAuthRule: Rule = {
     if (isTestFile(file.relativePath)) return []
     if (!USE_SERVER.test(file.content)) return []
 
-    // Check if path suggests public actions
-    for (const p of PUBLIC_ACTION_NAMES) {
-      if (p.test(file.relativePath)) return []
-    }
+    // A comment is no check. A file Babel can't parse is only read as text.
+    const source = file.ast ? blankNodes(file.content, file.ast.comments ?? []) : file.content
 
     // Check for any auth pattern
-    const hasAuth = AUTH_PATTERNS.some(p => p.test(file.content))
+    const hasAuth = AUTH_PATTERNS.some(p => p.test(source))
     if (hasAuth) return []
 
-    // Actions built on an auth-checking client are covered. Next to other exports, their code
-    // doesn't count as a mutation; a file Babel can't parse is only read as text.
-    const { checked, others } = file.ast ? readExports(file.ast.program) : { checked: [], others: 0 }
-    if (checked.length > 0 && others === 0) return []
+    // Check if path suggests public actions: they need no check on a write
+    const publicPath = PUBLIC_ACTION_NAMES.some(p => p.test(file.relativePath))
 
-    const code = file.ast ? blankNodes(file.content, [...checked, ...(file.ast.comments ?? [])]) : file.content
+    const imports = file.ast ? readImports(file.ast.program) : new Map<string, Import>()
+    const { checked, guests, open, others }: Exports = file.ast ? readExports(file.ast.program, imports) : { checked: [], guests: [], open: [], others: 0 }
+
+    // Actions built on an auth-checking client are covered. Next to other exports, their code
+    // doesn't count as a mutation, and neither does the code of one that's public by design.
+    if (checked.length > 0 && guests.length === 0 && others === 0) return []
+    const skip = new Set<Node>([...checked, ...guests])
+    const code = blankNodes(source, [...skip])
+    const calls = file.ast ? readCalls(file.ast.program, imports) : null
+    // Comments and all, so what shows an effect outside the process stays as reported as it was
+    const text = blankNodes(file.content, [...skip])
+    const maybeWrite = WRITE_CALL.test(text) || SQL_WORD.test(text)
 
     // Check for mutations (if it's just a read action, lower concern)
-    const hasMutation = SQL_WORD.test(code) || (file.ast
-      ? hasWriteCall(file.ast.program, checked) || (WRITE_CALL.test(code) && hasOutwardCall(file.ast.program, checked))
-      : WRITE_CALL.test(code))
-    const callsModel = !hasMutation && !!file.ast && hasModelCall(file.ast.program, checked) && !RATE_LIMITED.test(code)
+    const hasMutation = !publicPath && (calls
+      ? SQL_STATEMENT.test(code) || calls.hasWrite(skip) || (maybeWrite && calls.hasOutward(skip))
+      : maybeWrite)
+    const modelCalls = hasMutation || !calls ? null : calls.modelCalls(open, guests)
 
-    if (!hasMutation && !callsModel) return []
+    if (!hasMutation && !modelCalls) return []
     const does = hasMutation ? 'performs mutations' : 'calls an AI model'
+    const isPublic = !hasMutation && (publicPath || modelCalls === 'public')
+    // In middleware, not this action: it may not cover it. A package in the dependencies says nothing.
+    const limited = !hasMutation && project.rateLimitsInMiddleware === true
 
     let reportLine = 1
     for (let i = 0; i < file.lines.length; i++) {
@@ -401,21 +626,34 @@ export const serverActionAuthRule: Rule = {
     const middlewareSkipsPages = project.hasAuthMiddleware && project.authMiddlewareExcludesPages === true
     const middleware = project.hasAuthMiddleware && !middlewareSkipsPages
 
+    const orLimit = hasMutation ? '' : '. If it has to stay public, rate-limit it'
+    const finding = { ruleId: 'server-action-auth', file: file.relativePath, line: reportLine, column: 1, category: 'security' as const }
+
+    // There's no user to check, so a limit on what it can spend is the only fix
+    if (isPublic) {
+      return [{
+        ...finding,
+        message: limited
+          ? 'Server action calls an AI model with no rate limit of its own (rate limiting detected — verify it covers this public action)'
+          : 'Server action calls an AI model with no rate limit — anyone can call this public action and spend your credits',
+        severity: limited ? 'info' : 'warning',
+        fix: 'Rate-limit it: this action is public by design, so a limit is what bounds the bill',
+      }]
+    }
+
     return [{
-      ruleId: 'server-action-auth',
-      file: file.relativePath,
-      line: reportLine,
-      column: 1,
+      ...finding,
       message: middleware
         ? `Server action ${does} without an inline auth check (middleware auth detected — verify coverage)`
-        : middlewareSkipsPages
+        : middlewareSkipsPages && !limited
           ? `Server action ${does} without any authentication check (middleware auth detected, but its matcher doesn't cover pages)`
-          : `Server action ${does} without any authentication check — anyone can call this action${hasMutation ? '' : ' and spend your credits'}`,
-      severity: middleware ? 'info' : 'warning',
-      category: 'security',
+          : limited
+            ? `Server action ${does} without any authentication check (rate limiting detected — verify it covers this action)`
+            : `Server action ${does} without any authentication check — anyone can call this action${hasMutation ? '' : ' and spend your credits'}`,
+      severity: middleware || limited ? 'info' : 'warning',
       fix: middleware
-        ? 'Check the user in the action too, not only in middleware: const session = await auth(); if (!session) throw new Error("Unauthorized")'
-        : `Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")${hasMutation ? '' : '. If it has to stay public, rate-limit it'}`,
+        ? `Check the user in the action too, not only in middleware: const session = await auth(); if (!session) throw new Error("Unauthorized")${orLimit}`
+        : `Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")${orLimit}`,
     }]
   },
 }

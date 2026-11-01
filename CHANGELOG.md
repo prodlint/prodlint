@@ -8,37 +8,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - **`server-action-auth` reports a model call with no auth check.** It spends the app's
-  credits on whatever the caller sends. The AI SDK's `generateText`, `streamText`,
-  `generateObject`, `streamObject`, `streamUI`, `embed` and the like count when imported from
-  the SDK, and so does a model client the file makes (`new GoogleGenerativeAI(key)`,
-  `new ChatOpenAI()`), `openai.chat.completions.create()` (or `groq.`, or any other client's)
-  and `anthropic.messages.create()`. A rate limit in the file clears it, since that bounds the
-  bill for an action that's public on purpose, and the fix says so. Any other `.create()` on a
-  client from another file still reads as a write. Many of these actions were reported before
-  only because a `stream.update()` or a `.create()` read as a write (see below), so they keep a
-  finding, with a message that says what it is. Others are new: **scan results may change** for
-  apps that call a model from a server action.
+  credits on whatever the caller sends. These count, wherever an action reaches them through
+  the file's own helpers: an AI SDK function imported from the SDK (`generateText`,
+  `streamText`, `streamUI`, `embed` and the like), including `createStreamableValue()` and
+  `getMutableAIState()`, which are all that's left to see of a model behind a helper; a model
+  client the file makes (`new GoogleGenerativeAI(key)`, `new ChatOpenAI()`); `.create()`,
+  `.stream()` or `.parse()` on `*.chat.completions`, on a client the file makes, or on one
+  named `openai`, `anthropic` or the like. A rate limit clears it, since that bounds the bill:
+  a call on the action's path (`rateLimit(ip)`, `limiter.consume(ip)`), not the word in a
+  comment or `OpenAI.RateLimitError`. Middleware that rate-limits lowers it to info; a
+  rate-limiting package in the dependencies doesn't. An action that's public by design, on a public-named path or behind a guest guard, is told to
+  add a limit, not an auth check. Many of these actions were reported before only because a
+  `stream.update()` or a `.create()` read as a write, so they keep a finding, with a message that
+  says what it is. Others are new: **scan results may change** for apps that call a model from a
+  server action.
+- **`server-action-auth` reads writes the text check never could:** Prisma's `createMany`,
+  `updateMany` and `deleteMany`, Mongo's `insertOne`, `updateOne`, `deleteOne` and
+  `findOneAndUpdate`, Firestore's `setDoc`, `addDoc`, `updateDoc` and `deleteDoc`, Redis's
+  `hset`, `sadd`, `lpush`, `incr` and `del`, and any write with a generic
+  (`kv.set<number>(key, value)`). **Scan results may change:** a few more findings.
 
 ### Fixed
 - **`server-action-auth` read anything with a `.set()` or an `.update()` as a database
-  write.** The check was a regex over the file's text, so `stream.update()` from
-  `createStreamableValue()`, a hash's `update()`, `array.push()`, `map.set()`,
-  `url.searchParams.set()`, `headers.set()`, `axios.create()` and commented-out code all
-  counted as mutations, and the fix told agents to add an auth check to them. It now reads
-  the calls off the AST and asks what each is called on, from what the file defines it as.
-  Hashes and ciphers, streams and AI state (`createStreamableValue()`, `getMutableAIState()`),
-  `Map`, `Set`, `Headers`, `URLSearchParams`, `FormData` and typed arrays don't count, and
-  neither does `Object.create()` or `axios.create()`. A `push()` counts only on a Firebase
-  reference or an event client. Anything else still counts, including a name whose definition
-  is out of sight or that also stands for something else, so `prisma.hash.update()` and a bare
-  `stream.update()` are still reported. So are real writes through Prisma, Drizzle, Supabase,
-  Mongoose, Firestore, Redis and raw SQL. A write with a generic now counts too:
-  `kv.set<number>(key, value)`, which the regex couldn't read. An HTTP write, a file write or
-  an email keeps the finding its file had, since some of those were only ever reported through
-  one of these calls (a signed POST and its hash's `update()`), but it's still not read as a
-  write on its own: so many aren't, like a GraphQL read over POST or a token exchange. A file
-  Babel can't parse stays with the text check. **Scan results may change** for any app with
-  server actions: mostly fewer `server-action-auth` findings.
+  write.** The check was a regex over the file's text, so `stream.update()`, a hash's
+  `update()`, `array.push()`, `map.set()`, `url.searchParams.set()`, `headers.set()`,
+  `axios.create()` and commented-out code all counted as mutations, and the fix told agents to
+  add an auth check to them. It now reads the calls off the AST and asks what each is called
+  on, from what the file defines it as. These don't count: hashes and ciphers from `crypto`;
+  `Map`, `Set`, `Headers`, `URLSearchParams`, `FormData`, `URL` and typed arrays made in the
+  action or typed as a parameter; a `.headers`, `.cookies` or `.searchParams` on a request,
+  response or URL; `Object.create()` and `axios.create()`. A `push()` counts only on a Firebase
+  reference, on a named event (`hatchet.events.push('order:created', order)`), or on an array at
+  module level. So does a `Map` or `Set` at module level, where it holds the app's data, unless
+  its name says it's a cache or a limit map. Anything else still counts, including a name defined
+  out of sight or that also stands for something else, so `prisma.hash.update()` and a bare
+  `stream.update()` are still reported. A word like `UPDATE` now needs to be a statement
+  (`UPDATE items SET`) to count by itself, so `type Op = 'READ' | 'UPDATE'` doesn't. A file Babel
+  can't parse stays with the text check. **Scan results may change** for any app with server
+  actions: mostly fewer `server-action-auth` findings.
+- **Tightening that check keeps what the old one caught.** A real write can go unread on its own:
+  a POST, a file write, an email, `supabase.rpc()`, `queue.add()`, or a helper like
+  `deletePhoto()` from another file. Each of these is often not a write (a GraphQL read over POST,
+  a token exchange), so none is reported alone. But a file that shows one keeps the finding the
+  old check gave it, for whatever reason: a signed POST that places an order was only ever
+  reported for its hash's `update()`. A write behind a name that doesn't say so can still be lost.
 - **A cookie write no longer counts as a mutation in `server-action-auth`.** It changes only
   the caller's own browser, and they can send any cookie they like. It's usually a locale or
   theme switch, a logout, a login or a password gate, where the fix (add an auth check) does
@@ -49,7 +62,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   sign-up code, so there's no user to check and the fix would lock out the only people who can
   call it. `throwIf` or `redirectIf` plus `Authenticated`, `LoggedIn` or `SignedIn` count, by
   the whole name (`throwIfAuthenticatedApiError` doesn't). A plain function exported next to
-  such an action is still reported.
+  such an action is still reported, and so is a model call in one.
+- **`server-action-auth` took a comment for an auth check, and `authorId` for one.**
+  `// const session = await auth()` cleared the file, and so did `cookies().set(...)` before a
+  `create({ data: { authorId } })`. **Scan results may change:** a few more findings.
 - **The GitHub Action's `v1` tag could point at a scanner npm wasn't serving yet.** A release
   moved `v1` right after publishing, but npm lists a new version before it serves the tarball:
   0.10.6's still returned 404 over three minutes after it was listed. A run on `@v1` in that gap failed
