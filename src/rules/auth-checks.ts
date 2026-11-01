@@ -1,6 +1,7 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import type { Node, Program } from '@babel/types'
-import { isApiRoute, isCommentLine } from '../utils/patterns.js'
+import { unwrapExpression } from '../utils/ast.js'
+import { isApiRoute, isCommentLine, saysAuth, saysNoAuth } from '../utils/patterns.js'
 
 // Routes that typically don't need auth
 const AUTH_EXEMPT_PATTERNS = [
@@ -71,24 +72,11 @@ function servedUnderApi(relativePath: string): boolean {
 // A handler wrapped in an auth helper counts as checked. A helper is an auth helper when
 // its name has an auth or session word (auth(handler), withApiAuthRequired,
 // withIronSessionApiRoute), or when it's a with* helper imported from a module whose path
-// has one (dub's withWorkspace from '@/lib/auth'). "Author" isn't auth. Neither are
-// "admin", "token" or "key" alone: withSupabaseAdmin hands the handler a service-role
-// client, withTokenLimit counts LLM tokens, withIdempotencyKey dedupes requests.
-const AUTH_WORD = /^(?:auth(?!or(?:s|ed|ing|ship)?$)|session)/i
-const NO_AUTH_WORD = /^(?:without|no|non|skip|bypass|optional|public|anon|anonymous|guest)$/i
-
-// withApiAuthRequired → with Api Auth Required; '@auth0/nextjs-auth0' → auth0 nextjs auth0
-function words(name: string): string[] {
-  return name.split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/).filter(Boolean)
-}
-
-function saysAuth(name: string): boolean {
-  const w = words(name)
-  return w.some(x => AUTH_WORD.test(x)) && !w.some(x => NO_AUTH_WORD.test(x))
-}
-
+// has one (dub's withWorkspace from '@/lib/auth'). "admin", "token" or "key" alone don't
+// count: withSupabaseAdmin hands the handler a service-role client, withTokenLimit counts
+// LLM tokens, withIdempotencyKey dedupes requests.
 function isAuthHelper(name: string, source: string | undefined): boolean {
-  if (words(name).some(x => NO_AUTH_WORD.test(x))) return false
+  if (saysNoAuth(name)) return false
   return saysAuth(name) || (/^with[A-Z0-9_$]/.test(name) && source !== undefined && saysAuth(source))
 }
 
@@ -134,12 +122,7 @@ function handlersFromAst(program: Program): Handler[] {
   }
 
   const classify = (node: Node, seen: Set<string>): Verdict => {
-    while (
-      node.type === 'TSAsExpression' || node.type === 'TSSatisfiesExpression' || node.type === 'TSNonNullExpression' ||
-      node.type === 'TSTypeAssertion' || node.type === 'ParenthesizedExpression' || node.type === 'AwaitExpression'
-    ) {
-      node = node.type === 'AwaitExpression' ? node.argument : node.expression
-    }
+    node = unwrapExpression(node)
     switch (node.type) {
       case 'FunctionDeclaration':
       case 'FunctionExpression':

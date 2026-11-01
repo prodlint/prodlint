@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (924 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (957 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -54,7 +54,7 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
-**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 14 (including `sql-injection`, `no-n-plus-one` and `hallucinated-imports`, plus two migrated later: `redirect-in-try-catch`, and `auth-checks` for route handler exports and their auth wrappers).
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 15 (including `sql-injection`, `no-n-plus-one` and `hallucinated-imports`, plus three migrated later: `redirect-in-try-catch`, `auth-checks` for route handler exports and their auth wrappers, and `server-action-auth` for the client each exported action is built on).
 
 ### Two-Phase Scanning
 
@@ -72,6 +72,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isTestFile(path)`, `isScriptFile(path)` (matches `scripts/` dir + standalone names like `seed.ts`, `migrate.ts`), `isConfigFile(path)`
 - `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
 - `blankOut(source, strings)` / `closingBrace(code, open)` — regex fallbacks: blank out comments (and string contents) keeping offsets, then match braces (`shallow-catch`, `redirect-in-try-catch`)
+- `nameWords(name)`, `saysAuth(name)`, `saysNoAuth(name)` — whether a name or module path has an auth or session word ("Author" isn't one), or a word that says the opposite (`auth-checks`' wrappers, `server-action-auth`'s clients)
 
 **`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+, expanded v0.7.0):
 - `parseFile(content, fileName)` — parses JS/TS/JSX/TSX into Babel AST, returns null on failure
@@ -83,6 +84,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isStaticString(node)` — detects StringLiteral and zero-expression TemplateLiteral (v0.7.0)
 - `findUseEffectRanges(ast)` — precise useEffect callback body line ranges (v0.7.0)
 - `subtreeContains(node, predicate)` — recursive subtree search helper (v0.7.0)
+- `unwrapExpression(node)` — strips `as`, `satisfies`, `!`, `<T>`, parentheses and `await`
 
 **`src/utils/frameworks.ts`** — framework detection + whitelists:
 - `DEPENDENCY_TO_FRAMEWORK` — maps npm packages to framework identifiers
@@ -104,6 +106,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
 - **Import resolution (dead-exports)**: imports are resolved to the scanned modules they load (relative path, alias by path suffix, workspace package from the walked `package.json` names), and re-exports pass a use on. An import from a declared dependency, a Node built-in or a URL uses no project export; only an import that matches no scanned file still counts by name everywhere. Keep that fallback: it covers aliases and layouts the resolver can't follow
+- **Action clients (server-action-auth)**: an exported action counts as checked when its builder chain says so, by the client's name (`authActionClient`, `protectedAction`, and `userActionClient` or `adminActionClient` as a whole name, so `withSupabaseAdmin` and `adminClient`, which are about a service-role client, stay out) or an auth `.use()`. An imported client is judged by its name alone; one defined in the same file is read, and its name counts only once it has a `.use()`. Each export counts on its own, so a plain function exported next to a checked action is still reported. A file Babel can't parse stays with the text check
 - **Line/column numbering**: 1-indexed throughout
 
 ### Scoring (v0.5.0)

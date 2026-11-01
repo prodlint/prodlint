@@ -176,6 +176,32 @@ export function isConfigFile(relativePath: string): boolean {
     name === 'vitest.config.mts'
 }
 
+// A word that says auth, in a name or a module path. "Author" isn't auth.
+const AUTH_WORD = /^(?:auth(?!or(?:s|ed|ing|ship)?$)|session)/i
+const NO_AUTH_WORD = /^(?:without|no|non|skip|bypass|optional|public|anon|anonymous|guest)$/i
+
+/**
+ * Split a name or a module path into words:
+ * withApiAuthRequired → with Api Auth Required; '@auth0/nextjs-auth0' → auth0 nextjs auth0
+ */
+export function nameWords(name: string): string[] {
+  return name.split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/).filter(Boolean)
+}
+
+/**
+ * Check if a name has a word that says it goes without auth: publicAction, optionalAuth
+ */
+export function saysNoAuth(name: string): boolean {
+  return nameWords(name).some(word => NO_AUTH_WORD.test(word))
+}
+
+/**
+ * Check if a name has an auth or session word, and none that says the opposite
+ */
+export function saysAuth(name: string): boolean {
+  return nameWords(name).some(word => AUTH_WORD.test(word)) && !saysNoAuth(name)
+}
+
 /**
  * Find loop bodies in source lines via brace counting.
  * Returns array of { loopLine, bodyStart, bodyEnd } (0-indexed).
