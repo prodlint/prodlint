@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-11-01
+
 ### Fixed
 - **`server-action-auth` reported actions whose auth check runs in their action client.**
   With next-safe-action, `authActionClient.inputSchema(schema).action(fn)` is checked by the
