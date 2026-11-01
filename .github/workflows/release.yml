@@ -207,3 +207,35 @@ jobs:
         run: |
           git tag -f v1
           git push origin v1 --force
+
+  # Last on purpose: everything is published by now, so a failure here can't hurt a release.
+  # A resume skips it when the Release already exists. It runs gh and awk, nothing third-party.
+  github-release:
+    needs: update-v1-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Create the GitHub Release from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "$RELEASE_TAG already has a GitHub Release."
+            exit 0
+          fi
+          awk -v heading="## [${RELEASE_TAG#v}]" '
+            index($0, heading) == 1 { found = 1; next }
+            /^## [/ { found = 0 }
+            found && (started || NF) { started = 1; print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no section for $RELEASE_TAG." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file release-notes.md --latest
