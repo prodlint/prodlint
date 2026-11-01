@@ -4,7 +4,7 @@ import { resolve, extname, basename, sep } from 'node:path'
 import { buildCommentMap } from './patterns.js'
 import { parseFile } from './ast.js'
 import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
-import { matcherExcludesApi } from './middleware-matcher.js'
+import { matcherExcludesApi, matcherExcludesPages } from './middleware-matcher.js'
 import type { FileContext, ProjectContext } from '../types.js'
 
 const DEFAULT_IGNORES = [
@@ -247,6 +247,7 @@ export async function buildProjectContext(
   let tsconfigPaths = new Set<string>()
   let hasAuthMiddleware = false
   let authMiddlewareExcludesApi = false
+  let authMiddlewareExcludesPages = false
   let hasRateLimiting = false
   const detectedFrameworks = new Set<string>()
   let gitignoreContent: string | null = null
@@ -325,8 +326,9 @@ export async function buildProjectContext(
       continue // File doesn't exist
     }
     if (MIDDLEWARE_AUTH_PATTERNS.some(p => p.test(content))) {
-      // Its matcher may keep it off /api; with two auth files, both must
+      // Its matcher may keep it off /api, or on /api alone; with two auth files, both must agree
       authMiddlewareExcludesApi = (!hasAuthMiddleware || authMiddlewareExcludesApi) && matcherExcludesApi(content, name)
+      authMiddlewareExcludesPages = (!hasAuthMiddleware || authMiddlewareExcludesPages) && matcherExcludesPages(content, name)
       hasAuthMiddleware = true
     }
     if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) hasRateLimiting = true
@@ -350,6 +352,7 @@ export async function buildProjectContext(
     tsconfigPaths,
     hasAuthMiddleware,
     authMiddlewareExcludesApi,
+    authMiddlewareExcludesPages,
     hasRateLimiting,
     detectedFrameworks,
     gitignoreContent,
