@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { releaseNotes } = require('./release-notes.cjs');
 
 const root = path.join(__dirname, '..');
 const read = (f) => JSON.parse(fs.readFileSync(path.join(root, f), 'utf8'));
@@ -54,6 +55,11 @@ check('prodlint-mcp mcpName vs server.json name', mcpPkg.mcpName, server.name);
 // run an older scanner than the release it belongs to.
 const actionYml = fs.readFileSync(path.join(root, 'action.yml'), 'utf8');
 check('action.yml scanner pin', actionYml.match(/\bnpx -y prodlint@(\d+\.\d+\.\d+)\b/)?.[1], pkg.version);
+
+// release.yml's last job publishes this section as the GitHub Release. Checked here, a version
+// without one stops before npm instead of failing after it.
+const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+check('CHANGELOG.md notes for this version', releaseNotes(changelog, pkg.version) ? 'found' : 'none', 'found');
 
 console.log('Release consistency check');
 console.log(checks.join('\n'));
