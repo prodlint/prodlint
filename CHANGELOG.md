@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **`server-action-auth` reports a model call with no auth check.** It spends the app's
+  credits on whatever the caller sends. The AI SDK's `generateText`, `streamText`,
+  `generateObject`, `streamObject`, `streamUI`, `embed` and the like count when imported from
+  the SDK, and so does a model client the file makes (`new GoogleGenerativeAI(key)`,
+  `new ChatOpenAI()`), `openai.chat.completions.create()` (or `groq.`, or any other client's)
+  and `anthropic.messages.create()`. A rate limit in the file clears it, since that bounds the
+  bill for an action that's public on purpose, and the fix says so. Any other `.create()` on a
+  client from another file still reads as a write. Many of these actions were reported before
+  only because a `stream.update()` or a `.create()` read as a write (see below), so they keep a
+  finding, with a message that says what it is. Others are new: **scan results may change** for
+  apps that call a model from a server action.
+
+### Fixed
+- **`server-action-auth` read anything with a `.set()` or an `.update()` as a database
+  write.** The check was a regex over the file's text, so `stream.update()` from
+  `createStreamableValue()`, a hash's `update()`, `array.push()`, `map.set()`,
+  `url.searchParams.set()`, `headers.set()`, `axios.create()` and commented-out code all
+  counted as mutations, and the fix told agents to add an auth check to them. It now reads
+  the calls off the AST and asks what each is called on, from what the file defines it as.
+  Hashes and ciphers, streams and AI state (`createStreamableValue()`, `getMutableAIState()`),
+  `Map`, `Set`, `Headers`, `URLSearchParams`, `FormData` and typed arrays don't count, and
+  neither does `Object.create()` or `axios.create()`. A `push()` counts only on a Firebase
+  reference or an event client. Anything else still counts, including a name whose definition
+  is out of sight or that also stands for something else, so `prisma.hash.update()` and a bare
+  `stream.update()` are still reported. So are real writes through Prisma, Drizzle, Supabase,
+  Mongoose, Firestore, Redis and raw SQL. A write with a generic now counts too:
+  `kv.set<number>(key, value)`, which the regex couldn't read. A file Babel can't parse stays
+  with the text check. **Scan results may change** for any app with server actions: mostly
+  fewer `server-action-auth` findings.
+- **A cookie write no longer counts as a mutation in `server-action-auth`.** It changes only
+  the caller's own browser, and they can send any cookie they like. It's usually a locale or
+  theme switch, a logout, a login or a password gate, where the fix (add an auth check) does
+  nothing or breaks the action. The cost: an action that signs a session for whoever asks was
+  reported only by accident before, and now isn't.
+- **`server-action-auth` reported actions behind `.use(throwIfAuthenticated)`.** A `.use()`
+  that turns signed-in users away marks an action for people with no session, like sending a
+  sign-up code, so there's no user to check and the fix would lock out the only people who can
+  call it. `throwIf` or `redirectIf` plus `Authenticated`, `LoggedIn` or `SignedIn` count, by
+  the whole name (`throwIfAuthenticatedApiError` doesn't). A plain function exported next to
+  such an action is still reported.
+
 ## [0.10.6] - 2026-11-01
 
 ### Fixed
