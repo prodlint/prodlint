@@ -43,6 +43,7 @@
     "audit:supply-chain": "node scripts/supply-chain-audit.cjs",
     "verify:release": "node scripts/verify-release.cjs",
     "sync:versions": "node scripts/sync-versions.cjs",
+    "preversion": "node scripts/release-notes.cjs Unreleased",
     "version": "node scripts/sync-versions.cjs",
     "prepublishOnly": "npm run build"
   },

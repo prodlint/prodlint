@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (957 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -170,12 +170,16 @@ From a worktree or any branch but master, push with `git push origin HEAD:master
 The push's "Bypassed rule violations" notice is normal. Redirect `npm version`'s output to a
 file rather than piping it: a filter that exits early kills it mid-run.
 
-`npm version` fires the `version` lifecycle hook, which runs `scripts/sync-versions.cjs`
-to propagate the new version into `server.json` (both fields),
-`packages/prodlint-mcp/package.json` (its `version` and its `^` range on `prodlint`),
-the `README.md` sample output, the `tests/reporter.test.ts` fixture, and the scanner pin
-in `action.yml` — then stages them into the version commit. The script **fails loudly**
-if a text anchor no longer matches exactly once, rather than silently skipping a file.
+`npm version` first runs `scripts/release-notes.cjs Unreleased` (`preversion`), which stops
+the bump if `CHANGELOG.md` has nothing under `[Unreleased]`. Then it fires the `version`
+lifecycle hook, which runs `scripts/sync-versions.cjs` to propagate the new version into
+`server.json` (both fields), `packages/prodlint-mcp/package.json` (its `version` and its `^`
+range on `prodlint`), the `README.md` sample output, the `tests/reporter.test.ts` fixture,
+and the scanner pin in `action.yml`, and to move the `[Unreleased]` entries under the new
+version's heading in `CHANGELOG.md` (don't move them by hand) — then stages them into the
+version commit. The script **fails loudly** if a text anchor no longer matches exactly once,
+rather than silently skipping a file. `tests/release-notes.test.ts` runs these scripts on a
+copy of the repo, so a moved anchor fails its own PR instead of a release.
 
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
@@ -188,8 +192,10 @@ It is four jobs, split by privilege — keep it that way:
 - **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
-- **`github-release`** (`contents: write`) runs nothing but `gh` and `awk`, last, so a failure
-  can't hurt a release that's already out. A resume skips it if the Release exists.
+- **`github-release`** (`contents: write`) reads the notes with `scripts/release-notes.cjs`, in a
+  step with no token, then runs nothing but `gh`. It's last, so a failure can't hurt a release
+  that's already out, and `verify-release.cjs` checks the notes exist before anything publishes.
+  A resume skips it if the Release exists.
 
 **If a release run fails after npm** (MCP registry, `v1`), don't re-run it: a re-run
 reuses the tagged commit's workflow file and retries the npm publishes, which npm refuses.
