@@ -192,6 +192,8 @@ It is four jobs, split by privilege — keep it that way:
   `npm ci`, build, tests, self-scan — then `npm pack`s both packages into an artifact.
 - **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
+  It ends by waiting for npm to serve `prodlint`'s tarball, which can lag the version's listing
+  by minutes, so `v1` never points at a scanner `npx` can't download yet.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
 - **`github-release`** (`contents: write`) reads the notes with `scripts/release-notes.cjs`, in a
   step with no token, then runs nothing but `gh`. It's last, so a failure can't hurt a release

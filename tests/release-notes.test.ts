@@ -193,4 +193,13 @@ describe('cutting a release', () => {
     expect(notesStep).not.toContain('GH_TOKEN')
     expect(job).toContain('--notes-file release-notes.md')
   })
+
+  it('moves v1 only after npm serves the tarball the action will download', () => {
+    const release = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8').replace(/\r\n/g, '\n')
+    const moveV1 = release.indexOf('\n  update-v1-tag:')
+    const wait = release.indexOf('curl -fsI -o /dev/null "$TARBALL"')
+    expect(release.indexOf('\n  publish:')).toBeLessThan(wait)
+    expect(wait).toBeLessThan(moveV1)
+    expect(release.slice(moveV1)).toContain('needs: publish')
+  })
 })

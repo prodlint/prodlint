@@ -50,6 +50,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   call it. `throwIf` or `redirectIf` plus `Authenticated`, `LoggedIn` or `SignedIn` count, by
   the whole name (`throwIfAuthenticatedApiError` doesn't). A plain function exported next to
   such an action is still reported.
+- **The GitHub Action's `v1` tag could point at a scanner npm wasn't serving yet.** A release
+  moved `v1` right after publishing, but npm lists a new version before it serves the tarball:
+  0.10.6's still returned 404 over three minutes after it was listed. A run on `@v1` in that gap failed
+  with "prodlint didn't finish the scan". The release now waits for the tarball before moving `v1`.
 
 ## [0.10.6] - 2026-11-01
 
