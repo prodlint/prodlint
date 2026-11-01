@@ -33,9 +33,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   is out of sight or that also stands for something else, so `prisma.hash.update()` and a bare
   `stream.update()` are still reported. So are real writes through Prisma, Drizzle, Supabase,
   Mongoose, Firestore, Redis and raw SQL. A write with a generic now counts too:
-  `kv.set<number>(key, value)`, which the regex couldn't read. A file Babel can't parse stays
-  with the text check. **Scan results may change** for any app with server actions: mostly
-  fewer `server-action-auth` findings.
+  `kv.set<number>(key, value)`, which the regex couldn't read. An HTTP write, a file write or
+  an email keeps the finding its file had, since some of those were only ever reported through
+  one of these calls (a signed POST and its hash's `update()`), but it's still not read as a
+  write on its own: so many aren't, like a GraphQL read over POST or a token exchange. A file
+  Babel can't parse stays with the text check. **Scan results may change** for any app with
+  server actions: mostly fewer `server-action-auth` findings.
 - **A cookie write no longer counts as a mutation in `server-action-auth`.** It changes only
   the caller's own browser, and they can send any cookie they like. It's usually a locale or
   theme switch, a logout, a login or a password gate, where the fix (add an auth check) does

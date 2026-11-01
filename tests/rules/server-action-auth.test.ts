@@ -828,6 +828,95 @@ describe('server-action-auth on what counts as a mutation', () => {
     }
   })
 
+  describe('with an effect outside the process that is not read as a write', () => {
+    const OUTWARD = [
+      "await fetch(url, { method: 'POST', body: JSON.stringify(input) })",
+      'await fetch(url, { method: "PUT", body: input })',
+      "await fetch(url, { method: 'PATCH', body: input })",
+      "await fetch(url, { method: 'post', body: input })",
+      "await fetch(url, { method: 'delete' })",
+      "const options = { method: 'POST', body: input }\n  await fetch(url, options)",
+      "await fetch(url, { method: input.id ? 'PUT' : 'POST', body: input })",
+      'await axios.post(url, input)',
+      'await axios.put(url, input)',
+      'await axios.patch(url, input)',
+      'await api.post(url, input)',
+      'await env.KV.put(input.key, input.value)',
+      'await fs.writeFile(input.path, input.data)',
+      'fs.writeFileSync(input.path, input.data)',
+      'await writeFile(input.path, input.data)',
+      'await fs.promises.appendFile(input.path, input.data)',
+      'await fs.unlink(input.path)',
+      'await rm(input.path)',
+      'await transporter.sendMail(input)',
+      'await sendEmail(input)',
+      'await s3.send(new PutObjectCommand(input))',
+      'await s3.send(new DeleteObjectCommand(input))',
+    ]
+    const LOCAL = [
+      'const rows = []\n  rows.push(input)',
+      "const signature = createHmac('sha256', secret).update(input).digest('hex')",
+      "const target = new URL(url)\n  target.searchParams.set('a', input)",
+      "cookies().set('token', input)",
+      'const stream = createStreamableValue()\n  stream.update(input)',
+      'const seen = new Map()\n  seen.set(input.id, input)',
+      'const client = axios.create({ baseURL: input })',
+    ]
+
+    // A signed POST that places an order was only ever reported for its hash's update().
+    // Reading calls properly mustn't lose that.
+    it('keeps the finding its file had', () => {
+      for (const outward of OUTWARD) {
+        for (const local of LOCAL) {
+          const findings = check(action(`${local}\n  ${outward}`))
+          expect(findings, `${local}\n${outward}`).toHaveLength(1)
+          expect(findings[0].message).toContain('performs mutations')
+        }
+      }
+    })
+
+    // So many aren't writes: a POST can be a GraphQL read, a token exchange or a captcha check,
+    // and a file a temp file. That's for another day, and no file gets a new finding here.
+    it('reports nothing on its own, as before', () => {
+      for (const outward of OUTWARD) {
+        expect(check(action(outward)), outward).toHaveLength(0)
+      }
+    })
+
+    it('does not take a read for one', () => {
+      for (const body of [
+        'return fetch(url)',
+        "return fetch(url, { method: 'GET' })",
+        "return fetch(url, { method: 'HEAD' })",
+        "return fetch(url, { cache: 'no-store' })",
+        'return axios.get(url)',
+        'return api.get(url)',
+        'return fs.readFile(input.path)',
+        'return s3.send(new GetObjectCommand(input))',
+        "return { method: 'card', post: input }",
+        '// await axios.post(url, input)',
+      ]) {
+        expect(check(action(`const rows = []\n  rows.push(input)\n  ${body}`)), body).toHaveLength(0)
+      }
+      // A form's method is the browser's business
+      const file = makeFile(`'use server'\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return <form method="post" action={input} />\n}\n`, { relativePath: 'app/actions/items.tsx' })
+      expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+    })
+
+    it('does not read a comment as what the text check found', () => {
+      expect(check(action('// rows.push(input)\n  await axios.post(url, input)'))).toHaveLength(0)
+    })
+
+    it('leaves a checked action out of it', () => {
+      expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await axios.post(url, parsedInput) })
+export async function b(input) {
+  const rows = []
+  rows.push(input)
+  return rows
+}`)).toHaveLength(0)
+    })
+  })
+
   // The text check this replaced couldn't see past the generic
   it('reports a write with a generic', () => {
     for (const body of ['await kv.set<number>(input.key, input.value)', 'await redis.set<string>(input.key, input.value)', 'await prisma.item.create<Args>({ data: input })']) {

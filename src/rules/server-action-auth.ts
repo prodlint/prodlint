@@ -1,6 +1,6 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import type { CallExpression, ImportSpecifier, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
-import { unwrapExpression, walkAST } from '../utils/ast.js'
+import { subtreeContains, unwrapExpression, walkAST } from '../utils/ast.js'
 import { isTestFile, nameWords, saysAuth, saysNoAuth } from '../utils/patterns.js'
 
 // The directive starts a line (file top or function body); "use server" inside a string,
@@ -203,6 +203,15 @@ const WRITE_CALL = /\.(insert|update|delete|create|upsert|remove|destroy|save|pu
 const SQL_WORD = /\b(INSERT|UPDATE|DELETE)\b/
 const WRITE_METHOD = /^(?:insert|update|delete|create|upsert|remove|destroy|save|set)$/i
 
+// Effects outside the process that aren't read as writes on their own, because so many aren't: a
+// POST can be a GraphQL read, a token exchange or a captcha check, and a file a temp file. But one
+// keeps the finding the text check gave its file, since reading calls properly mustn't lose it:
+// a signed POST that places an order was only ever reported for its hash's update().
+const OUTWARD_METHOD = /^(?:post|put|patch)$/i // axios.post(), env.KV.put()
+const OUTWARD_HTTP_METHOD = /^(?:post|put|patch|delete)$/i // fetch(url, { method: 'POST' })
+const OUTWARD_CALL = /^(?:writeFile|appendFile|unlink|rm|sendMail|sendEmail)(?:Sync)?$/
+const OUTWARD_COMMAND = /^(?:Put|Delete|Copy|Create|Update)\w*Command$/ // s3.send(new PutObjectCommand(params))
+
 // A write outlives the request. These don't, whatever their methods are called: a hash, a stream
 // to the browser, AI state, a collection, a request or response being built. Neither does a cookie:
 // it changes only the caller's own browser, and they can send any cookie they like. It's often a
@@ -326,6 +335,19 @@ function hasWriteCall(program: Program, skip: Node[]): boolean {
   return someNode(program, skip, node => isCall(node) && writes(node))
 }
 
+function hasOutwardCall(program: Program, skip: Node[]): boolean {
+  return someNode(program, skip, node => {
+    if (node.type === 'NewExpression') return OUTWARD_COMMAND.test(lastName(node.callee))
+    if (isCall(node)) {
+      const callee = unwrapExpression(node.callee)
+      return OUTWARD_CALL.test(lastName(callee)) || (isMember(callee) && OUTWARD_METHOD.test(propertyName(callee)))
+    }
+    // Wherever the options are built, and whichever way: { method: id ? 'PUT' : 'POST' }
+    return node.type === 'ObjectProperty' && lastName(node.key) === 'method' &&
+      subtreeContains(node.value, value => value.type === 'StringLiteral' && OUTWARD_HTTP_METHOD.test(value.value))
+  })
+}
+
 export const serverActionAuthRule: Rule = {
   id: 'server-action-auth',
   name: 'Server Action Without Auth',
@@ -355,7 +377,9 @@ export const serverActionAuthRule: Rule = {
     const code = file.ast ? blankNodes(file.content, [...checked, ...(file.ast.comments ?? [])]) : file.content
 
     // Check for mutations (if it's just a read action, lower concern)
-    const hasMutation = SQL_WORD.test(code) || (file.ast ? hasWriteCall(file.ast.program, checked) : WRITE_CALL.test(code))
+    const hasMutation = SQL_WORD.test(code) || (file.ast
+      ? hasWriteCall(file.ast.program, checked) || (WRITE_CALL.test(code) && hasOutwardCall(file.ast.program, checked))
+      : WRITE_CALL.test(code))
     const callsModel = !hasMutation && !!file.ast && hasModelCall(file.ast.program, checked) && !RATE_LIMITED.test(code)
 
     if (!hasMutation && !callsModel) return []
