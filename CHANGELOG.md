@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-11-01
+
 ### Fixed
 - **A Next.js 16 `proxy.ts` wasn't read as middleware, and neither was Auth.js's `auth`.**
   Next.js 16 renamed `middleware.ts` to `proxy.ts`, but prodlint only looked for auth and
