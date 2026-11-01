@@ -217,16 +217,17 @@ const CREATES_NO_RECORD = /^(?:Object|[Aa]xios)$/
 // db.ref('items').push(item), hatchet.event.push('order:created', order)
 const PUSHES_OUT = /^(?:ref|child|event)$|Ref$/
 
-// A model call spends the app's credits on whatever the caller sends: the AI SDK's functions, or
-// a client the file makes. An openai.chat.completions.create() on a client from another file
-// already reads as a write.
+// A model call spends the app's credits on whatever the caller sends: the AI SDK's functions, a
+// client the file makes, or the two APIs most code calls on a client from anywhere,
+// openai.chat.completions.create(), which other providers copy, and anthropic.messages.create().
+// Any other .create() on a client from another file reads as a write.
 const AI_SDK = /^(?:ai|ai\/rsc|@ai-sdk\/rsc)$/
 const AI_SDK_CALL = /^(?:experimental_)?(?:generate(?:Text|Object|Image|Speech|Video)|stream(?:Text|Object|UI)|embed(?:Many)?|transcribe|rerank)$/
 const AI_CLIENT = /^(?:openai|@anthropic-ai\/sdk|@google\/generative-ai|@google\/genai|groq-sdk|@langchain\/(?:openai|anthropic|google-genai))$/
 // A public action can limit that instead. The provider's own limit, rate_limit_error, is no such thing.
 const RATE_LIMITED = /rate[-_]?limit(?![-_])|throttle/i
 
-const isCall =(node: Node): node is CallExpression | OptionalCallExpression =>
+const isCall = (node: Node): node is CallExpression | OptionalCallExpression =>
   node.type === 'CallExpression' || node.type === 'OptionalCallExpression'
 const isMember = (node: Node): node is MemberExpression | OptionalMemberExpression =>
   node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression'
@@ -237,6 +238,15 @@ function lastName(expression: Node): string {
   if (isCall(node)) return lastName(node.callee)
   if (isMember(node)) return propertyName(node)
   return node.type === 'Identifier' ? node.name : ''
+}
+
+function callsModelApi(call: CallExpression | OptionalCallExpression): boolean {
+  const callee = unwrapExpression(call.callee)
+  if (!isMember(callee) || !/^(?:create|stream|parse)$/.test(propertyName(callee))) return false
+  const api = unwrapExpression(callee.object)
+  if (!isMember(api)) return false
+  const name = propertyName(api)
+  return (name === 'completions' && lastName(api.object) === 'chat') || (name === 'messages' && /^anthropic/i.test(lastName(api.object)))
 }
 
 // Whether a node outside these passes the test
@@ -261,7 +271,7 @@ function hasModelCall(program: Program, skip: Node[]): boolean {
   }
   return someNode(program, skip, node => {
     if (node.type === 'NewExpression') return node.callee.type === 'Identifier' && clients.has(node.callee.name)
-    return isCall(node) && node.callee.type === 'Identifier' && calls.has(node.callee.name)
+    return isCall(node) && (callsModelApi(node) || (node.callee.type === 'Identifier' && calls.has(node.callee.name)))
   })
 }
 
@@ -306,7 +316,7 @@ function hasWriteCall(program: Program, skip: Node[]): boolean {
     const method = propertyName(callee)
     const receiver = unwrapExpression(callee.object)
     if (/^push$/i.test(method)) return PUSHES_OUT.test(lastName(receiver))
-    if (!WRITE_METHOD.test(method)) return false
+    if (!WRITE_METHOD.test(method) || callsModelApi(call)) return false
     if (/^create$/i.test(method) && receiver.type === 'Identifier' && CREATES_NO_RECORD.test(receiver.name)) return false
     // The argument tells these from a table of that name: prisma.headers.delete({ where })
     if (isMember(receiver) && LOCAL_PROPERTY.test(propertyName(receiver)) && /^(?:set|delete)$/i.test(method) && call.arguments[0]?.type !== 'ObjectExpression') return false

@@ -1149,6 +1149,42 @@ describe('server-action-auth on actions that call an AI model', () => {
     }
   })
 
+  it('reads the common model APIs, wherever the client comes from', () => {
+    for (const call of [
+      'openai.chat.completions.create({ model: name, messages: input })',
+      'openai.chat.completions.stream({ model: name, messages: input })',
+      'openai.beta.chat.completions.parse({ model: name, messages: input })',
+      'groq.chat.completions.create({ model: name, messages: input })',
+      'getClient().chat.completions.create({ model: name, messages: input })',
+      'anthropic.messages.create({ model: name, messages: input })',
+      'anthropic.messages.stream({ model: name, messages: input })',
+      'anthropicClient.messages.create({ model: name, messages: input })',
+    ]) {
+      const findings = check(`import { openai, groq, anthropic, anthropicClient, getClient } from './ai'\n${action('', `return ${call}`)}`)
+      expect(findings, call).toHaveLength(1)
+      expect(findings[0].message, call).toContain('calls an AI model')
+    }
+    // ...and a rate limit clears them like any other
+    expect(check(action('', 'await ratelimit.limit(ip)\n  return openai.chat.completions.create({ model: name, messages: input })'))).toHaveLength(0)
+  })
+
+  it('still reads the same words elsewhere as a write', () => {
+    for (const call of [
+      'prisma.completions.create({ data: input })',
+      'prisma.chat.create({ data: input })',
+      'prisma.chat.completions.delete({ where: { id: input.id } })',
+      'prisma.message.create({ data: input })',
+      'db.messages.create({ data: input })',
+      'twilio.messages.create({ to: input.to, body: input.body })',
+      'mg.messages.create(domain, input)',
+      'anthropic.messages.delete(input.id)',
+    ]) {
+      const findings = check(action('', `return ${call}`))
+      expect(findings, call).toHaveLength(1)
+      expect(findings[0].message, call).toContain('performs mutations')
+    }
+  })
+
   it('does not take other imports for a model call', () => {
     for (const code of [
       // Same names from elsewhere
