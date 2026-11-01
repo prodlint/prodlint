@@ -163,6 +163,10 @@ npm version patch    # or minor/major
 git push --follow-tags
 ```
 
+From a worktree or any branch but master, push with `git push origin HEAD:master --follow-tags`.
+The push's "Bypassed rule violations" notice is normal. Redirect `npm version`'s output to a
+file rather than piping it: a filter that exits early kills it mid-run.
+
 `npm version` fires the `version` lifecycle hook, which runs `scripts/sync-versions.cjs`
 to propagate the new version into `server.json` (both fields),
 `packages/prodlint-mcp/package.json` (its `version` and its `^` range on `prodlint`),
@@ -173,14 +177,16 @@ if a text anchor no longer matches exactly once, rather than silently skipping a
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
 to npm with provenance, publishes to the **MCP registry**, then force-updates the
-rolling `v1` tag.
+rolling `v1` tag, and creates the GitHub Release from the version's CHANGELOG section.
 
-It is three jobs, split by privilege — keep it that way:
+It is four jobs, split by privilege — keep it that way:
 - **`build`** (read-only token, no OIDC) runs everything that executes third-party code —
   `npm ci`, build, tests, self-scan — then `npm pack`s both packages into an artifact.
 - **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
+- **`github-release`** (`contents: write`) runs nothing but `gh` and `awk`, last, so a failure
+  can't hurt a release that's already out. A resume skips it if the Release exists.
 
 **If a release run fails after npm** (MCP registry, `v1`), don't re-run it: a re-run
 reuses the tagged commit's workflow file and retries the npm publishes, which npm refuses.
@@ -205,6 +211,11 @@ Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
 `app/components/animated-terminal.tsx`, `app/layout.tsx` JSON-LD `softwareVersion`,
 `public/.well-known/agent-card.json` → `"version"`, and the sample output in
 `app/blog/data.ts`. Note: `app/mcp/page.tsx` no longer carries a version string.
+
+**Pushing the website repo doesn't deploy it**: Vercel's Hobby plan refuses push-triggered builds
+from a private org repo, so its commit status goes red. Deployment in that repo's `CLAUDE.md`
+gives the route that works, a Vercel connector deployment from the Git source. Check the live
+`/.well-known/agent-card.json` afterwards.
 
 Tip: sweep the website repo with `grep -rn "<old-version>"` (excluding
 node_modules/dist/package-lock/CHANGELOG). `npm run verify:release` checks this repo's

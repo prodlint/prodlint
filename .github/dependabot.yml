@@ -1,9 +1,15 @@
+# Monthly and grouped: with strict branch protection, every separate PR needs its own branch
+# update and CI run. Vulnerabilities still raise Dependabot alerts as soon as they're published.
 version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     # Stability policy: handle ALL major upgrades manually via a deliberate full-suite test pass
     # (e.g. TypeScript 6 breaks tsup's DTS build, vitest majors raise the Node floor of CI's test
     # legs, @babel/* are the runtime AST engine). Dependabot still proposes minor/patch + security bumps.
@@ -13,7 +19,10 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]
     # Actions are SHA-pinned for supply-chain hardening; review action majors (checkout, setup-node) manually.
     ignore:
       - dependency-name: "*"
