@@ -1,5 +1,5 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import type { CallExpression, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
+import type { CallExpression, ImportSpecifier, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
 import { unwrapExpression, walkAST } from '../utils/ast.js'
 import { isTestFile, nameWords, saysAuth, saysNoAuth } from '../utils/patterns.js'
 
@@ -70,13 +70,15 @@ interface Client {
 const propertyName = (node: MemberExpression | OptionalMemberExpression): string =>
   !node.computed && node.property.type === 'Identifier' ? node.property.name : ''
 
+const exportedName = (s: ImportSpecifier): string => s.imported.type === 'Identifier' ? s.imported.name : s.imported.value
+
 // local name → the name it was exported under
 function importedNames(program: Program): Map<string, string> {
   const imported = new Map<string, string>()
   for (const st of program.body) {
     if (st.type !== 'ImportDeclaration') continue
     for (const s of st.specifiers) {
-      if (s.type === 'ImportSpecifier') imported.set(s.local.name, s.imported.type === 'Identifier' ? s.imported.name : s.imported.value)
+      if (s.type === 'ImportSpecifier') imported.set(s.local.name, exportedName(s))
     }
   }
   return imported
@@ -200,7 +202,16 @@ const CREATES_NO_RECORD = /^(?:Object|[Aa]xios)$/
 // db.ref('items').push(item), hatchet.event.push('order:created', order)
 const PUSHES_OUT = /^(?:ref|child|event)$|Ref$/
 
-const isCall = (node: Node): node is CallExpression | OptionalCallExpression =>
+// A model call spends the app's credits on whatever the caller sends: the AI SDK's functions, or
+// a client the file makes. An openai.chat.completions.create() on a client from another file
+// already reads as a write.
+const AI_SDK = /^(?:ai|ai\/rsc|@ai-sdk\/rsc)$/
+const AI_SDK_CALL = /^(?:experimental_)?(?:generate(?:Text|Object|Image|Speech|Video)|stream(?:Text|Object|UI)|embed(?:Many)?|transcribe|rerank)$/
+const AI_CLIENT = /^(?:openai|@anthropic-ai\/sdk|@google\/generative-ai|@google\/genai|groq-sdk|@langchain\/(?:openai|anthropic|google-genai))$/
+// A public action can limit that instead. The provider's own limit, rate_limit_error, is no such thing.
+const RATE_LIMITED = /rate[-_]?limit(?![-_])|throttle/i
+
+const isCall =(node: Node): node is CallExpression | OptionalCallExpression =>
   node.type === 'CallExpression' || node.type === 'OptionalCallExpression'
 const isMember = (node: Node): node is MemberExpression | OptionalMemberExpression =>
   node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression'
@@ -211,6 +222,32 @@ function lastName(expression: Node): string {
   if (isCall(node)) return lastName(node.callee)
   if (isMember(node)) return propertyName(node)
   return node.type === 'Identifier' ? node.name : ''
+}
+
+// Whether a node outside these passes the test
+function someNode(program: Program, skip: Node[], test: (node: Node) => boolean): boolean {
+  let found = false
+  walkAST(program, node => {
+    if (found || !test(node)) return
+    found = !skip.some(({ start, end }) => node.start! >= start! && node.end! <= end!)
+  })
+  return found
+}
+
+function hasModelCall(program: Program, skip: Node[]): boolean {
+  const calls = new Set<string>()
+  const clients = new Set<string>()
+  for (const st of program.body) {
+    if (st.type !== 'ImportDeclaration') continue
+    for (const s of st.specifiers) {
+      if (AI_CLIENT.test(st.source.value)) clients.add(s.local.name)
+      else if (AI_SDK.test(st.source.value) && s.type === 'ImportSpecifier' && AI_SDK_CALL.test(exportedName(s))) calls.add(s.local.name)
+    }
+  }
+  return someNode(program, skip, node => {
+    if (node.type === 'NewExpression') return node.callee.type === 'Identifier' && clients.has(node.callee.name)
+    return isCall(node) && node.callee.type === 'Identifier' && calls.has(node.callee.name)
+  })
 }
 
 // Whether a call in this code writes to anything that outlives the request. A name is read from
@@ -261,18 +298,13 @@ function hasWriteCall(program: Program, skip: Node[]): boolean {
     return !isLocal(receiver, new Set())
   }
 
-  let found = false
-  walkAST(program, node => {
-    if (found || !isCall(node) || !writes(node)) return
-    found = !skip.some(({ start, end }) => node.start! >= start! && node.end! <= end!)
-  })
-  return found
+  return someNode(program, skip, node => isCall(node) && writes(node))
 }
 
 export const serverActionAuthRule: Rule = {
   id: 'server-action-auth',
   name: 'Server Action Without Auth',
-  description: 'Detects server actions that perform mutations without any authentication check',
+  description: 'Detects server actions that perform mutations or call an AI model without any authentication check',
   category: 'security',
   severity: 'warning',
   fileExtensions: ['ts', 'tsx', 'js', 'jsx'],
@@ -295,12 +327,14 @@ export const serverActionAuthRule: Rule = {
     const { checked, others } = file.ast ? readExports(file.ast.program) : { checked: [], others: 0 }
     if (checked.length > 0 && others === 0) return []
 
-    // Check for mutations (if it's just a read action, lower concern)
-    const hasMutation = file.ast
-      ? hasWriteCall(file.ast.program, checked) || SQL_WORD.test(blankNodes(file.content, [...checked, ...(file.ast.comments ?? [])]))
-      : WRITE_CALL.test(file.content) || SQL_WORD.test(file.content)
+    const code = file.ast ? blankNodes(file.content, [...checked, ...(file.ast.comments ?? [])]) : file.content
 
-    if (!hasMutation) return []
+    // Check for mutations (if it's just a read action, lower concern)
+    const hasMutation = SQL_WORD.test(code) || (file.ast ? hasWriteCall(file.ast.program, checked) : WRITE_CALL.test(code))
+    const callsModel = !hasMutation && !!file.ast && hasModelCall(file.ast.program, checked) && !RATE_LIMITED.test(code)
+
+    if (!hasMutation && !callsModel) return []
+    const does = hasMutation ? 'performs mutations' : 'calls an AI model'
 
     let reportLine = 1
     for (let i = 0; i < file.lines.length; i++) {
@@ -324,15 +358,15 @@ export const serverActionAuthRule: Rule = {
       line: reportLine,
       column: 1,
       message: middleware
-        ? 'Server action performs mutations without an inline auth check (middleware auth detected — verify coverage)'
+        ? `Server action ${does} without an inline auth check (middleware auth detected — verify coverage)`
         : middlewareSkipsPages
-          ? "Server action performs mutations without any authentication check (middleware auth detected, but its matcher doesn't cover pages)"
-          : 'Server action performs mutations without any authentication check — anyone can call this action',
+          ? `Server action ${does} without any authentication check (middleware auth detected, but its matcher doesn't cover pages)`
+          : `Server action ${does} without any authentication check — anyone can call this action${hasMutation ? '' : ' and spend your credits'}`,
       severity: middleware ? 'info' : 'warning',
       category: 'security',
       fix: middleware
         ? 'Check the user in the action too, not only in middleware: const session = await auth(); if (!session) throw new Error("Unauthorized")'
-        : 'Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")',
+        : `Add auth check: const session = await auth(); if (!session) throw new Error("Unauthorized")${hasMutation ? '' : '. If it has to stay public, rate-limit it'}`,
     }]
   },
 }

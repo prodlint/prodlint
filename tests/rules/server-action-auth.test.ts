@@ -1018,3 +1018,166 @@ export async function deleteItem(id: string) {
     expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['app/actions/items.ts'])
   })
 })
+
+// A model call spends the app's credits on whatever the caller sends, so it's reported like a
+// write, for what it is. Such an action often streams through an update() that isn't a write.
+describe('server-action-auth on actions that call an AI model', () => {
+  const check = (code: string, proj = project, relativePath = 'app/actions/ai.ts') =>
+    serverActionAuthRule.check(makeFile(`'use server'\n${code}\n`, { relativePath }), proj)
+  const action = (setup: string, body: string) => `${setup}\nexport async function run(input) {\n  ${body}\n}`
+
+  const SDK = "import { generateText } from 'ai'"
+  const CALL = 'return generateText({ model, prompt: input })'
+
+  it('reports a model call with no auth check', () => {
+    const findings = check(action(SDK, CALL))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+    expect(findings[0].line).toBe(1)
+    expect(findings[0].message).toBe('Server action calls an AI model without any authentication check — anyone can call this action and spend your credits')
+    expect(findings[0].fix).toContain('Add auth check')
+    expect(findings[0].fix).toContain('rate-limit')
+  })
+
+  it('reports one that streams to the browser, whose update() is no write', () => {
+    for (const code of [
+      action("import { streamText } from 'ai'\nimport { createStreamableValue } from '@ai-sdk/rsc'", `const stream = createStreamableValue()
+  ;(async () => {
+    const { textStream } = streamText({ model, prompt: input })
+    for await (const delta of textStream) stream.update(delta)
+    stream.done()
+  })()
+  return { value: stream.value }`),
+      action("import { streamObject } from 'ai'\nimport { createStreamableValue } from 'ai/rsc'", `const stream = createStreamableValue()
+  const { partialObjectStream } = streamObject({ model, schema, prompt: input })
+  for await (const partial of partialObjectStream) stream.update(partial)
+  stream.done()
+  return stream.value`),
+      action("import { streamUI, getMutableAIState } from '@ai-sdk/rsc'", `const aiState = getMutableAIState()
+  aiState.update({ ...aiState.get(), input })
+  return streamUI({ model, prompt: input, text: ({ content }) => content })`),
+    ]) {
+      const findings = check(code)
+      expect(findings, code).toHaveLength(1)
+      expect(findings[0].message, code).toContain('calls an AI model')
+    }
+  })
+
+  it("reads each of the AI SDK's model calls", () => {
+    for (const name of ['generateText', 'streamText', 'generateObject', 'streamObject', 'embed', 'embedMany', 'generateImage', 'experimental_generateImage', 'experimental_generateSpeech', 'experimental_transcribe', 'rerank']) {
+      expect(check(action(`import { ${name} } from 'ai'`, `return ${name}({ model, prompt: input })`)), name).toHaveLength(1)
+    }
+    expect(check(action("import { streamUI } from 'ai/rsc'", 'return streamUI({ model, prompt: input })'))).toHaveLength(1)
+    expect(check(action("import { generateText as ask } from 'ai'", 'return ask({ model, prompt: input })'))).toHaveLength(1)
+  })
+
+  it('reads a model client the file makes', () => {
+    for (const [setup, body] of [
+      ["import { GoogleGenerativeAI } from '@google/generative-ai'", 'const genAI = new GoogleGenerativeAI(key)\n  return genAI.getGenerativeModel({ model: name }).generateContent(input)'],
+      ["import { GoogleGenAI } from '@google/genai'", 'const ai = new GoogleGenAI({ apiKey: key })\n  return ai.models.generateContent({ model: name, contents: input })'],
+      ["import { ChatOpenAI } from '@langchain/openai'", 'const llm = new ChatOpenAI({ model: name })\n  return llm.invoke(input)'],
+      ["import { ChatAnthropic as Chat } from '@langchain/anthropic'", 'return new Chat({ model: name }).invoke(input)'],
+      ["import Anthropic from '@anthropic-ai/sdk'", 'const client = new Anthropic()\n  return client.messages.stream({ model: name, messages: input })'],
+    ]) {
+      const findings = check(action(setup, body))
+      expect(findings, setup).toHaveLength(1)
+      expect(findings[0].message, setup).toContain('calls an AI model')
+    }
+  })
+
+  it('does not take other imports for a model call', () => {
+    for (const code of [
+      // Same names from elsewhere
+      action("import { generateText } from './lib/text'", 'return generateText(input)'),
+      action('function embed(input) { return input }', 'return embed(input)'),
+      // The AI SDK's other exports
+      action("import { generateId, convertToModelMessages } from 'ai'", 'return { id: generateId(), messages: convertToModelMessages(input) }'),
+      action("import { createStreamableValue } from '@ai-sdk/rsc'", 'return createStreamableValue(input).value'),
+      // A model provider's factory makes no call by itself, and a message class isn't a client
+      action("import { openai } from '@ai-sdk/openai'", "return openai('gpt-4').modelId"),
+      action("import { HumanMessage } from '@langchain/core/messages'", 'return new HumanMessage(input).content'),
+      // Imported, never made
+      action("import OpenAI from 'openai'", 'return input as OpenAI.Message'),
+      action("import type { GenerateTextResult } from 'ai'", 'return input as GenerateTextResult'),
+      // A name it's only mentioned by
+      action(SDK, '// return generateText({ model, prompt: input })\n  return input'),
+    ]) {
+      expect(check(code), code).toHaveLength(0)
+    }
+  })
+
+  it('reports a write first, with a model call next to it', () => {
+    const findings = check(action(SDK, 'const { text } = await generateText({ model, prompt: input })\n  await prisma.note.create({ data: { text } })'))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('performs mutations')
+    expect(findings[0].fix).not.toContain('rate-limit')
+  })
+
+  it('counts the checks a write counts', () => {
+    expect(check(action(SDK, `const session = await auth()\n  if (!session) throw new Error('Unauthorized')\n  ${CALL}`))).toHaveLength(0)
+    expect(check(`${SDK}\nexport const run = authActionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))`)).toHaveLength(0)
+    expect(check(action(SDK, CALL), project, 'app/actions/contact.ts')).toHaveLength(0)
+    expect(check(action(SDK, CALL), project, 'tests/actions/ai.ts')).toHaveLength(0)
+    // ...and a checked action's model call doesn't count against a neighbor
+    expect(check(`${SDK}
+export const a = authActionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))
+export async function b(input) { return input }`)).toHaveLength(0)
+    expect(check(`${SDK}
+export const a = authActionClient.action(async () => 1)
+export async function b(input) { return generateText({ model, prompt: input }) }`)).toHaveLength(1)
+  })
+
+  // Anyone can still call it, but the bill has a limit: what a public action needs
+  it('accepts a rate limit in place of an auth check', () => {
+    for (const limit of [
+      'const { success } = await ratelimit.limit(ip)\n  if (!success) throw new Error("Too many requests")',
+      'await checkRateLimit(ip)',
+      'await rateLimit(ip)',
+      'await enforceRateLimiter(ip)',
+    ]) {
+      expect(check(action(SDK, `${limit}\n  ${CALL}`)), limit).toHaveLength(0)
+    }
+    expect(check(action(`${SDK}\nimport { Ratelimit } from '@upstash/ratelimit'`, CALL))).toHaveLength(0)
+    // A comment doesn't limit anything, and neither does "delimiter"
+    expect(check(action(SDK, `// TODO: rate limit this\n  ${CALL}`))).toHaveLength(1)
+    expect(check(action(SDK, `const delimiter = ','\n  ${CALL}`))).toHaveLength(1)
+    // A rate limit is no check on a write
+    expect(check(action(SDK, 'await ratelimit.limit(ip)\n  await prisma.note.create({ data: input })'))).toHaveLength(1)
+  })
+
+  it('rates it by the auth middleware like a write', () => {
+    const middleware = check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true }))
+    expect(middleware).toHaveLength(1)
+    expect(middleware[0].severity).toBe('info')
+    expect(middleware[0].message).toBe('Server action calls an AI model without an inline auth check (middleware auth detected — verify coverage)')
+    expect(middleware[0].fix).toContain('in the action')
+
+    const apiOnly = check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true }))
+    expect(apiOnly).toHaveLength(1)
+    expect(apiOnly[0].severity).toBe('warning')
+    expect(apiOnly[0].message).toBe("Server action calls an AI model without any authentication check (middleware auth detected, but its matcher doesn't cover pages)")
+  })
+
+  it('works through the scanner', async () => {
+    const result = await scanFiles({
+      'lib/ai/summarize.ts': `"use server";
+import { anthropic } from "@ai-sdk/anthropic";
+import { createStreamableValue } from "@ai-sdk/rsc";
+import { streamText } from "ai";
+
+export async function summarize(prompt: string) {
+  const stream = createStreamableValue();
+  (async () => {
+    const { textStream } = streamText({ model: anthropic("claude-haiku-5-5"), prompt });
+    for await (const delta of textStream) stream.update(delta);
+    stream.done();
+  })();
+  return { value: stream.value };
+}
+`,
+    })
+    const findings = result.findings.filter(f => f.ruleId === 'server-action-auth')
+    expect(findings.map(f => f.file)).toEqual(['lib/ai/summarize.ts'])
+    expect(findings[0].message).toContain('calls an AI model')
+  })
+})

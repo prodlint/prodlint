@@ -90,7 +90,7 @@ npm i -g prodlint     # Global install
 | `env-fallback-secret` | Security-sensitive env vars with hardcoded fallback values |
 | `verbose-error-response` | Error stack traces or messages leaked in API responses |
 | `missing-webhook-verification` | Webhook routes without signature verification |
-| `server-action-auth` | Server actions with mutations but no auth check |
+| `server-action-auth` | Server actions with mutations or AI model calls but no auth check |
 | `eval-injection` | `eval()`, `new Function()`, dynamic code execution |
 | `next-public-sensitive` | `NEXT_PUBLIC_` prefix on secret env vars |
 | `ssrf-risk` | User-controlled URLs passed to fetch in server code |
