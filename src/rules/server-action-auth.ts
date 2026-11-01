@@ -62,9 +62,16 @@ function saysChecked(name: string): boolean {
   return saysAuth(name) || words.some(word => PROTECTED_WORD.test(word)) || ROLE_CLIENT.test(name)
 }
 
+// A .use() that turns signed-in users away: the action is for people with no session, like sending
+// a sign-up code, so it's public by design. There's no user to check, and the fix would lock out
+// the only people who can call it. By its whole name: throwIfAuthenticatedApiError is about
+// something else, and throwIfSession could be about one that expired.
+const GUEST_ONLY = /^(?:throw|redirect)If(?:User|Already)?(?:Authenticated|LoggedIn|SignedIn)$/
+
 interface Client {
   checked: boolean // a name in its chain says it checks, or a .use() does
   middleware: boolean // it has a .use(), which a name that says auth can be about
+  guestOnly?: boolean // a .use() turns signed-in users away
 }
 
 const propertyName = (node: MemberExpression | OptionalMemberExpression): string =>
@@ -84,8 +91,8 @@ function importedNames(program: Program): Map<string, string> {
   return imported
 }
 
-// Sorts what a 'use server' file exports: the actions built on an auth-checking client, and
-// how many other exports there are. Only the callee chain counts: an argument like
+// Sorts what a 'use server' file exports: the actions built on an auth-checking client or a guest
+// guard, and how many other exports there are. Only the callee chain counts: an argument like
 // inputSchema(authSchema), or an action's own name, says nothing about a check.
 function readExports(program: Program): { checked: Node[]; others: number } {
   const imported = importedNames(program)
@@ -109,7 +116,14 @@ function readExports(program: Program): { checked: Node[]; others: number } {
       const client = read(callee, seen)
       if (callee.type !== 'MemberExpression' || propertyName(callee) !== 'use') return client
       // A check added here counts whatever it's added to
-      return { checked: client.checked || node.arguments.some(arg => read(arg, seen).checked), middleware: true }
+      return {
+        checked: client.checked || node.arguments.some(arg => read(arg, seen).checked),
+        middleware: true,
+        guestOnly: client.guestOnly || node.arguments.some(arg => {
+          const name = lastName(arg)
+          return GUEST_ONLY.test(imported.get(name) ?? name)
+        }),
+      }
     }
     if (node.type === 'MemberExpression') {
       const client = read(node.object, seen)
@@ -146,7 +160,8 @@ function readExports(program: Program): { checked: Node[]; others: number } {
   let others = 0
   const add = (exported: Node | null | undefined) => {
     const value = exported && valueOf(exported)
-    if (value?.type === 'CallExpression' && read(value, new Set()).checked) checked.push(value)
+    const client = value?.type === 'CallExpression' ? read(value, new Set()) : undefined
+    if (value && (client?.checked || client?.guestOnly)) checked.push(value)
     else others++
   }
   for (const st of program.body) {

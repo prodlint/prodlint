@@ -418,13 +418,70 @@ export const a = actionClient
     }
   })
 
-  it('does not count a .use() that shows no check', () => {
+  // dub's send-otp and create-user-account: an action for people with no session, like sending a
+  // sign-up code, has no user to check. The fix would lock out the only people who can call it.
+  it('counts a .use() that turns signed-in users away, as public by design', () => {
     for (const client of [
-      // dub's send-otp and create-user-account: it turns signed-in users away
       'actionClient.use(throwIfAuthenticated)',
       'actionClient.use(throwIfUserAuthenticated)',
+      'actionClient.use(throwIfLoggedIn)',
+      'actionClient.use(throwIfSignedIn)',
+      'actionClient.use(redirectIfAuthenticated)',
+      'actionClient.use(redirectIfLoggedIn)',
+      'actionClient.use(redirectIfSignedIn)',
+      'actionClient.use(throwIfAlreadyAuthenticated)',
+      // However it's written
+      'actionClient.use(throwIfAuthenticated())',
+      "actionClient.use(redirectIfAuthenticated('/dashboard'))",
+      'actionClient.use(guards.throwIfAuthenticated)',
+      'actionClient.use(logger).use(throwIfAuthenticated).use(rateLimit)',
+      'publicActionClient.use(throwIfAuthenticated)',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(0)
+    }
+    expect(check(built('actionClient.use(guard)', "import { throwIfAuthenticated as guard } from './guards'"))).toHaveLength(0)
+    // A renamed import keeps its real name
+    expect(check(built('actionClient.use(throwIfAuthenticated)', "import { logger as throwIfAuthenticated } from './guards'"))).toHaveLength(1)
+    // A name that says it's for guests agrees with the guard
+    expect(check(built('guestClient', 'const guestClient = actionClient.use(throwIfAuthenticated)'))).toHaveLength(0)
+    expect(check(built('publicClient', 'const publicClient = actionClient.use(throwIfAuthenticated)'))).toHaveLength(0)
+  })
+
+  it('goes by the whole name of such a guard', () => {
+    for (const client of [
+      // The opposite, in words that aren't a check we can read
+      'actionClient.use(throwIfUnauthenticated)',
+      // Something else
+      'actionClient.use(throwIfAuthenticatedApiError)',
+      'actionClient.use(throwIfLoggedInUserNotFound)',
+      'actionClient.use(throwIfAuthenticatedWithoutPlan)',
+      'actionClient.use(logIfAuthenticated)',
+      'actionClient.use(allowIfAuthenticated)',
+      'actionClient.use(skipIfAuthenticated)',
+      // Says less: a session could be expired or missing
       'actionClient.use(redirectIfSession)',
-      // ...and this lets anyone in
+      'actionClient.use(throwIfSession)',
+      'actionClient.use(throwIfSessionExpired)',
+      'actionClient.use(throwIfAuth)',
+      // It runs on nothing in this chain
+      'actionClient.inputSchema(throwIfAuthenticated)',
+      'actionClient.action(throwIfAuthenticated)',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(1)
+    }
+    // An unless-style guard does check, as before
+    expect(check(built('actionClient.use(throwIfNotAuthenticated)', ''))).toHaveLength(0)
+  })
+
+  it('still reports a neighbor of an action that turns signed-in users away', () => {
+    const guest = `export const a = actionClient.use(throwIfAuthenticated).action(${MUTATE})`
+    expect(check(`'use server'\n${guest}\nexport async function b(id) { await db.update(items).set({ id }) }\n`)).toHaveLength(1)
+    expect(check(`'use server'\n${guest}\nexport async function b() { return db.query.items.findMany() }\n`)).toHaveLength(0)
+  })
+
+  it('does not count a .use() that shows no check', () => {
+    for (const client of [
+      // This lets anyone in
       'actionClient.use(authIfPresent)',
       'actionClient.use(logger)',
       'actionClient.use(rateLimit({ max: 5 }))',
@@ -435,8 +492,6 @@ export const a = actionClient
     ]) {
       expect(check(built(client, '')), client).toHaveLength(1)
     }
-    // An unless-style guard does check
-    expect(check(built('actionClient.use(throwIfNotAuthenticated)', ''))).toHaveLength(0)
   })
 
   describe('defined in the same file', () => {
@@ -662,7 +717,7 @@ const a = authActionClient.action(${MUTATE})
     expect(check(built('actionClient'), apiOnly).map(f => f.severity)).toEqual(['warning'])
   })
 
-  // dub's real shapes: the client file has no 'use server', and an OTP action's .use() is the opposite of a check
+  // dub's real shapes: the client file has no 'use server', and an OTP action's .use() turns signed-in users away
   it('works through the scanner', async () => {
     const result = await scanFiles({
       'lib/actions/safe-action.ts': `import { createSafeActionClient } from 'next-safe-action'
@@ -709,8 +764,17 @@ export const sendOtpAction = actionClient
     await prisma.emailVerificationToken.create({ data: { identifier: parsedInput.email } });
   });
 `,
+      'lib/actions/plain.ts': `"use server";
+
+import { prisma } from "@dub/prisma";
+import { actionClient } from "./safe-action";
+
+export const plainAction = actionClient.action(async ({ parsedInput }) => {
+  await prisma.emailVerificationToken.create({ data: { identifier: parsedInput.email } });
+});
+`,
     })
-    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/send-otp.ts'])
+    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/plain.ts'])
   })
 })
 
