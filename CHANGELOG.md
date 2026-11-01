@@ -13,18 +13,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   for auth calls in the action's own file. An exported action now counts as checked when
   it's built on a client or wrapper whose name says so: an auth or session word
   (`authActionClient`, `actionWithSession`, read the way `auth-checks` reads auth wrappers),
-  `protected` (`protectedAction`), or a client named for its signed-in user
-  (`userActionClient`). So does one with an auth `.use()` in its own chain
-  (`actionClient.use(authMiddleware)`). A plain `actionClient`, a name that says the opposite
-  (`publicActionClient`, `optionalUserActionClient`, `unprotectedActionClient`) and a
-  condition like `.use(throwIfAuthenticated)`, which turns signed-in users away, are still
-  reported. A client defined in the same file is read, so `createSafeActionClient()` with
-  no `.use()` doesn't count, whatever it's called. An imported client can only be judged by
-  its name: one called `authActionClient` that checks nothing is missed. Each export counts
-  on its own, so a plain function exported next to a checked action is still reported, and
-  a checked action's code no longer counts as a mutation against a read-only one. **Scan
-  results may change** for apps that build actions on such clients: fewer `server-action-auth`
-  findings.
+  `protected` (`protectedAction`), or a whole name that says who may call it
+  (`userActionClient`, `adminAction`, `superAdminActionClient`). So does one with an auth
+  `.use()` in its own chain (`actionClient.use(authMiddleware)`). A plain `actionClient`, a
+  name that says the opposite (`publicActionClient`, `optionalUserActionClient`,
+  `unprotectedActionClient`) and a condition like `.use(throwIfAuthenticated)`, which turns
+  signed-in users away, are still reported. So are `withSupabaseAdmin` and `adminClient`,
+  which are about a service-role client. A client defined in the same file is read, so
+  `createSafeActionClient()` with no `.use()` doesn't count, whatever it's called. An
+  imported client can only be judged by its name: one called `authActionClient` that checks
+  nothing is missed. Each export counts on its own, so a plain function exported next to a
+  checked action is still reported, and a checked action's code no longer counts as a
+  mutation against a read-only one. **Scan results may change** for apps that build actions
+  on such clients: fewer `server-action-auth` findings.
 
 ## [0.10.5] - 2026-11-01
 

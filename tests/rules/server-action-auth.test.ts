@@ -248,6 +248,59 @@ export const deleteItemAction = ${client}
     }
   })
 
+  it('counts a client named for its admins', () => {
+    for (const client of [
+      'adminActionClient',
+      'AdminActionClient',
+      'adminAction',
+      'superAdminActionClient',
+      'superadminActionClient',
+      'superAdminAction',
+      'platformAdminActionClient',
+      'systemAdminAction',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(0)
+    }
+    // A hand-written wrapper of the same name, called directly
+    expect(check(`'use server'\nexport const a = adminAction(schema, ${MUTATE})\n`)).toHaveLength(0)
+  })
+
+  // As in auth-checks: withSupabaseAdmin hands out a service-role client, and "adminClient" is
+  // what one is usually called. An admin action client has to say it's one.
+  it('does not count "admin" outside an action client\'s own name', () => {
+    for (const client of [
+      'adminClient',
+      'supabaseAdmin',
+      'supabaseAdminClient',
+      'organizationAdminClient',
+      // A helper or an action, not a client
+      'logAdminAction',
+      'createAdminAction',
+      'updateAdminAction',
+      'parseSuperAdminAction',
+      'adminActionLogger',
+      // The opposite
+      'nonAdminActionClient',
+      'publicAdminAction',
+      'optionalAdminActionClient',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(1)
+    }
+    for (const value of [
+      `withSupabaseAdmin(${MUTATE})`,
+      `withAdminClient(${MUTATE})`,
+      `withAdmin(${MUTATE})`,
+      `logAdminAction(${MUTATE})`,
+      `createAdminClient().action(${MUTATE})`,
+      `getAdminClient().action(${MUTATE})`,
+    ]) {
+      expect(check(`'use server'\nexport const a = ${value}\n`), value).toHaveLength(1)
+    }
+    // A middleware's name doesn't say it either: it may only load that client
+    expect(check(built('actionClient.use(adminMiddleware)', ''))).toHaveLength(1)
+    expect(check(built('actionClient.use(withSupabaseAdmin)', ''))).toHaveLength(1)
+  })
+
   it('still reports a plain actionClient', () => {
     const findings = check(built('actionClient'))
     expect(findings).toHaveLength(1)
@@ -408,6 +461,11 @@ const b = a.metadata({ name: 'b' })`))).toHaveLength(0)
 })`))).toHaveLength(0)
       expect(check(built('protectedAction', 'const protectedAction = actionClient.use(guard)'))).toHaveLength(0)
       expect(check(built('userActionClient', 'const userActionClient = publicActionClient.use(userMiddleware)'))).toHaveLength(0)
+      expect(check(built('adminActionClient', 'const adminActionClient = actionClient.use(adminMiddleware)'))).toHaveLength(0)
+      expect(check(built('adminAction', `const adminAction = actionClient.use(async ({ next }) => {
+  const user = await requireAdmin()
+  return next({ ctx: { user } })
+})`))).toHaveLength(0)
     })
 
     it('does not trust a name when the definition shows no middleware', () => {
@@ -420,6 +478,7 @@ const b = a.metadata({ name: 'b' })`))).toHaveLength(0)
         expect(check(built('authActionClient', setup)), setup).toHaveLength(1)
       }
       expect(check(built('userActionClient', 'const userActionClient = createSafeActionClient()'))).toHaveLength(1)
+      expect(check(built('adminActionClient', 'const adminActionClient = createSafeActionClient()'))).toHaveLength(1)
     })
 
     it('does not count a client with no check, or a name that says the opposite', () => {

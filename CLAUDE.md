@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (955 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (957 tests; vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -106,7 +106,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
 - **Import resolution (dead-exports)**: imports are resolved to the scanned modules they load (relative path, alias by path suffix, workspace package from the walked `package.json` names), and re-exports pass a use on. An import from a declared dependency, a Node built-in or a URL uses no project export; only an import that matches no scanned file still counts by name everywhere. Keep that fallback: it covers aliases and layouts the resolver can't follow
-- **Action clients (server-action-auth)**: an exported action counts as checked when its builder chain says so, by the client's name (`authActionClient`, `protectedAction`, `userActionClient`) or an auth `.use()`. An imported client is judged by its name alone; one defined in the same file is read, and its name counts only once it has a `.use()`. Each export counts on its own, so a plain function exported next to a checked action is still reported. A file Babel can't parse stays with the text check
+- **Action clients (server-action-auth)**: an exported action counts as checked when its builder chain says so, by the client's name (`authActionClient`, `protectedAction`, and `userActionClient` or `adminActionClient` as a whole name, so `withSupabaseAdmin` and `adminClient`, which are about a service-role client, stay out) or an auth `.use()`. An imported client is judged by its name alone; one defined in the same file is read, and its name counts only once it has a `.use()`. Each export counts on its own, so a plain function exported next to a checked action is still reported. A file Babel can't parse stays with the text check
 - **Line/column numbering**: 1-indexed throughout
 
 ### Scoring (v0.5.0)

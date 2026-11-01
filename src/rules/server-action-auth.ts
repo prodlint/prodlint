@@ -47,9 +47,11 @@ const PUBLIC_ACTION_NAMES = [
 // check runs in the client's .use() middleware, usually in another file, so the client's name
 // is what's left to read: authActionClient.inputSchema(schema).action(fn). As in auth-checks,
 // a name says it with an auth or session word. "protected" says it too, and so does a client
-// named for its signed-in user, though "user" alone doesn't: updateUser, logUserEvent.
+// named for who may call it, by its whole name: userActionClient, adminAction. "user" and
+// "admin" alone don't: updateUser and logAdminAction aren't clients, and withSupabaseAdmin and
+// adminClient are about a service-role client.
 const PROTECTED_WORD = /^protected$/i
-const USER_CLIENT = /^user(?:Action|ActionClient)$/i
+const ROLE_CLIENT = /^(?:user|(?:super|platform|system)?admin)(?:Action|ActionClient)$/i
 
 function saysChecked(name: string): boolean {
   const words = nameWords(name)
@@ -57,7 +59,7 @@ function saysChecked(name: string): boolean {
   // like sending a sign-up code, and authIfPresent lets anyone in. throwIfNotAuthenticated checks.
   if (words.some((word, i) => /^if$/i.test(word) && !/^not$/i.test(words[i + 1] ?? ''))) return false
   if (saysNoAuth(name)) return false
-  return saysAuth(name) || words.some(word => PROTECTED_WORD.test(word)) || USER_CLIENT.test(name)
+  return saysAuth(name) || words.some(word => PROTECTED_WORD.test(word)) || ROLE_CLIENT.test(name)
 }
 
 interface Client {
