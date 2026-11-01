@@ -1,6 +1,6 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
-import type { MemberExpression, Node, Program } from '@babel/types'
-import { unwrapExpression } from '../utils/ast.js'
+import type { CallExpression, MemberExpression, Node, OptionalCallExpression, OptionalMemberExpression, Program } from '@babel/types'
+import { unwrapExpression, walkAST } from '../utils/ast.js'
 import { isTestFile, nameWords, saysAuth, saysNoAuth } from '../utils/patterns.js'
 
 // The directive starts a line (file top or function body); "use server" inside a string,
@@ -67,22 +67,29 @@ interface Client {
   middleware: boolean // it has a .use(), which a name that says auth can be about
 }
 
-const propertyName = (node: MemberExpression): string =>
+const propertyName = (node: MemberExpression | OptionalMemberExpression): string =>
   !node.computed && node.property.type === 'Identifier' ? node.property.name : ''
+
+// local name → the name it was exported under
+function importedNames(program: Program): Map<string, string> {
+  const imported = new Map<string, string>()
+  for (const st of program.body) {
+    if (st.type !== 'ImportDeclaration') continue
+    for (const s of st.specifiers) {
+      if (s.type === 'ImportSpecifier') imported.set(s.local.name, s.imported.type === 'Identifier' ? s.imported.name : s.imported.value)
+    }
+  }
+  return imported
+}
 
 // Sorts what a 'use server' file exports: the actions built on an auth-checking client, and
 // how many other exports there are. Only the callee chain counts: an argument like
 // inputSchema(authSchema), or an action's own name, says nothing about a check.
 function readExports(program: Program): { checked: Node[]; others: number } {
-  const imported = new Map<string, string>() // local name → the name it was exported under
+  const imported = importedNames(program)
   const defined = new Map<string, Node>() // const client = …, but not functions: only a name to go on there
   for (const st of program.body) {
-    if (st.type === 'ImportDeclaration') {
-      for (const s of st.specifiers) {
-        if (s.type === 'ImportSpecifier') imported.set(s.local.name, s.imported.type === 'Identifier' ? s.imported.name : s.imported.value)
-      }
-      continue
-    }
+    if (st.type === 'ImportDeclaration') continue
     const decl = st.type === 'ExportNamedDeclaration' ? st.declaration : st
     if (decl?.type !== 'VariableDeclaration') continue
     for (const d of decl.declarations) {
@@ -164,7 +171,7 @@ function readExports(program: Program): { checked: Node[]; others: number } {
 }
 
 // The source with these nodes' code blanked out, keeping offsets
-function blankNodes(content: string, nodes: Node[]): string {
+function blankNodes(content: string, nodes: { start?: number | null; end?: number | null }[]): string {
   let code = content
   for (const { start, end } of nodes) {
     if (typeof start === 'number' && typeof end === 'number') {
@@ -172,6 +179,94 @@ function blankNodes(content: string, nodes: Node[]): string {
     }
   }
   return code
+}
+
+// The methods a write is called by, and SQL in a string. A file Babel can't parse is read as text.
+const WRITE_CALL = /\.(insert|update|delete|create|upsert|remove|destroy|save|push|set)\s*\(/i
+const SQL_WORD = /\b(INSERT|UPDATE|DELETE)\b/
+const WRITE_METHOD = /^(?:insert|update|delete|create|upsert|remove|destroy|save|set)$/i
+
+// A write outlives the request. These don't, whatever their methods are called: a hash, a stream
+// to the browser, AI state, a collection, a request or response being built. Neither does a cookie:
+// it changes only the caller's own browser, and they can send any cookie they like. It's often a
+// login, a password gate or a locale switch, which an auth check would only break.
+const LOCAL_CALL = /^(?:create(?:Hash|Hmac|Sign|Verify|Cipheriv|Decipheriv|StreamableValue|StreamableUI)|getMutableAIState|cookies)$/
+const LOCAL_CLASS = /^(?:Map|WeakMap|Set|WeakSet|Headers|URLSearchParams|FormData|Uint8Array)$/
+// A response's or a URL's, with no definition to read: res.headers.set(), url.searchParams.delete()
+const LOCAL_PROPERTY = /^(?:headers|searchParams)$/
+// They make no record: Object.create(null), axios.create({ baseURL })
+const CREATES_NO_RECORD = /^(?:Object|[Aa]xios)$/
+// A push() is an array's, unless it's on a Firebase reference or an event client:
+// db.ref('items').push(item), hatchet.event.push('order:created', order)
+const PUSHES_OUT = /^(?:ref|child|event)$|Ref$/
+
+const isCall = (node: Node): node is CallExpression | OptionalCallExpression =>
+  node.type === 'CallExpression' || node.type === 'OptionalCallExpression'
+const isMember = (node: Node): node is MemberExpression | OptionalMemberExpression =>
+  node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression'
+
+// The name a chain ends in: db.ref('items') → ref, itemsRef → itemsRef
+function lastName(expression: Node): string {
+  const node = unwrapExpression(expression)
+  if (isCall(node)) return lastName(node.callee)
+  if (isMember(node)) return propertyName(node)
+  return node.type === 'Identifier' ? node.name : ''
+}
+
+// Whether a call in this code writes to anything that outlives the request. A name is read from
+// what the file defines it as, in any scope: one that also stands for something else, or for a
+// parameter or a destructured value, counts as a write, as does one defined out of sight.
+function hasWriteCall(program: Program, skip: Node[]): boolean {
+  const imported = importedNames(program)
+  const values = new Map<string, (Node | null)[]>()
+  const bind = (name: string, value: Node | null) => values.set(name, [...(values.get(name) ?? []), value])
+  const bindUnknown = (pattern: Node) => walkAST(pattern, node => { if (node.type === 'Identifier') bind(node.name, null) })
+  walkAST(program, node => {
+    if (node.type === 'VariableDeclarator') {
+      if (node.id.type !== 'Identifier') bindUnknown(node.id)
+      else if (node.init) bind(node.id.name, node.init)
+    } else if (node.type === 'AssignmentExpression') {
+      if (node.left.type === 'Identifier') bind(node.left.name, node.right)
+    } else if ('params' in node && 'body' in node) {
+      node.params.forEach(bindUnknown)
+    }
+  })
+
+  const isLocal = (expression: Node, seen: Set<string>): boolean => {
+    const node = unwrapExpression(expression)
+    if (node.type === 'NewExpression') return LOCAL_CLASS.test(lastName(node.callee))
+    if (isCall(node)) {
+      const callee = unwrapExpression(node.callee)
+      // These return what they're called on: hash.update(a).update(b), new Map().set(a, b).set(c, d)
+      if (isMember(callee) && WRITE_METHOD.test(propertyName(callee))) return isLocal(callee.object, seen)
+      // A renamed import keeps its real name: { db as cookies } is still a database
+      const name = callee.type === 'Identifier' ? imported.get(callee.name) ?? callee.name : lastName(callee)
+      return LOCAL_CALL.test(name)
+    }
+    if (node.type !== 'Identifier' || seen.has(node.name)) return false
+    const bound = values.get(node.name)
+    return !!bound && bound.every(value => value !== null && isLocal(value, new Set(seen).add(node.name)))
+  }
+
+  const writes = (call: CallExpression | OptionalCallExpression): boolean => {
+    const callee = unwrapExpression(call.callee)
+    if (!isMember(callee)) return false
+    const method = propertyName(callee)
+    const receiver = unwrapExpression(callee.object)
+    if (/^push$/i.test(method)) return PUSHES_OUT.test(lastName(receiver))
+    if (!WRITE_METHOD.test(method)) return false
+    if (/^create$/i.test(method) && receiver.type === 'Identifier' && CREATES_NO_RECORD.test(receiver.name)) return false
+    // The argument tells these from a table of that name: prisma.headers.delete({ where })
+    if (isMember(receiver) && LOCAL_PROPERTY.test(propertyName(receiver)) && /^(?:set|delete)$/i.test(method) && call.arguments[0]?.type !== 'ObjectExpression') return false
+    return !isLocal(receiver, new Set())
+  }
+
+  let found = false
+  walkAST(program, node => {
+    if (found || !isCall(node) || !writes(node)) return
+    found = !skip.some(({ start, end }) => node.start! >= start! && node.end! <= end!)
+  })
+  return found
 }
 
 export const serverActionAuthRule: Rule = {
@@ -199,11 +294,11 @@ export const serverActionAuthRule: Rule = {
     // doesn't count as a mutation; a file Babel can't parse is only read as text.
     const { checked, others } = file.ast ? readExports(file.ast.program) : { checked: [], others: 0 }
     if (checked.length > 0 && others === 0) return []
-    const code = blankNodes(file.content, checked)
 
     // Check for mutations (if it's just a read action, lower concern)
-    const hasMutation = /\.(insert|update|delete|create|upsert|remove|destroy|save|push|set)\s*\(/i.test(code) ||
-      /\b(INSERT|UPDATE|DELETE)\b/.test(code)
+    const hasMutation = file.ast
+      ? hasWriteCall(file.ast.program, checked) || SQL_WORD.test(blankNodes(file.content, [...checked, ...(file.ast.comments ?? [])]))
+      : WRITE_CALL.test(file.content) || SQL_WORD.test(file.content)
 
     if (!hasMutation) return []
 

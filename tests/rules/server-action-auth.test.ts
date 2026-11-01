@@ -713,3 +713,308 @@ export const sendOtpAction = actionClient
     expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/send-otp.ts'])
   })
 })
+
+// A write is what outlives the request: a database, a key-value store, a file, another service
+describe('server-action-auth on what counts as a mutation', () => {
+  const check = (code: string, proj = project) =>
+    serverActionAuthRule.check(makeFile(`'use server'\n${code}\n`, { relativePath: 'app/actions/items.ts' }), proj)
+  const action = (body: string) => `export async function run(input) {\n  ${body}\n}`
+
+  it('still reports real writes', () => {
+    for (const body of [
+      // Prisma
+      'await prisma.item.create({ data: input })',
+      'await prisma.item.update({ where: { id: input.id }, data: input })',
+      'await prisma.item.delete({ where: { id: input.id } })',
+      'await prisma.item.upsert({ where: { id: input.id }, update: input, create: input })',
+      'await prisma.$transaction(async (tx) => { await tx.item.update({ where: { id: input.id }, data: input }) })',
+      // Drizzle
+      'await db.insert(items).values(input)',
+      'await db.update(items).set(input).where(eq(items.id, input.id))',
+      'await db.delete(items).where(eq(items.id, input.id))',
+      // Supabase
+      "await supabase.from('items').insert(input)",
+      "await supabase.from('items').update(input).eq('id', input.id)",
+      "await supabase.from('items').delete().eq('id', input.id)",
+      "await supabase.from('items').upsert(input)",
+      "await supabase.storage.from('files').remove([input.path])",
+      // Raw SQL
+      'await sql`INSERT INTO items (name) VALUES (${input.name})`',
+      'await sql`UPDATE items SET name = ${input.name}`',
+      "await db.query('DELETE FROM items WHERE id = $1', [input.id])",
+      "await client.execute({ sql: 'DELETE FROM items WHERE id = ?', args: [input.id] })",
+      // Mongoose and Firestore
+      'await Item.create(input)',
+      'const item = new Item(input)\n  await item.save()',
+      "await db.collection('items').doc(input.id).set(input)",
+      "await db.collection('items').doc(input.id).update(input)",
+      "await db.collection('items').doc(input.id).delete()",
+      // Key-value stores
+      'await redis.set(input.key, input.value)',
+      'await kv.set(input.key, input.value)',
+      'await redis.del(input.key)\n  await cache.set(input.key, input.value)',
+      // Another service
+      'await stripe.customers.create({ email: input.email })',
+      "await fetch(url, { method: 'DELETE' })",
+    ]) {
+      const findings = check(action(body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].severity, body).toBe('warning')
+      expect(findings[0].message, body).toContain('performs mutations')
+    }
+  })
+
+  // The text check this replaced couldn't see past the generic
+  it('reports a write with a generic', () => {
+    for (const body of ['await kv.set<number>(input.key, input.value)', 'await redis.set<string>(input.key, input.value)', 'await prisma.item.create<Args>({ data: input })']) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+  })
+
+  it('does not count a hash or a stream, which have an update() of their own', () => {
+    for (const body of [
+      "return createHash('sha256').update(input).digest('hex')",
+      "return crypto.createHash('sha256').update(input).digest('hex')",
+      "return createHmac('sha256', secret).update(input).update(other).digest('hex')",
+      "const hash = createHash('md5')\n  hash.update(input)\n  return hash.digest('hex')",
+      "const hmac = crypto.createHmac('sha256', secret)\n  hmac.update(input)\n  hmac.update(other)\n  return hmac.digest('hex')",
+      "const cipher = createCipheriv('aes-256-gcm', key, iv)\n  return cipher.update(input, 'utf8', 'hex')",
+      'const stream = createStreamableValue()\n  stream.update(input)\n  stream.done()\n  return stream.value',
+      'const ui = createStreamableUI()\n  ui.update(input)\n  return ui.value',
+      'const aiState = getMutableAIState()\n  aiState.update({ ...aiState.get(), input })',
+      // Assigned, not initialized
+      'let stream\n  stream = createStreamableValue()\n  stream.update(input)',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('does not count a push onto an array, whatever it came from', () => {
+    for (const body of [
+      'const rows = []\n  rows.push(input)\n  return rows',
+      'input.items.push(1)\n  return input',
+      'const rows = await load()\n  rows.push(input)\n  return rows',
+      'const byWeek = {}\n  byWeek[input.week].push(input)\n  return byWeek',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('still counts a push onto a Firebase reference or an event client, which goes somewhere', () => {
+    for (const body of [
+      "await db.ref('items').push(input)",
+      "await db.ref('items').child(input.id).push(input)",
+      "const ref = db.ref('items')\n  await ref.push(input)",
+      "const itemsRef = db.ref('items')\n  await itemsRef.push(input)",
+      // Hatchet
+      "await hatchet.event.push('order:created', input)",
+    ]) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+  })
+
+  it('does not count a collection or a request being built', () => {
+    for (const body of [
+      'const seen = new Map()\n  seen.set(input.id, input)\n  seen.delete(input.other)',
+      'const seen = new Map<string, Item>()\n  seen.set(input.id, input)',
+      'const seen = new Map().set(input.id, input).set(input.other, input)\n  return seen',
+      'const seen = new WeakMap()\n  seen.set(input, 1)',
+      'const seen = new Set()\n  seen.delete(input)',
+      "const params = new URLSearchParams()\n  params.set('a', input)\n  params.delete('b')",
+      "const url = new URL(input)\n  url.searchParams.set('a', input)\n  url.searchParams.delete('b')",
+      "new URL(input).searchParams.set('a', input)",
+      "const headers = new Headers()\n  headers.set('a', input)\n  headers.delete('b')",
+      "const res = await fetch(input)\n  res.headers.set('a', input)",
+      "const form = new FormData()\n  form.set('a', input)\n  form.delete('b')",
+      'const bytes = new Uint8Array(8)\n  bytes.set(input)',
+      'const copy = Object.create(null)\n  return copy',
+      'const api = axios.create({ baseURL: input })\n  return api.get(input)',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  // A cookie changes only the caller's own browser, and they can send any cookie they like. It's
+  // often a login, a password gate or a locale switch, which an auth check would only break.
+  it("does not count a cookie, which only changes the caller's own browser", () => {
+    for (const body of [
+      "cookies().set('theme', input)",
+      "(await cookies()).set('locale', input, { path: '/' })",
+      "(await cookies()).set({ name: 'locale', value: input })",
+      "const cookieStore = await cookies()\n  cookieStore.set('theme', input)",
+      "const store = cookies()\n  store.set('theme', input)\n  store.delete('other')",
+      "cookies().delete('session')",
+      "const c = await cookies()\n  c.delete('session')\n  redirect('/login')",
+      // A password gate
+      "const link = await prisma.link.findUnique({ where: { id: input.id } })\n  if (link.password !== input.password) return { error: 'Invalid' }\n  ;(await cookies()).set(`password_${link.id}`, input.password, { httpOnly: true })",
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+    // ...but it doesn't hide a real write next to it
+    expect(check(action("cookies().set('theme', input)\n  await prisma.user.update({ where: { id: input.id }, data: input })"))).toHaveLength(1)
+  })
+
+  describe('reads a receiver by what the file defines it as, not by its name', () => {
+    it('still reports one whose definition is out of sight', () => {
+      for (const body of [
+        'await stream.update(input)',
+        'await hash.update(input)',
+        'await seen.set(input.id, input)',
+        'await seen.delete(input.id)',
+        'await params.set(input.id, input)',
+        'await store.set(input.id, input)',
+        'const { stream } = await open(input)\n  await stream.update(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports one defined as something else', () => {
+      for (const body of [
+        'const stream = db.stream(input)\n  await stream.update(input)',
+        'const hash = await db.hash(input)\n  await hash.update(input)',
+        'const headers = db.table(input)\n  await headers.delete(input)',
+        'const cookies = db.table(input)\n  await cookies.set(input)',
+        'const map = db.map\n  await map.set(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports a table with the same name as one of these', () => {
+      for (const body of [
+        'await prisma.hash.update({ where: { id: input.id }, data: input })',
+        'await prisma.stream.update({ where: { id: input.id }, data: input })',
+        'await prisma.map.delete({ where: { id: input.id } })',
+        'await prisma.set.delete({ where: { id: input.id } })',
+        'await prisma.headers.update({ where: { id: input.id }, data: input })',
+        'await prisma.headers.delete({ where: { id: input.id } })',
+        'await prisma.cookies.delete({ where: { id: input.id } })',
+        'await prisma.searchParams.delete({ where: { id: input.id } })',
+        'await db.cookies.create({ data: input })',
+        'await prisma.object.create({ data: input })',
+        'await prisma.axios.create({ data: input })',
+        'await object.create({ data: input })',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports a name that also stands for something else in the file', () => {
+      expect(check(`export async function a(input) {
+  const stream = createStreamableValue()
+  stream.update(input)
+}
+export async function b(input) {
+  const stream = db.stream(input)
+  await stream.update(input)
+}`)).toHaveLength(1)
+      // A parameter hides what the file defines, however it's written
+      for (const params of ['store, input', '{ store }, input', 'input, ...store', 'input, store = kv']) {
+        expect(check(`const store = new Map()
+export async function a(${params}) {
+  await store.set(input.id, input)
+}`), params).toHaveLength(1)
+      }
+      // So does a name it destructures
+      expect(check(`const store = new Map()
+export async function a(input) {
+  const { store } = await open(input)
+  await store.set(input.id, input)
+}`)).toHaveLength(1)
+    })
+
+    it('reads a name defined as another name', () => {
+      expect(check(action('const seen = new Map()\n  const copy = seen\n  copy.set(input.id, input)'))).toHaveLength(0)
+      expect(check(action('const seen = db.items\n  const copy = seen\n  await copy.set(input.id, input)'))).toHaveLength(1)
+      expect(check(action('const a = b\n  const b = a\n  await a.set(input.id, input)'))).toHaveLength(1)
+    })
+
+    it('reads a renamed import by the name it was exported under', () => {
+      expect(check(`import { cookies as nextCookies } from 'next/headers'\n${action("(await nextCookies()).set('theme', input)")}`)).toHaveLength(0)
+      expect(check(`import { createHash as hash } from 'node:crypto'\n${action("return hash('md5').update(input).digest('hex')")}`)).toHaveLength(0)
+      expect(check(`import { db as cookies } from './db'\n${action("await cookies().set('theme', input)")}`)).toHaveLength(1)
+    })
+
+    it('does not take what a Map holds for the Map', () => {
+      expect(check(action("const models = new Map()\n  await models.get('user').update(input)"))).toHaveLength(1)
+    })
+  })
+
+  it('does not read comments or strings as calls', () => {
+    for (const body of [
+      '// await prisma.item.delete({ where: { id: input.id } })',
+      '/* await db.update(items).set(input) */',
+      "// cookies().set('a', input)\n  return input",
+      "return 'run db.delete(items) first'",
+      'return `then db.update(items)`',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('does not read a comment as SQL', () => {
+    for (const body of ['// UPDATE: this only reads now', '/* DELETE FROM items once it ships */', '// INSERT the row later']) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+    expect(check(`// UPDATE: reads only\n${action('return input')}`)).toHaveLength(0)
+    // SQL in a string is still a write, and a comment next to it changes nothing
+    expect(check(action("// UPDATE: reads only\n  await db.query('DELETE FROM items')"))).toHaveLength(1)
+  })
+
+  it('does not count a checked action\'s writes, read this way, against its neighbors', () => {
+    expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await db.delete(items).where(parsedInput) })
+export async function b(input) {
+  const rows = []
+  rows.push(input)
+  return rows
+}`)).toHaveLength(0)
+    expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await db.query('DELETE FROM items') })
+export async function b(input) { return input }`)).toHaveLength(0)
+  })
+
+  it('leaves a file Babel can\'t parse to the text check', () => {
+    for (const body of ['const rows = []\n  rows.push(input)', 'const stream = createStreamableValue()\n  stream.update(input)', "cookies().set('theme', input)", '// UPDATE: reads only']) {
+      const file = makeFile(`'use server'\n${action(body)}\n`, { relativePath: 'app/actions/items.ts', withAst: false })
+      expect(serverActionAuthRule.check(file, project), body).toHaveLength(1)
+    }
+  })
+
+  it('reports at the same severity with auth middleware', () => {
+    const middleware = makeProject({ hasAuthMiddleware: true })
+    expect(check(action('await db.delete(items)'), middleware).map(f => f.severity)).toEqual(['info'])
+    expect(check(action("cookies().set('theme', input)"), middleware)).toHaveLength(0)
+    const apiOnly = makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true })
+    expect(check(action('await db.delete(items)'), apiOnly).map(f => f.severity)).toEqual(['warning'])
+    expect(check(action('const rows = []\n  rows.push(input)'), apiOnly)).toHaveLength(0)
+  })
+
+  // Through the scanner, with the shapes the regex used to trip on
+  it('works through the scanner', async () => {
+    const result = await scanFiles({
+      'app/actions/locale.ts': `"use server";
+import { cookies } from "next/headers";
+
+export async function setLocale(locale: string) {
+  const cookieStore = await cookies();
+  cookieStore.set("NEXT_LOCALE", locale);
+}
+`,
+      'app/actions/hash.ts': `"use server";
+import { createHash } from "node:crypto";
+
+export async function hashEmail(email: string) {
+  return createHash("sha256").update(email).digest("hex");
+}
+`,
+      'app/actions/items.ts': `"use server";
+import { prisma } from "@/lib/prisma";
+
+export async function deleteItem(id: string) {
+  await prisma.item.delete({ where: { id } });
+}
+`,
+    })
+    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['app/actions/items.ts'])
+  })
+})
