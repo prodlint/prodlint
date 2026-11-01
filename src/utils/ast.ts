@@ -49,6 +49,20 @@ export function parseFile(content: string, fileName: string): ParseResult<File> 
 }
 
 /**
+ * Strip what wraps an expression without changing what it is:
+ * x as T, x satisfies T, x!, <T>x, (x), await x
+ */
+export function unwrapExpression(node: Node): Node {
+  while (
+    node.type === 'TSAsExpression' || node.type === 'TSSatisfiesExpression' || node.type === 'TSNonNullExpression' ||
+    node.type === 'TSTypeAssertion' || node.type === 'ParenthesizedExpression' || node.type === 'AwaitExpression'
+  ) {
+    node = node.type === 'AwaitExpression' ? node.argument : node.expression
+  }
+  return node
+}
+
+/**
  * Simple recursive AST visitor (depth-first).
  * Calls visitor(node, parent) for every node.
  */

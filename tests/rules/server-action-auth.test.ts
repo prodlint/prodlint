@@ -208,3 +208,508 @@ export async function submitFeedback(data) {
     expect(findings).toHaveLength(0)
   })
 })
+
+// next-safe-action: the check runs in the client's .use() middleware, usually in another
+// file, as in dub's lib/actions/safe-action.ts
+describe('server-action-auth on actions built on a client', () => {
+  const check = (code: string, proj = project) =>
+    serverActionAuthRule.check(makeFile(code, { relativePath: 'app/actions/items.ts' }), proj)
+
+  const MUTATE = 'async ({ parsedInput }) => { await prisma.item.delete({ where: { id: parsedInput.id } }) }'
+
+  // An action with this file's imports (a line of them, or the client's own) and definitions
+  const built = (client: string, setup = `import { ${client} } from '@/lib/safe-action'`) => `'use server'
+${setup}
+export const deleteItemAction = ${client}
+  .inputSchema(schema)
+  .action(${MUTATE})
+`
+
+  it('counts a client whose name has an auth or session word', () => {
+    for (const client of [
+      'authActionClient',
+      'authUserActionClient',
+      'authPartnerActionClient',
+      'authOrganizationActionClient',
+      'authenticatedAction',
+      'authedActionClient',
+      'authorizedActionClient',
+      'authAction',
+      'sessionActionClient',
+      'actionWithSession',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(0)
+    }
+  })
+
+  it('counts a protected client, and one named for its signed-in user', () => {
+    for (const client of ['protectedAction', 'protectedActionClient', 'protectedClient', 'protectedWithClinicActionClient', 'userActionClient', 'userAction']) {
+      expect(check(built(client)), client).toHaveLength(0)
+    }
+  })
+
+  it('counts a client named for its admins', () => {
+    for (const client of [
+      'adminActionClient',
+      'AdminActionClient',
+      'adminAction',
+      'superAdminActionClient',
+      'superadminActionClient',
+      'superAdminAction',
+      'platformAdminActionClient',
+      'systemAdminAction',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(0)
+    }
+    // A hand-written wrapper of the same name, called directly
+    expect(check(`'use server'\nexport const a = adminAction(schema, ${MUTATE})\n`)).toHaveLength(0)
+  })
+
+  // As in auth-checks: withSupabaseAdmin hands out a service-role client, and "adminClient" is
+  // what one is usually called. An admin action client has to say it's one.
+  it('does not count "admin" outside an action client\'s own name', () => {
+    for (const client of [
+      'adminClient',
+      'supabaseAdmin',
+      'supabaseAdminClient',
+      'organizationAdminClient',
+      // A helper or an action, not a client
+      'logAdminAction',
+      'createAdminAction',
+      'updateAdminAction',
+      'parseSuperAdminAction',
+      'adminActionLogger',
+      // The opposite
+      'nonAdminActionClient',
+      'publicAdminAction',
+      'optionalAdminActionClient',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(1)
+    }
+    for (const value of [
+      `withSupabaseAdmin(${MUTATE})`,
+      `withAdminClient(${MUTATE})`,
+      `withAdmin(${MUTATE})`,
+      `logAdminAction(${MUTATE})`,
+      `createAdminClient().action(${MUTATE})`,
+      `getAdminClient().action(${MUTATE})`,
+    ]) {
+      expect(check(`'use server'\nexport const a = ${value}\n`), value).toHaveLength(1)
+    }
+    // A middleware's name doesn't say it either: it may only load that client
+    expect(check(built('actionClient.use(adminMiddleware)', ''))).toHaveLength(1)
+    expect(check(built('actionClient.use(withSupabaseAdmin)', ''))).toHaveLength(1)
+  })
+
+  it('still reports a plain actionClient', () => {
+    const findings = check(built('actionClient'))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+    expect(findings[0].line).toBe(1)
+    expect(findings[0].message).toContain('anyone can call this action')
+  })
+
+  it('still reports a client whose name says the opposite, or nothing about auth', () => {
+    for (const client of [
+      'publicActionClient',
+      'publicAuthActionClient',
+      'optionalAuthActionClient',
+      'optionalUserActionClient',
+      'authOptionalActionClient',
+      'anonActionClient',
+      'anonymousAction',
+      'guestActionClient',
+      'noAuthActionClient',
+      'nonAuthAction',
+      'skipAuthAction',
+      'bypassAuthActionClient',
+      'withoutAuthActionClient',
+      'unauthenticatedActionClient',
+      'unprotectedActionClient',
+      'optionalProtectedAction',
+      // "Author" isn't auth
+      'authorActionClient',
+      'authorsAction',
+      // "user" says it only as the client's own name
+      'updateUserAction',
+      'usersActionClient',
+      'superUserActionClient',
+      'templateActionClient',
+      'workspaceAction',
+      'safeAction',
+      'baseActionClient',
+    ]) {
+      expect(check(built(client)), client).toHaveLength(1)
+    }
+  })
+
+  it('reads the whole builder chain', () => {
+    // .schema() is the older spelling of .inputSchema(), .stateAction() is for useActionState
+    expect(check(`'use server'
+import { authActionClient } from './safe-action'
+export const a = authActionClient
+  .metadata({ name: 'a' })
+  .schema(schema)
+  .bindArgsSchemas([z.string()])
+  .outputSchema(output)
+  .stateAction(${MUTATE})
+`)).toHaveLength(0)
+    expect(check(`'use server'
+import { actionClient } from './safe-action'
+export const a = actionClient
+  .metadata({ name: 'auth' })
+  .schema(schema)
+  .stateAction(${MUTATE})
+`)).toHaveLength(1)
+  })
+
+  it('counts a builder or wrapper of another library by the same names', () => {
+    for (const value of [
+      // zsa
+      `authedProcedure.createServerAction().input(schema).handler(${MUTATE})`,
+      `protectedProcedure.createServerAction().handler(${MUTATE})`,
+      // a wrapper called directly
+      `protectedAction(schema, ${MUTATE})`,
+      `authAction(${MUTATE})`,
+      // a factory
+      `createAuthActionClient().action(${MUTATE})`,
+    ]) {
+      expect(check(`'use server'\nexport const a = ${value}\n`), value).toHaveLength(0)
+    }
+    for (const value of [
+      `createServerAction().input(schema).handler(${MUTATE})`,
+      `publicProcedure.createServerAction().input(schema).handler(${MUTATE})`,
+      `validated(schema, ${MUTATE})`,
+      `updateUser(${MUTATE})`,
+      `publicAction(${MUTATE})`,
+      `createSafeActionClient().action(${MUTATE})`,
+    ]) {
+      expect(check(`'use server'\nexport const a = ${value}\n`), value).toHaveLength(1)
+    }
+  })
+
+  it('reads a renamed import by the name it was exported under', () => {
+    expect(check(built('client', "import { authActionClient as client } from './safe-action'"))).toHaveLength(0)
+    expect(check(built('authActionClient', "import { actionClient as authActionClient } from './safe-action'"))).toHaveLength(1)
+    // A default import has only the local name
+    expect(check(built('authActionClient', "import authActionClient from './auth-client'"))).toHaveLength(0)
+  })
+
+  it('reads a client off a namespace import', () => {
+    expect(check(built('safe.authActionClient', "import * as safe from './safe-action'"))).toHaveLength(0)
+    expect(check(built('safe.actionClient', "import * as safe from './safe-action'"))).toHaveLength(1)
+    expect(check(built('auth.client', "import * as auth from './auth'"))).toHaveLength(0)
+    expect(check(built('auth.optional', "import * as auth from './auth'"))).toHaveLength(1)
+  })
+
+  it('counts an auth .use() in the action\'s own chain', () => {
+    for (const client of [
+      'actionClient.use(authMiddleware)',
+      'actionClient.use(authMiddleware())',
+      'actionClient.use(auth.required)',
+      'actionClient.use(checkSessionMiddleware)',
+      'actionClient.use(logger).use(authMiddleware)',
+      'actionClient.use(authMiddleware).use(logger)',
+      // It adds the check, whatever it's added to
+      'publicActionClient.use(authMiddleware)',
+      'createSafeActionClient().use(authMiddleware)',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(0)
+    }
+  })
+
+  it('does not count a .use() that shows no check', () => {
+    for (const client of [
+      // dub's send-otp and create-user-account: it turns signed-in users away
+      'actionClient.use(throwIfAuthenticated)',
+      'actionClient.use(throwIfUserAuthenticated)',
+      'actionClient.use(redirectIfSession)',
+      // ...and this lets anyone in
+      'actionClient.use(authIfPresent)',
+      'actionClient.use(logger)',
+      'actionClient.use(rateLimit({ max: 5 }))',
+      'actionClient.use(optionalAuth)',
+      'actionClient.use(publicAuthMiddleware)',
+      'actionClient.use(logAuthor)',
+      'actionClient.use(async ({ next }) => next())',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(1)
+    }
+    // An unless-style guard does check
+    expect(check(built('actionClient.use(throwIfNotAuthenticated)', ''))).toHaveLength(0)
+  })
+
+  describe('defined in the same file', () => {
+    it('counts a client built with an auth .use(), whatever its name', () => {
+      expect(check(built('userActionClient', 'const userActionClient = actionClient.use(authMiddleware)'))).toHaveLength(0)
+      expect(check(built('client', 'const client = createSafeActionClient().use(authMiddleware)'))).toHaveLength(0)
+    })
+
+    it('counts a client built on an auth client', () => {
+      expect(check(built('workspaceClient', `import { authActionClient } from './safe-action'
+const workspaceClient = authActionClient.use(loadWorkspace)`))).toHaveLength(0)
+      expect(check(built('b', `import { authActionClient } from './safe-action'
+const a = authActionClient
+const b = a.metadata({ name: 'b' })`))).toHaveLength(0)
+    })
+
+    it('counts a name that says auth once the client has a .use() it can be about', () => {
+      // The middleware's check isn't one AUTH_PATTERNS knows, or sits behind another name
+      expect(check(built('authActionClient', `const authActionClient = createSafeActionClient().use(async ({ next }) => {
+  const user = await requireCurrentUser()
+  return next({ ctx: { user } })
+})`))).toHaveLength(0)
+      expect(check(built('protectedAction', 'const protectedAction = actionClient.use(guard)'))).toHaveLength(0)
+      expect(check(built('userActionClient', 'const userActionClient = publicActionClient.use(userMiddleware)'))).toHaveLength(0)
+      expect(check(built('adminActionClient', 'const adminActionClient = actionClient.use(adminMiddleware)'))).toHaveLength(0)
+      expect(check(built('adminAction', `const adminAction = actionClient.use(async ({ next }) => {
+  const user = await requireAdmin()
+  return next({ ctx: { user } })
+})`))).toHaveLength(0)
+    })
+
+    it('does not trust a name when the definition shows no middleware', () => {
+      for (const setup of [
+        'const authActionClient = createSafeActionClient()',
+        'const authActionClient = createSafeActionClient({ handleServerError })',
+        'const authActionClient = actionClient',
+        'const base = createSafeActionClient()\nconst authActionClient = base.metadata({ name: "a" })',
+      ]) {
+        expect(check(built('authActionClient', setup)), setup).toHaveLength(1)
+      }
+      expect(check(built('userActionClient', 'const userActionClient = createSafeActionClient()'))).toHaveLength(1)
+      expect(check(built('adminActionClient', 'const adminActionClient = createSafeActionClient()'))).toHaveLength(1)
+    })
+
+    it('does not count a client with no check, or a name that says the opposite', () => {
+      for (const [client, setup] of [
+        ['client', 'const client = actionClient.use(logger)'],
+        ['client', 'const client = createSafeActionClient()'],
+        ['optionalAuthClient', 'const optionalAuthClient = actionClient.use(authMiddleware)'],
+        ['optionalUserActionClient', 'const optionalUserActionClient = actionClient.use(async ({ next }) => next())'],
+        ['publicClient', 'const publicClient = actionClient.use(logger)'],
+      ]) {
+        expect(check(built(client, setup)), setup).toHaveLength(1)
+      }
+    })
+
+    it('trusts the name of a wrapper function, as in another file', () => {
+      expect(check(`'use server'
+function protectedAction(fn) {
+  return async (input) => {
+    const user = await requireCurrentUser()
+    return fn(input, user)
+  }
+}
+export const deleteItem = protectedAction(${MUTATE})
+`)).toHaveLength(0)
+    })
+
+    it('survives clients defined in terms of each other', () => {
+      expect(check(built('a', 'const a = b\nconst b = a'))).toHaveLength(1)
+    })
+  })
+
+  describe('in a file with other exports', () => {
+    const authed = `export const a = authActionClient.inputSchema(schema).action(${MUTATE})`
+
+    it('still reports a mutating action that is not built on an auth client', () => {
+      for (const other of [
+        'export async function b(id) { await db.update(items).set({ id }) }',
+        // dub's ban-partner: a plain helper exported next to its action is an endpoint too
+        'export const b = async (id) => { await db.update(items).set({ id }) }',
+        'export const b = actionClient.action(async () => { await db.update(items).set({ id }) })',
+        'export default async function b(id) { await db.update(items).set({ id }) }',
+        'const b = actionClient.action(async () => { await db.update(items).set({ id }) })\nexport { b }',
+      ]) {
+        const findings = check(`'use server'\n${authed}\n${other}\n`)
+        expect(findings, other).toHaveLength(1)
+        expect(findings[0].line).toBe(1)
+      }
+    })
+
+    it('does not count the checked action\'s mutation against a read-only one', () => {
+      for (const other of [
+        'export async function b() { return db.query.items.findMany() }',
+        'export const b = actionClient.action(async () => db.query.items.findMany())',
+      ]) {
+        expect(check(`'use server'\n${authed}\n${other}\n`), other).toHaveLength(0)
+      }
+    })
+
+    it('covers a helper that only checked actions can reach', () => {
+      expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+export const b = protectedAction(({ parsedInput }) => remove(parsedInput.id))
+`)).toHaveLength(0)
+    })
+
+    it('ignores type exports', () => {
+      expect(check(`'use server'
+export type Input = { id: string }
+export interface Output { ok: boolean }
+export type { Other } from './types'
+${authed}
+`)).toHaveLength(0)
+    })
+
+    it('still reports a helper that an unchecked export can reach', () => {
+      const findings = check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+export async function b(id) { return remove(id) }
+`)
+      expect(findings).toHaveLength(1)
+    })
+
+    // Its code is read in its own file, but it isn't known to be checked
+    it('treats a re-export as an unchecked export with no code here', () => {
+      for (const reexport of ["export { other } from './other'", "export * from './other'"]) {
+        expect(check(`'use server'\n${authed}\n${reexport}\n`), reexport).toHaveLength(0)
+        expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+${reexport}
+`), reexport).toHaveLength(1)
+      }
+    })
+  })
+
+  describe('export forms', () => {
+    it('reads each way of exporting an action', () => {
+      for (const code of [
+        `export default authActionClient.action(${MUTATE})`,
+        `const a = authActionClient.action(${MUTATE})\nexport { a }`,
+        `const a = authActionClient.action(${MUTATE})\nexport { a as deleteItem }`,
+        `const a = authActionClient.action(${MUTATE})\nexport default a`,
+        `const a = authActionClient.action(${MUTATE})\nconst b = a\nexport { b }`,
+        `export const a = authActionClient.action(${MUTATE}) as Action`,
+        `export const a = authActionClient.action(${MUTATE}) satisfies Action`,
+        `export const a = (authActionClient.action(${MUTATE}))`,
+        `export const a = authActionClient.action(${MUTATE}), b = authActionClient.action(${MUTATE})`,
+      ]) {
+        expect(check(`'use server'\n${code}\n`), code).toHaveLength(0)
+      }
+    })
+
+    it('reports the same forms on a plain client', () => {
+      for (const code of [
+        `export default actionClient.action(${MUTATE})`,
+        `const a = actionClient.action(${MUTATE})\nexport { a }`,
+        `const a = actionClient.action(${MUTATE})\nexport default a`,
+        `export const a = actionClient.action(${MUTATE}) satisfies Action`,
+        `export const a = authActionClient.action(${MUTATE}), b = actionClient.action(${MUTATE})`,
+      ]) {
+        expect(check(`'use server'\n${code}\n`), code).toHaveLength(1)
+      }
+    })
+  })
+
+  it('does not count a client name anywhere else in the file', () => {
+    for (const code of [
+      // Imported, but this action doesn't use it
+      `import { authActionClient } from './safe-action'\nexport async function a(id) { await db.delete(items).where({ id }) }`,
+      // A comment, and a string
+      `// built on authActionClient\nexport async function a(id) { await db.delete(items).where({ id }) }`,
+      `export async function a(id) { await db.delete(items).where({ id, by: 'authActionClient' }) }`,
+      // The action's own name
+      `export const authDeleteAction = actionClient.action(${MUTATE})`,
+      `const authDeleteAction = actionClient.action(${MUTATE})\nexport { authDeleteAction }`,
+      `export const protectedDelete = async (id) => { await db.delete(items).where({ id }) }`,
+      // Arguments of a plain client
+      `export const a = actionClient.inputSchema(authSchema).action(${MUTATE})`,
+      `export const a = actionClient.inputSchema(authSchema.extend({ id: z.string() })).action(${MUTATE})`,
+      `export const a = actionClient.action(authHandler)\nasync function authHandler({ parsedInput }) { await db.delete(items).where(parsedInput) }`,
+      // An unexported client doesn't guard an exported function
+      `const authActionClient = actionClient.use(authMiddleware)\nexport async function a(id) { await db.delete(items).where({ id }) }`,
+      // Called inside the action's body
+      `export async function a(id) { const run = authActionClient.action(noop); await db.delete(items).where({ id }) }`,
+    ]) {
+      expect(check(`'use server'\n${code}\n`), code).toHaveLength(1)
+    }
+  })
+
+  it('leaves a file that exports nothing to the text check', () => {
+    expect(check(`'use server'
+const a = authActionClient.action(${MUTATE})
+`)).toHaveLength(1)
+  })
+
+  it('leaves a file Babel can\'t parse to the text check', () => {
+    const file = makeFile(built('authActionClient'), { relativePath: 'app/actions/items.ts', withAst: false })
+    expect(serverActionAuthRule.check(file, project)).toHaveLength(1)
+  })
+
+  it('keeps the auth patterns and public paths as they were', () => {
+    // A plain client whose .use() is in the file and calls a known check
+    expect(check(built('client', `const client = actionClient.use(async ({ next }) => {
+  const session = await getSession()
+  if (!session) throw new Error('Unauthorized')
+  return next({ ctx: { session } })
+})`))).toHaveLength(0)
+    const file = makeFile(built('actionClient'), { relativePath: 'app/actions/login.ts' })
+    expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+  })
+
+  it('applies with and without auth middleware', () => {
+    const middleware = makeProject({ hasAuthMiddleware: true })
+    expect(check(built('authActionClient'), middleware)).toHaveLength(0)
+    expect(check(built('actionClient'), middleware).map(f => f.severity)).toEqual(['info'])
+
+    const apiOnly = makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true })
+    expect(check(built('authActionClient'), apiOnly)).toHaveLength(0)
+    expect(check(built('actionClient'), apiOnly).map(f => f.severity)).toEqual(['warning'])
+  })
+
+  // dub's real shapes: the client file has no 'use server', and an OTP action's .use() is the opposite of a check
+  it('works through the scanner', async () => {
+    const result = await scanFiles({
+      'lib/actions/safe-action.ts': `import { createSafeActionClient } from 'next-safe-action'
+import { getSession } from '../auth'
+
+export const actionClient = createSafeActionClient()
+
+export const authActionClient = actionClient.use(async ({ next }) => {
+  const session = await getSession()
+  if (!session?.user.id) throw new Error('Unauthorized: Login required.')
+  return next({ ctx: { user: session.user } })
+})
+`,
+      'lib/actions/set-default-folder.ts': `"use server";
+
+import { prisma } from "@dub/prisma";
+import * as z from "zod/v4";
+import { authActionClient } from "./safe-action";
+
+const schema = z.object({ workspaceId: z.string(), folderId: z.string().nullable() });
+
+export const setDefaultFolderAction = authActionClient
+  .inputSchema(schema)
+  .action(async ({ ctx, parsedInput }) => {
+    await prisma.projectUsers.update({
+      where: { userId_projectId: { userId: ctx.user.id, projectId: ctx.workspace.id } },
+      data: { defaultFolderId: parsedInput.folderId },
+    });
+  });
+`,
+      'lib/actions/send-otp.ts': `"use server";
+
+import { prisma } from "@dub/prisma";
+import * as z from "zod/v4";
+import { throwIfAuthenticated } from "./auth/throw-if-authenticated";
+import { actionClient } from "./safe-action";
+
+const schema = z.object({ email: z.string() });
+
+export const sendOtpAction = actionClient
+  .inputSchema(schema, { handleValidationErrorsShape: async (ve) => ve })
+  .use(throwIfAuthenticated)
+  .action(async ({ parsedInput }) => {
+    await prisma.emailVerificationToken.create({ data: { identifier: parsedInput.email } });
+  });
+`,
+    })
+    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/send-otp.ts'])
+  })
+})
