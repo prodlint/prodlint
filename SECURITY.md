@@ -20,7 +20,4 @@ This policy covers the `prodlint` npm package, the GitHub Action (`action.yml`),
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| 0.7.x   | Yes       |
-| < 0.7   | No        |
+Security fixes go into the latest release on npm. Older versions don't get them, so please check that a problem still happens on the latest version before reporting it.

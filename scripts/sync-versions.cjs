@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { moveUnreleased, releaseNotes } = require('./release-notes.cjs');
 
 const root = path.join(__dirname, '..');
 const rootPkgPath = path.join(root, 'package.json');
@@ -99,6 +100,20 @@ for (const { file, label, pattern } of textTargets) {
     edits.push(`${label}: ${before.trim()} -> ${before.trim().replace(SEMVER, version)}`);
   }
   writeIfChanged(file, raw, updated);
+}
+
+// CHANGELOG.md — the [Unreleased] entries become this version's section, which release.yml
+// publishes as the GitHub Release. A version with nothing to say stops here, not after npm.
+const changelogRaw = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+if (!releaseNotes(changelogRaw, version)) {
+  const today = new Date().toISOString().slice(0, 10);
+  const moved = moveUnreleased(changelogRaw, version, today);
+  if (!releaseNotes(moved, version)) {
+    console.error(`\nCHANGELOG.md: nothing under "## [Unreleased]" to release as ${version}.`);
+    process.exit(1);
+  }
+  edits.push(`CHANGELOG.md: [Unreleased] -> [${version}] - ${today}`);
+  writeIfChanged('CHANGELOG.md', changelogRaw, moved);
 }
 
 console.log(`Syncing everything to v${version}`);

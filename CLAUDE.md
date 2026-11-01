@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # tsup → dist/cli.js, dist/mcp.js, dist/index.js
 npm run dev          # tsup --watch
-npm run test         # vitest run (924 tests; vitest 5 needs Node >= 22.12)
+npm run test         # vitest run (vitest 5 needs Node >= 22.12)
 npm run test:watch   # vitest
 npm run lint         # self-scan via node dist/cli.js .
 ```
@@ -54,7 +54,7 @@ Rules are registered in `src/rules/index.ts`. Currently 52 rules across all 4 ca
 
 **v0.5.0 new rules**: `insecure-cookie` (security), `leaked-env-in-logs` (security), `insecure-random` (security), `next-server-action-validation` (security, critical), `missing-transaction` (reliability)
 
-**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 14 (including `sql-injection`, `no-n-plus-one` and `hallucinated-imports`, plus two migrated later: `redirect-in-try-catch`, and `auth-checks` for route handler exports and their auth wrappers).
+**v0.7.0 AST migration**: 9 rules upgraded from regex to AST analysis with regex fallback: `shallow-catch`, `open-redirect`, `ssrf-risk`, `path-traversal`, `jwt-no-expiry`, `unsafe-html`, `hydration-mismatch`, `missing-transaction`, `leaked-env-in-logs`. Total AST-based rules: 15 (including `sql-injection`, `no-n-plus-one` and `hallucinated-imports`, plus three migrated later: `redirect-in-try-catch`, `auth-checks` for route handler exports and their auth wrappers, and `server-action-auth` for the client each exported action is built on).
 
 ### Two-Phase Scanning
 
@@ -72,6 +72,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isTestFile(path)`, `isScriptFile(path)` (matches `scripts/` dir + standalone names like `seed.ts`, `migrate.ts`), `isConfigFile(path)`
 - `findLoopBodies(lines, commentMap)` — loop body extraction via brace counting (fallback)
 - `blankOut(source, strings)` / `closingBrace(code, open)` — regex fallbacks: blank out comments (and string contents) keeping offsets, then match braces (`shallow-catch`, `redirect-in-try-catch`)
+- `nameWords(name)`, `saysAuth(name)`, `saysNoAuth(name)` — whether a name or module path has an auth or session word ("Author" isn't one), or a word that says the opposite (`auth-checks`' wrappers, `server-action-auth`'s clients)
 
 **`src/utils/ast.ts`** — Babel AST utilities (v0.4.0+, expanded v0.7.0):
 - `parseFile(content, fileName)` — parses JS/TS/JSX/TSX into Babel AST, returns null on failure
@@ -83,6 +84,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - `isStaticString(node)` — detects StringLiteral and zero-expression TemplateLiteral (v0.7.0)
 - `findUseEffectRanges(ast)` — precise useEffect callback body line ranges (v0.7.0)
 - `subtreeContains(node, predicate)` — recursive subtree search helper (v0.7.0)
+- `unwrapExpression(node)` — strips `as`, `satisfies`, `!`, `<T>`, parentheses and `await`
 
 **`src/utils/frameworks.ts`** — framework detection + whitelists:
 - `DEPENDENCY_TO_FRAMEWORK` — maps npm packages to framework identifiers
@@ -104,6 +106,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 - **Deduplication**: hallucinated-imports uses a `seen` Set to avoid reporting the same missing package twice per file
 - **Monorepo support**: `buildProjectContext()` detects workspaces (npm/yarn `workspaces` field + `pnpm-workspace.yaml`) and merges workspace package names + deps into `declaredDependencies`
 - **Import resolution (dead-exports)**: imports are resolved to the scanned modules they load (relative path, alias by path suffix, workspace package from the walked `package.json` names), and re-exports pass a use on. An import from a declared dependency, a Node built-in or a URL uses no project export; only an import that matches no scanned file still counts by name everywhere. Keep that fallback: it covers aliases and layouts the resolver can't follow
+- **Action clients (server-action-auth)**: an exported action counts as checked when its builder chain says so, by the client's name (`authActionClient`, `protectedAction`, and `userActionClient` or `adminActionClient` as a whole name, so `withSupabaseAdmin` and `adminClient`, which are about a service-role client, stay out) or an auth `.use()`. An imported client is judged by its name alone; one defined in the same file is read, and its name counts only once it has a `.use()`. Each export counts on its own, so a plain function exported next to a checked action is still reported. A file Babel can't parse stays with the text check
 - **Line/column numbering**: 1-indexed throughout
 
 ### Scoring (v0.5.0)
@@ -167,12 +170,16 @@ From a worktree or any branch but master, push with `git push origin HEAD:master
 The push's "Bypassed rule violations" notice is normal. Redirect `npm version`'s output to a
 file rather than piping it: a filter that exits early kills it mid-run.
 
-`npm version` fires the `version` lifecycle hook, which runs `scripts/sync-versions.cjs`
-to propagate the new version into `server.json` (both fields),
-`packages/prodlint-mcp/package.json` (its `version` and its `^` range on `prodlint`),
-the `README.md` sample output, the `tests/reporter.test.ts` fixture, and the scanner pin
-in `action.yml` — then stages them into the version commit. The script **fails loudly**
-if a text anchor no longer matches exactly once, rather than silently skipping a file.
+`npm version` first runs `scripts/release-notes.cjs Unreleased` (`preversion`), which stops
+the bump if `CHANGELOG.md` has nothing under `[Unreleased]`. Then it fires the `version`
+lifecycle hook, which runs `scripts/sync-versions.cjs` to propagate the new version into
+`server.json` (both fields), `packages/prodlint-mcp/package.json` (its `version` and its `^`
+range on `prodlint`), the `README.md` sample output, the `tests/reporter.test.ts` fixture,
+and the scanner pin in `action.yml`, and to move the `[Unreleased]` entries under the new
+version's heading in `CHANGELOG.md` (don't move them by hand) — then stages them into the
+version commit. The script **fails loudly** if a text anchor no longer matches exactly once,
+rather than silently skipping a file. `tests/release-notes.test.ts` runs these scripts on a
+copy of the repo, so a moved anchor fails its own PR instead of a release.
 
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
@@ -185,8 +192,10 @@ It is four jobs, split by privilege — keep it that way:
 - **`publish`** (`id-token: write`) only downloads the tarballs and publishes them, plus
   the MCP registry step. Tarball publishes run no lifecycle scripts. npm is pinned, not `@latest`.
 - **`update-v1-tag`** (`contents: write`) runs nothing but git.
-- **`github-release`** (`contents: write`) runs nothing but `gh` and `awk`, last, so a failure
-  can't hurt a release that's already out. A resume skips it if the Release exists.
+- **`github-release`** (`contents: write`) reads the notes with `scripts/release-notes.cjs`, in a
+  step with no token, then runs nothing but `gh`. It's last, so a failure can't hurt a release
+  that's already out, and `verify-release.cjs` checks the notes exist before anything publishes.
+  A resume skips it if the Release exists.
 
 **If a release run fails after npm** (MCP registry, `v1`), don't re-run it: a re-run
 reuses the tagged commit's workflow file and retries the npm publishes, which npm refuses.
