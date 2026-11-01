@@ -15,11 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `export default auth((req) => …)`, and NextAuth v4's `export { default } from
   'next-auth/middleware'`. When one of these files does auth, `auth-checks` rates unchecked
   routes info, not critical (unless its matcher leaves out /api; see below), and
-  `server-action-auth` rates unchecked actions info, not warning; when it rate-limits,
-  `rate-limiting` doesn't report. That's what a `middleware.ts` does. Only the scanned
-  folder's own proxy or middleware is read (at its root or in `src/`), so in a monorepo,
-  scan the app's folder (`apps/web`) to have its proxy read. **Scan results may change**
-  for Next.js 16 apps and apps with Auth.js middleware.
+  `server-action-auth` rates unchecked actions info, not warning (unless its matcher
+  reaches only /api); when it rate-limits, `rate-limiting` doesn't report. That's what a
+  `middleware.ts` does. Only the scanned folder's own proxy or middleware is read (at its
+  root or in `src/`), so in a monorepo, scan the app's folder (`apps/web`) to have its
+  proxy read. **Scan results may change** for Next.js 16 apps and apps with Auth.js
+  middleware.
 - **`auth-checks` downgraded API routes that the auth middleware never runs on.** When
   `middleware.ts` did auth, every unchecked route was rated info ("middleware auth detected
   — verify coverage"), whatever the middleware's `config.matcher` said. Many matchers
@@ -43,8 +44,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   that check the user themselves. So when auth middleware is detected, a mutating server
   action with no auth check of its own is now reported at info ("middleware auth detected —
   verify coverage"), the way `auth-checks` already treats API routes. Without auth
-  middleware it's still a warning. **Scan results may change** for apps with auth
-  middleware: new info findings.
+  middleware, or when its matcher reaches only /api (see below), it's still a warning.
+  **Scan results may change** for apps with auth middleware: new info findings.
+- **`server-action-auth` let auth middleware vouch for actions it never runs on.** An
+  action is posted to the page that calls it, never to /api, so middleware whose
+  `config.matcher` reaches only /api (`['/api/:path*']`, `'/api/(.*)'`) doesn't run on it.
+  prodlint now reads that matcher in `middleware.ts` or `proxy.ts`, as it does for
+  `auth-checks`. When no part of it can reach a path outside /api, an unchecked mutating
+  action is a warning, as with no middleware, and the message says the matcher doesn't
+  cover pages. A matcher that reaches any page (Auth.js's documented
+  `/((?!api|_next/static|_next/image|favicon.ico).*)`, Clerk's `/(api|trpc)(.*)` next to
+  a page pattern), one that isn't a literal, and middleware with no matcher keep the info
+  rating above. `ProjectContext` has a new optional field, `authMiddlewareExcludesPages`.
+  **Scan results may change** for apps whose auth middleware runs only on /api: new
+  warnings.
 - **`dead-exports` counted a Next.js 16 `proxy.ts`'s exports as dead.** Next.js 16 renamed
   `middleware.ts` to `proxy.ts`. The rule skips Next.js's special files by name, but it
   didn't know the new one, so a proxy's `proxy` and `config` exports counted toward the

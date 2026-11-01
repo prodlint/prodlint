@@ -117,6 +117,48 @@ export async function submitFeedback(data) {
     expect((await findings({ ...action, 'proxy.ts': "export { auth as proxy } from '@/auth'\n" })).map(f => f.severity)).toEqual(['info'])
   })
 
+  // An action is posted to the page that calls it, never to /api, so middleware whose
+  // matcher reaches only /api doesn't run on it
+  it("keeps the warning when the auth middleware's matcher doesn't cover pages", () => {
+    const proj = makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true })
+    const file = makeFile(`'use server'
+export async function deleteItem(id) {
+  await db.delete(items).where({ id })
+}`)
+    const findings = serverActionAuthRule.check(file, proj)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+    expect(findings[0].line).toBe(1)
+    expect(findings[0].message).toBe("Server action performs mutations without any authentication check (middleware auth detected, but its matcher doesn't cover pages)")
+    expect(findings[0].fix).toContain('Add auth check')
+  })
+
+  // Through the scanner, with the matcher in a middleware.ts and in a Next.js 16 proxy.ts
+  it("rates actions by the auth middleware's matcher", async () => {
+    const action = { 'app/actions/items.ts': "'use server'\nexport async function deleteItem(id) {\n  await db.delete(items).where({ id })\n}\n" }
+    const severities = async (files: Record<string, string>) =>
+      (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.severity)
+    const auth = {
+      'middleware.ts': "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n",
+      'proxy.ts': "export { auth as proxy } from '@/auth'\n",
+    }
+
+    for (const [name, content] of Object.entries(auth)) {
+      for (const [config, severity] of [
+        ["export const config = { matcher: ['/api/:path*'] }", 'warning'],
+        ['', 'info'],
+        // Auth.js's documented matcher: every path but /api
+        ["export const config = { matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'] }", 'info'],
+        // Clerk's: pages, and /api through /(api|trpc)(.*)
+        [String.raw`export const config = { matcher: ['/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)', '/(api|trpc)(.*)'] }`, 'info'],
+        // a matcher that isn't a literal
+        ["const API_ROUTES = ['/api/:path*']\nexport const config = { matcher: API_ROUTES }", 'info'],
+      ]) {
+        expect(await severities({ ...action, [name]: `${content}\n${config}\n` }), `${name}: ${config}`).toEqual([severity])
+      }
+    }
+  })
+
   it('does not count a sessionId variable as an auth check', () => {
     const file = makeFile(`'use server'
 export async function saveCart(formData: FormData) {

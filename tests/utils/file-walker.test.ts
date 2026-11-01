@@ -335,3 +335,105 @@ describe('buildProjectContext — the auth middleware matcher', () => {
     expect(project.authMiddlewareExcludesApi).toBe(false)
   })
 })
+
+// A server action is posted to the page that calls it, never to /api, so middleware whose
+// matcher reaches only /api doesn't run on it
+describe('buildProjectContext — an auth middleware matcher that reaches only /api', () => {
+  // Auth.js as middleware.ts (its edge compatibility guide) and as a Next.js 16 proxy.ts
+  const AUTH = {
+    'middleware.ts': "import NextAuth from 'next-auth'\nimport authConfig from './auth.config'\n\nexport const { auth: middleware } = NextAuth(authConfig)\n",
+    'proxy.ts': "export { auth as proxy } from '@/auth'\n",
+  }
+  const withMatcher = (matcher: string) => `export const config = {\n  matcher: ${matcher},\n}`
+
+  // The flag for a middleware.ts and for a proxy.ts, each with `config` after the auth
+  async function flags(config: string) {
+    const flags: (boolean | undefined)[] = []
+    for (const [name, auth] of Object.entries(AUTH)) {
+      const project = await contextOf({ [name]: `${auth}\n${config}\n` })
+      expect(project.hasAuthMiddleware, `${name}: ${config}`).toBe(true)
+      flags.push(project.authMiddlewareExcludesPages)
+    }
+    return flags
+  }
+
+  it('notes a matcher that reaches only /api', async () => {
+    for (const matcher of [
+      "['/api/:path*']",
+      "'/api/:path*'",
+      "'/api/(.*)'",
+      "['/api', '/api/:path+']",
+      "['/api/admin/:path*', '/api/billing/:path*']",
+      // every API route but Auth.js's own
+      "['/api/((?!auth).*)']",
+      // the object form, and a template literal
+      "[{ source: '/api/:path*', has: [{ type: 'header', key: 'authorization' }] }]",
+      '[`/api/:path*`]',
+    ]) {
+      expect(await flags(withMatcher(matcher)), matcher).toEqual([true, true])
+    }
+  })
+
+  it("doesn't when the matcher can reach a page", async () => {
+    for (const matcher of [
+      // Auth.js's docs and Next.js's examples/auth: every path but /api
+      "['/((?!api|_next/static|_next/image|favicon.ico).*)']",
+      // Clerk's: pages, and /api through /(api|trpc)(.*)
+      String.raw`['/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)', '/(api|trpc)(.*)']`,
+      "['/api/:path*', '/dashboard/:path*']",
+      // /trpc/x, /apikeys and /api.json aren't under /api
+      "['/api/:path*', '/trpc/:path*']",
+      "'/(api|trpc)(.*)'",
+      "'/api(.*)'",
+      "'/apikeys/:path*'",
+      "'/api/:id?.json'",
+      "'/:path*'",
+      "'/(.*)'",
+      "'/'",
+    ]) {
+      expect(await flags(withMatcher(matcher)), matcher).toEqual([false, false])
+    }
+  })
+
+  // Middleware with no matcher runs on every path. One that can't be read keeps today's rating.
+  it("doesn't when there's no matcher, or it can't be read", async () => {
+    for (const config of [
+      '',
+      "export const config = { runtime: 'nodejs' }",
+      "// export const config = { matcher: ['/api/:path*'] }",
+      // Next.js reads only an exported const, and only literals in it
+      "const config = { matcher: ['/api/:path*'] }\nexport { config }",
+      "const API_ROUTES = ['/api/:path*']\nexport const config = { matcher: API_ROUTES }",
+      "export const config = { matcher: [...API_ROUTES, '/api/admin/:path*'] }",
+      'export const config = { matcher: [`/${API}/:path*`] }',
+      // sources Next.js rejects
+      "export const config = { matcher: ['/api/((?!auth).*'] }",
+      "export const config = { matcher: ['api/:path*'] }",
+    ]) {
+      expect(await flags(config), config).toEqual([false, false])
+    }
+  })
+
+  // As with /api, every file that does auth must agree
+  it('needs every middleware file that does auth to reach only /api', async () => {
+    const apiOnly = (name: keyof typeof AUTH) => `${AUTH[name]}\n${withMatcher("['/api/:path*']")}\n`
+    for (const [files, excludes] of [
+      [{ 'middleware.ts': apiOnly('middleware.ts'), 'src/proxy.ts': CLERK }, false],
+      [{ 'middleware.ts': CLERK, 'proxy.ts': apiOnly('proxy.ts') }, false],
+      [{ 'middleware.ts': apiOnly('middleware.ts'), 'proxy.ts': apiOnly('proxy.ts') }, true],
+      // a proxy that does no auth doesn't count
+      [{ 'middleware.ts': apiOnly('middleware.ts'), 'src/proxy.ts': I18N }, true],
+    ] as const) {
+      const project = await contextOf(files)
+      expect(project.hasAuthMiddleware, Object.keys(files).join(' + ')).toBe(true)
+      expect(project.authMiddlewareExcludesPages, Object.keys(files).join(' + ')).toBe(excludes)
+    }
+  })
+
+  it('reads the matcher only of middleware that does auth', async () => {
+    const project = await contextOf({ 'proxy.ts': `${RATE_LIMIT}\n${withMatcher("['/api/:path*']")}\n` })
+    expect(project.hasRateLimiting).toBe(true)
+    expect(project.hasAuthMiddleware).toBe(false)
+    expect(project.authMiddlewareExcludesPages).toBe(false)
+  })
+})
