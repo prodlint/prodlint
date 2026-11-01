@@ -1,7 +1,7 @@
 import fg from 'fast-glob'
 import { readFile, stat, realpath } from 'node:fs/promises'
 import { resolve, extname, basename, sep } from 'node:path'
-import { buildCommentMap } from './patterns.js'
+import { buildCommentMap, blankOut } from './patterns.js'
 import { parseFile } from './ast.js'
 import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
 import { matcherExcludesApi, matcherExcludesPages } from './middleware-matcher.js'
@@ -51,6 +51,9 @@ const MIDDLEWARE_AUTH_PATTERNS = [
 ]
 
 const MIDDLEWARE_RATE_LIMIT_PATTERNS = [/rateLimit/i, /throttle/i]
+// Calling one, which is more than a word in the file can say: a comment says nothing, and throttle()
+// usually paces something
+const MIDDLEWARE_RATE_LIMIT_CALL = /(?:(?:\br|R|[-_]r)ate[-_]?[lL]imit|(?:\bl|L)imiter)\w*(?:\s*\.\s*\w+)?\s*\(/
 
 export async function walkFiles(
   root: string,
@@ -332,10 +335,9 @@ export async function buildProjectContext(
       authMiddlewareExcludesPages = (!hasAuthMiddleware || authMiddlewareExcludesPages) && matcherExcludesPages(content, name)
       hasAuthMiddleware = true
     }
-    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) {
-      hasRateLimiting = true
-      rateLimitsInMiddleware = true
-    }
+    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) hasRateLimiting = true
+    // A matcher that keeps it on /api never runs on an action's POST
+    if (MIDDLEWARE_RATE_LIMIT_CALL.test(blankOut(content, true)) && !matcherExcludesPages(content, name)) rateLimitsInMiddleware = true
   }
 
   // Read .gitignore
