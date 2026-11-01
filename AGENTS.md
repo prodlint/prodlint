@@ -153,7 +153,7 @@ src/
     patterns.ts     → Regex helpers, comment handling, suppression
     frameworks.ts   → ORM/middleware detection and whitelists
 tests/
-  rules/            → One test file per rule (597 tests)
+  rules/            → One test file per rule
 ```
 
 ## Links
