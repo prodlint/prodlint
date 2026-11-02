@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **`server-action-auth` counts what goes out and stays out as a write.** A POST with no auth
+  check was reported only when something unrelated in its file, like an `array.push()`, got the
+  old text check's attention, so the verdict flipped on trivia. These now count by themselves,
+  read per action: a request the file shows all of (`fetch()`, `axios`, `ky`, `got`, or a client
+  the file makes of them), a file write from `fs`, mail to an address the caller can set
+  (`sendMail()`, `resend.emails.send()`), an AWS command that writes, a key-value store's or a
+  bucket's `put()`, `@vercel/blob`, and a helper imported from the project and named like a write
+  (`deletePhoto()`). The message says which it read, and the fix says to remove `'use server'`
+  if only server code calls it.
+  - **What the file shows isn't a write doesn't count, and doesn't keep a finding next to a
+    `push()` either:** a GraphQL query over POST (a `mutation` counts), a token exchange, a captcha
+    check, a login or register proxy, a request carrying the caller's token, a POST that `fetch()`
+    is told to cache or whose URL says it reads, analytics, a public form (contact, newsletter,
+    waitlist, leads), mail to one fixed address, an account's own mail, temp files, logs and caches.
+  - **Left alone:** an action named for one of those, and one that calls something like
+    `requireAdmin()` or a bare `getCurrentUser()`, which `AUTH_PATTERNS` doesn't know.
+  - **Still only keeps a finding:** a request through an imported client (`api.post()`), since
+    most of those read on a sample forward the caller's token, and a helper it doesn't count.
+  - **A request to a model's host** (`api.openai.com`, `/chat/completions`) is reported as a model
+    call, with a rate limit as the fix.
+  - **Scan results may change:** more `server-action-auth` findings, mostly for apps with a mail or
+    upload helper marked `'use server'`, or thin actions over the project's own helpers. A few
+    fewer for login proxies and apps that forward a token, which were reported through something
+    else. Some findings say more than `performs mutations`.
 - **`server-action-auth` reports a model call with no auth check.** It spends the app's
   credits on whatever the caller sends. These count, wherever an action reaches them through
   the file's own helpers: an AI SDK function imported from the SDK (`generateText`,
