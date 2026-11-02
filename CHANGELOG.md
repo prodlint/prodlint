@@ -6,8 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Fixed
+### Added
+- **`server-action-auth` reports a model call with no auth check.** It spends the app's
+  credits on whatever the caller sends. These count, wherever an action reaches them through
+  the file's own helpers: an AI SDK function imported from the SDK (`generateText`,
+  `streamText`, `streamUI`, `embed` and the like); a model client the file makes (`new GoogleGenerativeAI(key)`, `new ChatOpenAI()`); `.create()`,
+  `.stream()` or `.parse()` on `*.chat.completions`, on a client the file makes, or on one
+  named `openai`, `anthropic` or the like. A rate limit clears it, since that bounds the bill:
+  a call on the action's path (`rateLimit(ip)`, `limiter.consume(ip)`), not the word in a
+  comment or `OpenAI.RateLimitError`, and not what reads a limit or reacts to one
+  (`logRateLimit()`, `isRateLimited(e)` in a catch) or a cap on concurrency (`pLimit()`).
+  Middleware that calls a rate limit, and whose matcher reaches pages, lowers it to info; a
+  rate-limiting package in the dependencies doesn't. An action that's public by design, on a public-named path or behind a guest guard, is told to
+  add a limit, not an auth check. Many of these actions were reported before only because a
+  `stream.update()` or a `.create()` read as a write, so they keep a finding, with a message that
+  says what it is. Others are new: **scan results may change** for apps that call a model from a
+  server action.
+- **`server-action-auth` reads writes the text check never could:** Prisma's `createMany`,
+  `updateMany` and `deleteMany`, Mongo's `insertOne`, `updateOne`, `deleteOne` and
+  `findOneAndUpdate`, Firestore's `setDoc`, `addDoc`, `updateDoc` and `deleteDoc`, Redis's
+  `hset`, `sadd`, `lpush`, `incr` and `del`, and any write with a generic
+  (`kv.set<number>(key, value)`). **Scan results may change:** a few more findings.
 
+### Fixed
+- **`server-action-auth` read anything with a `.set()` or an `.update()` as a database
+  write.** The check was a regex over the file's text, so `stream.update()`, a hash's
+  `update()`, `array.push()`, `map.set()`, `url.searchParams.set()`, `headers.set()`,
+  `axios.create()` and commented-out code all counted as mutations, and the fix told agents to
+  add an auth check to them. It now reads the calls off the AST and asks what each is called
+  on, from what the file defines it as. These don't count: hashes and ciphers from `crypto`;
+  the `set()` and `delete()` of a `Map`, `Set`, `Headers`, `URLSearchParams`, `FormData`, `URL`
+  or typed array made in the action or typed as a parameter, unless the file imports or declares
+  a type of that name; a `.headers`, `.cookies` or `.searchParams` on a request,
+  response or URL; `Object.create()` and `axios.create()`. A `push()` counts only on a Firebase
+  reference, on a named event (`hatchet.events.push('order:created', order)`), or on an array at
+  module level. So does a `Map` or `Set` at module level, where it holds the app's data, unless
+  it's a cache or a rate limiter's own, by the whole word: `memories`, `attempts` and `banned`
+  count. Anything else still counts, including a name defined
+  out of sight or that also stands for something else, so `prisma.hash.update()` and a bare
+  `stream.update()` are still reported. A word like `UPDATE` now needs to be a statement
+  in one string (`UPDATE items SET`) to count by itself, so `type Op = 'INSERT' | 'UPDATE' | 'SET'`
+  doesn't. A file Babel
+  can't parse stays with the text check. **Scan results may change** for any app with server
+  actions: mostly fewer `server-action-auth` findings.
+- **Tightening that check keeps what the old one caught.** A write can be called anything:
+  `clearCart()`, `bank.transferFunds()`, `guardarUsuario()`, or a POST, a file write or an
+  email. So many of these aren't writes (a GraphQL read over POST, a token exchange) that none is
+  reported alone, but a file the old check reported stays reported unless everything else in it
+  is shown harmless: a read by its first word (`getUser`, `parseInput`, but not
+  `getOrCreateUser`), a question (`canDelete`), the language's, the framework's or a query
+  builder's own, or a helper whose body is in the file. A signed POST that places an order was
+  only ever reported for its hash's `update()`. A call named like a read that also writes can
+  still be lost.
+- **A cookie write no longer counts as a mutation in `server-action-auth`.** It changes only
+  the caller's own browser, and they can send any cookie they like. It's usually a locale or
+  theme switch, a logout, a login or a password gate, where the fix (add an auth check) does
+  nothing or breaks the action. The cost: an action that signs a session for whoever asks was
+  reported only by accident before, and now isn't.
+- **`server-action-auth` reported actions behind `.use(throwIfAuthenticated)`.** A `.use()`
+  that turns signed-in users away marks an action for people with no session, like sending a
+  sign-up code, so there's no user to check and the fix would lock out the only people who can
+  call it. `throwIf` or `redirectIf` plus `Authenticated`, `LoggedIn` or `SignedIn` count, by
+  the whole name (`throwIfAuthenticatedApiError` doesn't). A plain function exported next to
+  such an action is still reported, and so is a model call in one. A helper in the file that only
+  such an action can reach counts as its code, and so does one only an action on an auth-checking
+  client can reach.
+- **`server-action-auth` took a comment for an auth check, and `authorId` for one.**
+  `// const session = await auth()` cleared the file, and so did `cookies().set(...)` before a
+  `create({ data: { authorId } })`, or `authorName`, `authorEmail` and the like. **Scan results may change:** a few more findings.
 - **The GitHub Action's `v1` tag could point at a scanner npm wasn't serving yet.** A release
   moved `v1` right after publishing, but npm lists a new version before it serves the tarball:
   0.10.6's still returned 404 over three minutes after it was listed. A run on `@v1` in that gap failed

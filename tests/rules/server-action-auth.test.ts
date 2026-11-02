@@ -418,13 +418,79 @@ export const a = actionClient
     }
   })
 
-  it('does not count a .use() that shows no check', () => {
+  // dub's send-otp and create-user-account: an action for people with no session, like sending a
+  // sign-up code, has no user to check. The fix would lock out the only people who can call it.
+  it('counts a .use() that turns signed-in users away, as public by design', () => {
     for (const client of [
-      // dub's send-otp and create-user-account: it turns signed-in users away
       'actionClient.use(throwIfAuthenticated)',
       'actionClient.use(throwIfUserAuthenticated)',
+      'actionClient.use(throwIfLoggedIn)',
+      'actionClient.use(throwIfSignedIn)',
+      'actionClient.use(redirectIfAuthenticated)',
+      'actionClient.use(redirectIfLoggedIn)',
+      'actionClient.use(redirectIfSignedIn)',
+      'actionClient.use(throwIfAlreadyAuthenticated)',
+      // However it's written
+      'actionClient.use(throwIfAuthenticated())',
+      "actionClient.use(redirectIfAuthenticated('/dashboard'))",
+      'actionClient.use(guards.throwIfAuthenticated)',
+      'actionClient.use(logger).use(throwIfAuthenticated).use(rateLimit)',
+      'publicActionClient.use(throwIfAuthenticated)',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(0)
+    }
+    expect(check(built('actionClient.use(guard)', "import { throwIfAuthenticated as guard } from './guards'"))).toHaveLength(0)
+    // A renamed import keeps its real name
+    expect(check(built('actionClient.use(throwIfAuthenticated)', "import { logger as throwIfAuthenticated } from './guards'"))).toHaveLength(1)
+    // A name that says it's for guests agrees with the guard
+    expect(check(built('guestClient', 'const guestClient = actionClient.use(throwIfAuthenticated)'))).toHaveLength(0)
+    expect(check(built('publicClient', 'const publicClient = actionClient.use(throwIfAuthenticated)'))).toHaveLength(0)
+  })
+
+  it('goes by the whole name of such a guard', () => {
+    for (const client of [
+      // The opposite, in words that aren't a check we can read
+      'actionClient.use(throwIfUnauthenticated)',
+      // Something else
+      'actionClient.use(throwIfAuthenticatedApiError)',
+      'actionClient.use(throwIfLoggedInUserNotFound)',
+      'actionClient.use(throwIfAuthenticatedWithoutPlan)',
+      'actionClient.use(logIfAuthenticated)',
+      'actionClient.use(allowIfAuthenticated)',
+      'actionClient.use(skipIfAuthenticated)',
+      // Says less: a session could be expired or missing
       'actionClient.use(redirectIfSession)',
-      // ...and this lets anyone in
+      'actionClient.use(throwIfSession)',
+      'actionClient.use(throwIfSessionExpired)',
+      'actionClient.use(throwIfAuth)',
+      // It runs on nothing in this chain
+      'actionClient.inputSchema(throwIfAuthenticated)',
+      'actionClient.action(throwIfAuthenticated)',
+    ]) {
+      expect(check(built(client, '')), client).toHaveLength(1)
+    }
+    // An unless-style guard does check, as before
+    expect(check(built('actionClient.use(throwIfNotAuthenticated)', ''))).toHaveLength(0)
+  })
+
+  // Its write is part of the public action, like one written inline
+  it('covers a helper only an action behind a guest guard reaches', () => {
+    const guest = 'export const a = actionClient.use(throwIfAuthenticated).action(async ({ parsedInput }) => store(parsedInput))'
+    expect(check(`'use server'\nasync function store(x) { await db.item.create({ data: x }) }\n${guest}\n`)).toHaveLength(0)
+    expect(check(`'use server'\nconst store = async (x) => { await db.item.create({ data: x }) }\n${guest}\n`)).toHaveLength(0)
+    // ...unless an open export reaches it too
+    expect(check(`'use server'\nasync function store(x) { await db.item.create({ data: x }) }\n${guest}\nexport async function b(x) { return store(x) }\n`)).toHaveLength(1)
+  })
+
+  it('still reports a neighbor of an action that turns signed-in users away', () => {
+    const guest = `export const a = actionClient.use(throwIfAuthenticated).action(${MUTATE})`
+    expect(check(`'use server'\n${guest}\nexport async function b(id) { await db.update(items).set({ id }) }\n`)).toHaveLength(1)
+    expect(check(`'use server'\n${guest}\nexport async function b() { return db.query.items.findMany() }\n`)).toHaveLength(0)
+  })
+
+  it('does not count a .use() that shows no check', () => {
+    for (const client of [
+      // This lets anyone in
       'actionClient.use(authIfPresent)',
       'actionClient.use(logger)',
       'actionClient.use(rateLimit({ max: 5 }))',
@@ -435,8 +501,6 @@ export const a = actionClient
     ]) {
       expect(check(built(client, '')), client).toHaveLength(1)
     }
-    // An unless-style guard does check
-    expect(check(built('actionClient.use(throwIfNotAuthenticated)', ''))).toHaveLength(0)
   })
 
   describe('defined in the same file', () => {
@@ -554,6 +618,44 @@ ${authed}
 `)).toHaveLength(0)
     })
 
+    it('covers a helper only checked actions can reach, next to a plain export', () => {
+      expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+export async function b() { return 1 }
+`)).toHaveLength(0)
+      // Through another helper, and by a const
+      expect(check(`'use server'
+const remove = async (id) => { await db.delete(items).where({ id }) }
+function outer(id) { return remove(id) }
+export const a = authActionClient.action(({ parsedInput }) => outer(parsedInput.id))
+export async function b() { return 1 }
+`)).toHaveLength(0)
+      // What runs as the module loads isn't behind the check, and neither is what it builds
+      expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+const ready = remove(1)
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+export async function b() { return 1 }
+`)).toHaveLength(1)
+      expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+remove(1)
+export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
+export async function b() { return 1 }
+`)).toHaveLength(1)
+      expect(check(`'use server'
+const remover = wrap(async (id) => { await db.delete(items).where({ id }) })
+export const a = authActionClient.action(({ parsedInput }) => remover(parsedInput.id))
+export async function b() { return 1 }
+`)).toHaveLength(1)
+      // No action reaches it at all: as before
+      expect(check(`'use server'
+async function remove(id) { await db.delete(items).where({ id }) }
+export async function b() { return 1 }
+`)).toHaveLength(1)
+    })
+
     it('still reports a helper that an unchecked export can reach', () => {
       const findings = check(`'use server'
 async function remove(id) { await db.delete(items).where({ id }) }
@@ -567,11 +669,12 @@ export async function b(id) { return remove(id) }
     it('treats a re-export as an unchecked export with no code here', () => {
       for (const reexport of ["export { other } from './other'", "export * from './other'"]) {
         expect(check(`'use server'\n${authed}\n${reexport}\n`), reexport).toHaveLength(0)
+        // ...which can't reach a helper of this file
         expect(check(`'use server'
 async function remove(id) { await db.delete(items).where({ id }) }
 export const a = authActionClient.action(({ parsedInput }) => remove(parsedInput.id))
 ${reexport}
-`), reexport).toHaveLength(1)
+`), reexport).toHaveLength(0)
       }
     })
   })
@@ -662,7 +765,7 @@ const a = authActionClient.action(${MUTATE})
     expect(check(built('actionClient'), apiOnly).map(f => f.severity)).toEqual(['warning'])
   })
 
-  // dub's real shapes: the client file has no 'use server', and an OTP action's .use() is the opposite of a check
+  // dub's real shapes: the client file has no 'use server', and an OTP action's .use() turns signed-in users away
   it('works through the scanner', async () => {
     const result = await scanFiles({
       'lib/actions/safe-action.ts': `import { createSafeActionClient } from 'next-safe-action'
@@ -709,7 +812,1668 @@ export const sendOtpAction = actionClient
     await prisma.emailVerificationToken.create({ data: { identifier: parsedInput.email } });
   });
 `,
+      'lib/actions/plain.ts': `"use server";
+
+import { prisma } from "@dub/prisma";
+import { actionClient } from "./safe-action";
+
+export const plainAction = actionClient.action(async ({ parsedInput }) => {
+  await prisma.emailVerificationToken.create({ data: { identifier: parsedInput.email } });
+});
+`,
     })
-    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/send-otp.ts'])
+    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['lib/actions/plain.ts'])
+  })
+})
+
+// A write is what outlives the request: a database, a key-value store, a file, another service
+describe('server-action-auth on what counts as a mutation', () => {
+  const check = (code: string, proj = project) =>
+    serverActionAuthRule.check(makeFile(`'use server'\n${code}\n`, { relativePath: 'app/actions/items.ts' }), proj)
+  const action = (body: string) => `export async function run(input) {\n  ${body}\n}`
+
+  it('still reports real writes', () => {
+    for (const body of [
+      // Prisma
+      'await prisma.item.create({ data: input })',
+      'await prisma.item.update({ where: { id: input.id }, data: input })',
+      'await prisma.item.delete({ where: { id: input.id } })',
+      'await prisma.item.upsert({ where: { id: input.id }, update: input, create: input })',
+      'await prisma.$transaction(async (tx) => { await tx.item.update({ where: { id: input.id }, data: input }) })',
+      // Drizzle
+      'await db.insert(items).values(input)',
+      'await db.update(items).set(input).where(eq(items.id, input.id))',
+      'await db.delete(items).where(eq(items.id, input.id))',
+      // Supabase
+      "await supabase.from('items').insert(input)",
+      "await supabase.from('items').update(input).eq('id', input.id)",
+      "await supabase.from('items').delete().eq('id', input.id)",
+      "await supabase.from('items').upsert(input)",
+      "await supabase.storage.from('files').remove([input.path])",
+      // Raw SQL
+      'await sql`INSERT INTO items (name) VALUES (${input.name})`',
+      'await sql`UPDATE items SET name = ${input.name}`',
+      "await db.query('DELETE FROM items WHERE id = $1', [input.id])",
+      "await client.execute({ sql: 'DELETE FROM items WHERE id = ?', args: [input.id] })",
+      // Mongoose and Firestore
+      'await Item.create(input)',
+      'const item = new Item(input)\n  await item.save()',
+      "await db.collection('items').doc(input.id).set(input)",
+      "await db.collection('items').doc(input.id).update(input)",
+      "await db.collection('items').doc(input.id).delete()",
+      // Key-value stores
+      'await redis.set(input.key, input.value)',
+      'await kv.set(input.key, input.value)',
+      'await redis.del(input.key)\n  await cache.set(input.key, input.value)',
+      // Another service
+      'await stripe.customers.create({ email: input.email })',
+      "await fetch(url, { method: 'DELETE' })",
+    ]) {
+      const findings = check(action(body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].severity, body).toBe('warning')
+      expect(findings[0].message, body).toContain('performs mutations')
+    }
+  })
+
+  describe('with an effect outside the process that is not read as a write', () => {
+    const OUTWARD = [
+      "await fetch(url, { method: 'POST', body: JSON.stringify(input) })",
+      'await fetch(url, { method: "PUT", body: input })',
+      "await fetch(url, { method: 'PATCH', body: input })",
+      "await fetch(url, { method: 'post', body: input })",
+      "await fetch(url, { method: 'delete' })",
+      "const options = { method: 'POST', body: input }\n  await fetch(url, options)",
+      "await fetch(url, { method: input.id ? 'PUT' : 'POST', body: input })",
+      'await axios.post(url, input)',
+      'await axios.put(url, input)',
+      'await axios.patch(url, input)',
+      'await api.post(url, input)',
+      'await apiClient.POST(url, input)',
+      'await apiClient.PATCH(url, input)',
+      'await env.KV.put(input.key, input.value)',
+      'await fs.writeFile(input.path, input.data)',
+      'fs.writeFileSync(input.path, input.data)',
+      'await writeFile(input.path, input.data)',
+      'await fs.promises.appendFile(input.path, input.data)',
+      'await fs.unlink(input.path)',
+      'await rm(input.path)',
+      'await transporter.sendMail(input)',
+      'await sendEmail(input)',
+      'await resend.emails.send(input)',
+      'await s3.send(new PutObjectCommand(input))',
+      'await s3.send(new DeleteObjectCommand(input))',
+      'await ses.send(new SendEmailCommand(input))',
+      // However the method gets there
+      "const method = 'POST'\n  await fetch(url, { method })",
+      "await fetch(url, { 'method': 'POST' })",
+      'await fetch(url, { method: `POST` })',
+      "init.method = 'POST'\n  await fetch(url, init)",
+      "await api(url, 'POST', input)",
+      // More of the file system
+      'await fs.rename(input.from, input.to)',
+      'await fs.copyFile(input.from, input.to)',
+      'await fs.mkdir(input.path)',
+      // Writes through a helper, or a store this rule doesn't know: named like one
+      'await deletePhotoAndFiles(input.id)',
+      'await updateRow(input)',
+      'await addTagsToPhotos(input)',
+      'await storeData(input)',
+      'await markRead(input)',
+      'await client.users.updateAvatar(input)',
+      'await remove(input.id)',
+      'await update(input)',
+      "await set(ref(db, 'items'), input)",
+      "await push(ref(db, 'items'), input)",
+      "await supabase.rpc('bump', input)",
+      "await queue.add('job', input)",
+      'await client.mutation(api.items.add, input)',
+      'await sql.transaction(input)',
+      'await kv.expireat(input.key, 1)',
+      // Anything not shown harmless: no list of verbs holds them all
+      'await clearCart(input.id)',
+      'await resetPassword(input.id, input.pw)',
+      'await bank.transferFunds(input)',
+      'await guardarUsuario(input)',
+      'await eliminarProducto(input.id)',
+      'await stripe.refunds.process(input)',
+      'await wipe(input)',
+      // It starts like a read, and says it also writes
+      'await getOrCreateUser(input)',
+      'await findOrCreate(input)',
+      'await fetchAndStore(input)',
+      'await loadAndSave(input)',
+      'await checkIn(input)',
+      // A factory's word in a name that makes a record
+      'await createUserAction(input)',
+      'await createClientInvoice(input)',
+      'await mustCreateUser(input)',
+      // A model behind a helper, as often as not
+      'await generateSummary(input)',
+      'await generateReport(input)',
+      'await generateAndSaveToken(input)',
+    ]
+    const LOCAL = [
+      'const rows = []\n  rows.push(input)',
+      "const signature = createHmac('sha256', secret).update(input).digest('hex')",
+      "const target = new URL(url)\n  target.searchParams.set('a', input)",
+      "cookies().set('token', input)",
+      'const stream = createStreamableValue()\n  stream.update(input)',
+      'const seen = new Map()\n  seen.set(input.id, input)',
+      'const client = axios.create({ baseURL: input })',
+    ]
+
+    // A signed POST that places an order was only ever reported for its hash's update().
+    // Reading calls properly mustn't lose that.
+    it('keeps the finding its file had', () => {
+      for (const outward of OUTWARD) {
+        for (const local of LOCAL) {
+          const findings = check(action(`${local}\n  ${outward}`))
+          expect(findings, `${local}\n${outward}`).toHaveLength(1)
+          expect(findings[0].message).toContain('performs mutations')
+        }
+      }
+    })
+
+    // So many aren't writes: a POST can be a GraphQL read, a token exchange or a captcha check,
+    // and a file a temp file. That's for another day, and no file gets a new finding here.
+    it('reports nothing on its own, as before', () => {
+      for (const outward of OUTWARD) {
+        expect(check(action(outward)), outward).toHaveLength(0)
+      }
+    })
+
+    it('does not take a read for one', () => {
+      for (const body of [
+        'return fetch(url)',
+        "return fetch(url, { method: 'GET' })",
+        "return fetch(url, { method: 'HEAD' })",
+        "return fetch(url, { cache: 'no-store' })",
+        'return axios.get(url)',
+        'return api.get(url)',
+        'return fs.readFile(input.path)',
+        'return s3.send(new GetObjectCommand(input))',
+        'return s3.send(new ListObjectsV2Command(input))',
+        "return { method: 'card', post: input }",
+        '// await axios.post(url, input)',
+        'const supabase = createClient()\n  return supabase.from(input).select()',
+        'const supabase = createServerClient(url, key)\n  return supabase.from(input).select()',
+        'const client = createAdminClient()\n  return client.get(input)',
+        'setTimeout(input, 100)',
+        'const date = new Date()\n  date.setFullYear(2020)\n  date.setUTCHours(1)\n  return date',
+        "setCookie('a', input)\n  destroyCookie('b')",
+        "updateTag('items')",
+        'const seen = new Set()\n  seen.add(input)',
+        'new Set().add(input)',
+        'return getUser(input)',
+        'return findItems(input)',
+        'return generateId()',
+        'return generateSlug(input)',
+        // Reads and checks, by their first word
+        'return getLocale()',
+        'return isAdmin(input)',
+        'return parseInput(input)',
+        'return formatDate(input)',
+        'return validateInput(input)',
+        'return fetchItems(input)',
+        // The language, the framework and a schema
+        'return JSON.stringify(input)',
+        'return Object.keys(input)',
+        'return input.items.map(String).join()',
+        'return new Date().toISOString()',
+        'console.log(input)',
+        "redirect('/')",
+        "revalidatePath('/')",
+        'return z.object({ a: z.string().min(1) }).parse(input)',
+        'return schema.safeParse(input)',
+        // A query, not a write
+        'return prisma.item.findMany({ where: input })',
+        'return db.select().from(items).where(eq(items.id, input))',
+        "return db.ref('items').get()",
+        "return db.ref('items').child(input).get()",
+        // Sign-in is public by design
+        'return supabase.auth.signInWithPassword(input)',
+        'return supabase.auth.resetPasswordForEmail(input)',
+        'return signIn(input)',
+        'return signOut()',
+        "return updated",
+        'return Promise.reject(input)',
+      ]) {
+        expect(check(action(`const rows = []\n  rows.push(input)\n  ${body}`)), body).toHaveLength(0)
+      }
+      // A form's method is the browser's business
+      const file = makeFile(`'use server'\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return <form method="post" action={input} />\n}\n`, { relativePath: 'app/actions/items.tsx' })
+      expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+      const upper = makeFile(`'use server'\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return <form method="POST" action={input} />\n}\n`, { relativePath: 'app/actions/items.tsx' })
+      expect(serverActionAuthRule.check(upper, project)).toHaveLength(0)
+    })
+
+    it('reads a helper in the file by its body, not its name', () => {
+      expect(check("function wipe(rows) { return rows.length }\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return wipe(rows)\n}")).toHaveLength(0)
+      expect(check("const wipe = (rows) => rows.length\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return wipe(rows)\n}")).toHaveLength(0)
+      expect(check("export async function run(input) {\n  const rows = []\n  rows.push(input)\n  return (() => rows.length)()\n}")).toHaveLength(0)
+      expect(check("function wipe(id) { return bank.transferFunds(id) }\nexport async function run(input) {\n  const rows = []\n  rows.push(input)\n  return wipe(rows)\n}")).toHaveLength(1)
+    })
+
+    it('reads a call by the package it comes from', () => {
+      for (const [setup, body] of [
+        ["import { anthropic } from '@ai-sdk/anthropic'", "return anthropic('claude')"],
+        ["import { tool } from 'ai'", 'return tool({ description: input })'],
+        ["import { compare } from 'bcryptjs'", 'return compare(input.a, input.b)'],
+        ["import { sign } from 'jsonwebtoken'", 'return sign(input, secret)'],
+        ["import { join } from 'node:path'", 'return join(input.a, input.b)'],
+        ["import { after } from 'next/server'", 'after(() => 1)'],
+        ["import { refresh } from 'next/cache'", 'refresh()'],
+      ]) {
+        expect(check(`${setup}\n${action(`const rows = []\n  rows.push(input)\n  ${body}`)}`), body).toHaveLength(0)
+      }
+      // The name alone isn't enough to go on
+      expect(check(`import { refresh } from '@/lib/tokens'\n${action('const rows = []\n  rows.push(input)\n  refresh(input)')}`)).toHaveLength(1)
+    })
+
+    it('asks whatever a question is about', () => {
+      for (const body of ['return canDeleteItem(input)', 'return hasUpdatePermission(input)', 'return isDeleted(input)', 'return user.canCreate(input)']) {
+        expect(check(action(`const rows = []\n  rows.push(input)\n  ${body}`)), body).toHaveLength(0)
+      }
+    })
+
+    it('reads a noun as a noun, unless a verb comes after it', () => {
+      for (const body of ['return getPost(input)', 'return getStore(input)', 'return fetchRecord(input)', 'return getOrders(input)', 'return getUserOrThrow(input)', 'return getOrNull(input)', 'return getAndroidVersion(input)']) {
+        expect(check(action(`const rows = []\n  rows.push(input)\n  ${body}`)), body).toHaveLength(0)
+      }
+      for (const body of ['return fetchCreateOrder(input)', 'return getUpdateStatus(input)', 'return getOrInsert(input)']) {
+        expect(check(action(`const rows = []\n  rows.push(input)\n  ${body}`)), body).toHaveLength(1)
+      }
+    })
+
+    it('does not take a call it can\'t name for a read', () => {
+      for (const body of [
+        'await handlers[input.kind](input)',
+        'await getHandler()(input)',
+        // Not a command, and not a word that's a read
+        'await client.send(new Message(input))',
+        'await budget(input)',
+        // Where raw SQL goes
+        'await db.query(input)',
+        'await db.execute(input)',
+        'await stmt.run(input)',
+        // A write behind what could be anything
+        'await this.save2(input)',
+        // A method up to its caller
+        'await fetch(url, input)',
+        'await fetch(url, { ...input })',
+        'await fetch(url, { method: input.method })',
+        // A tag that hides a write
+        'await sql`UPDATE ${input.table} ${input.changes}`',
+        'await env.API.fetch(url, input)',
+        // A function handed to something that calls it
+        'await Promise.all(input.ids.map(deletePhoto))',
+        'input.ids.forEach(sendEmail)',
+        'await load().then(notifyUser)',
+        'await Array.from(input.ids).map(deletePhoto)',
+        'new Set(input.ids).forEach(sendEmail)',
+        // An array that isn't this file's
+        'queue.push(input)',
+        'queue.unshift(input)',
+        // An account's, not the session's
+        'await supabase.auth.admin.deleteUser(input)',
+        'await auth.deleteUser(input)',
+      ]) {
+        const setup = body.includes('queue') ? "import { queue } from './queue'\n" : ''
+        expect(check(`${setup}${action(`const seen = new Map()\n  seen.set(input, 1)\n  ${body}`)}`), body).toHaveLength(1)
+      }
+    })
+
+    it('reads a tag only when it has an SQL word', () => {
+      expect(check(action('const seen = new Map()\n  seen.set(input, 1)\n  return gql`query { a }`'))).toHaveLength(0)
+      expect(check(action('const seen = new Map()\n  seen.set(input, 1)\n  return css`color: red`'))).toHaveLength(0)
+    })
+
+    it('takes a value for a value', () => {
+      for (const body of ['return Item.find(input)', 'return items.filter(input)', 'const filter = { a: 1 }\n  return Item.find(filter)', 'return input.items.map(getName)', 'return input.items.map(String)', 'return input.items.filter(Boolean)']) {
+        expect(check(action(`const seen = new Map()\n  seen.set(input, 1)\n  ${body}`)), body).toHaveLength(0)
+      }
+    })
+
+    it('does not take a fetch or a parameter for the import of that name', () => {
+      expect(check(`import fetch from 'node-fetch'\n${action('const seen = new Map()\n  seen.set(input, 1)\n  return fetch(url, input)')}`)).toHaveLength(1)
+      expect(check(`import fetch from 'node-fetch'\n${action('const seen = new Map()\n  seen.set(input, 1)\n  return fetch(url)')}`)).toHaveLength(0)
+      expect(check(`import { fetch as send } from 'undici'\n${action('const seen = new Map()\n  seen.set(input, 1)\n  return send(url, input)')}`)).toHaveLength(1)
+      expect(check(`import { eq } from 'drizzle-orm'\nexport async function run(eq, input) {\n  const seen = new Map()\n  seen.set(input, 1)\n  return eq(input)\n}`)).toHaveLength(1)
+      expect(check(`function fetch(a, b) { return a }\n${action('const seen = new Map()\n  seen.set(input, 1)\n  return fetch(url, input)')}`)).toHaveLength(0)
+    })
+
+    it('leaves a public-named path out of it, as it does a write', () => {
+      const file = makeFile(`'use server'\n${action('const seen = new Map()\n  seen.set(input, 1)\n  await sendEmail(input)')}\n`, { relativePath: 'app/actions/contact.ts' })
+      expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+    })
+
+    it('reads a write method next to a call named like a read', () => {
+      for (const body of ["return fetchData(url, { method: 'POST' })", 'return fetchData(url, { method: `POST` })', "return fetchData(url, { method: 'post' })"]) {
+        expect(check(action(`const seen = new Map()\n  seen.set(input, 1)\n  ${body}`)), body).toHaveLength(1)
+      }
+    })
+
+    it('reads a value the file got from a call by that call', () => {
+      expect(check(action('const seen = new Map()\n  seen.set(input, 1)\n  const t = getTranslations()\n  return t(input)'))).toHaveLength(0)
+      expect(check(action('const seen = new Map()\n  seen.set(input, 1)\n  const send = makeSender()\n  return send(input)'))).toHaveLength(1)
+    })
+
+    it('does not take loading a module for a write', () => {
+      expect(check(action("const seen = new Map()\n  seen.set(input, 1)\n  const mod = await import('./helpers')\n  return mod"))).toHaveLength(0)
+    })
+
+    it('reads an unknown call only next to something the text check found', () => {
+      expect(check(action('await clearCart(input.id)'))).toHaveLength(0)
+      expect(check(action('await bank.transferFunds(input)'))).toHaveLength(0)
+    })
+
+    it('does not vouch for a function it was handed', () => {
+      expect(check('export async function run(fn, input) {\n  const rows = []\n  rows.push(input)\n  return fn(rows)\n}')).toHaveLength(1)
+    })
+
+    // A generic fetch helper, with the method up to its caller
+    it('reads a type that names a write method as one', () => {
+      expect(check(`type Method = 'GET' | 'POST'\nexport async function api(path, method: Method) {\n  const params = new URLSearchParams()\n  params.set('a', path)\n  return fetch(path, { method })\n}`)).toHaveLength(1)
+      expect(check(`export async function api(path, method?: 'GET' | 'DELETE') { return fetch(path, { method }) }`)).toHaveLength(1)
+      expect(check(`type Method = 'GET' | 'HEAD'\nexport async function api(path) {\n  const params = new URLSearchParams()\n  params.set('a', path)\n  return fetch(path)\n}`)).toHaveLength(0)
+    })
+
+    it('reads a renamed import by the name it was exported under', () => {
+      for (const setup of ["import { writeFile as save } from 'fs'", "import { sendMail as notify } from './mail'"]) {
+        const callee = setup.includes('save') ? 'save' : 'notify'
+        expect(check(`${setup}\n${action(`const rows = []\n  rows.push(input)\n  await ${callee}(input)`)}`), setup).toHaveLength(1)
+      }
+      expect(check(`import { getUser as updateUser } from './users'\n${action('const rows = []\n  rows.push(input)\n  await updateUser(input)')}`)).toHaveLength(0)
+    })
+
+    // The text check reads comments too. What it found there stays reported only next to one of these.
+    it('keeps the finding when the text check only found a comment', () => {
+      expect(check(action('// rows.push(input)\n  await axios.post(url, input)'))).toHaveLength(1)
+      expect(check(action('// ===== DELETE =====\n  await axios.post(url, input)'))).toHaveLength(1)
+      expect(check(action('// rows.push(input)\n  return axios.get(url)'))).toHaveLength(0)
+    })
+
+    it('leaves a checked action out of it', () => {
+      expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await axios.post(url, parsedInput) })
+export async function b(input) {
+  const rows = []
+  rows.push(input)
+  return rows
+}`)).toHaveLength(0)
+    })
+  })
+
+  // The text check this replaced couldn't see past the generic
+  it('reports a write with a generic', () => {
+    for (const body of ['await kv.set<number>(input.key, input.value)', 'await redis.set<string>(input.key, input.value)', 'await prisma.item.create<Args>({ data: input })']) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+  })
+
+  // ...or the method's name, which it wanted whole
+  it('reports the writes the text check never read', () => {
+    for (const body of [
+      // Prisma's bulk methods
+      'await prisma.item.createMany({ data: input })',
+      'await prisma.item.createManyAndReturn({ data: input })',
+      'await prisma.item.updateMany({ where: input, data: input })',
+      'await prisma.item.deleteMany({ where: { id: input.id } })',
+      'await prisma.$executeRawUnsafe(input)',
+      'await prisma.$executeRaw`${input}`',
+      // Mongo and Mongoose
+      'await db.collection(input).insertOne(input)',
+      'await Item.insertMany(input)',
+      'await db.collection(input).updateOne(input, input)',
+      'await db.collection(input).deleteOne(input)',
+      'await db.collection(input).replaceOne(input, input)',
+      'await db.collection(input).bulkWrite(input)',
+      'await Item.findOneAndUpdate(input, input)',
+      'await Item.findOneAndDelete(input)',
+      'await Item.findByIdAndUpdate(input.id, input)',
+      'await Item.findByIdAndDelete(input.id)',
+      // Firestore's functions
+      'await setDoc(doc(db, input.id), input)',
+      'await addDoc(collection(db, input.path), input)',
+      'await updateDoc(doc(db, input.id), input)',
+      'await deleteDoc(doc(db, input.id))',
+      // Redis
+      'await redis.hset(input.key, input)',
+      'await redis.hdel(input.key, input.field)',
+      'await redis.sadd(input.key, input.value)',
+      'await redis.srem(input.key, input.value)',
+      'await redis.lpush(input.key, input.value)',
+      'await redis.rpush(input.key, input.value)',
+      'await redis.zadd(input.key, input.value)',
+      'await redis.incr(input.key)',
+      'await kv.incrby(input.key, 1)',
+      'await redis.decr(input.key)',
+      'await redis.del(input.key)',
+      'await redis.setex(input.key, 60, input.value)',
+    ]) {
+      const findings = check(action(body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].message, body).toContain('performs mutations')
+    }
+    // A name that only looks like one
+    expect(check(`export async function run(setDoc, input) { return setDoc(input) }`)).toHaveLength(0)
+    expect(check(action('return items.findOneAndUpdatedAt(input)'))).toHaveLength(0)
+  })
+
+  it('reads a Firestore function by what it was imported as', () => {
+    expect(check(`import { setDoc as write } from 'firebase/firestore'\n${action('await write(doc(db, input.id), input)')}`)).toHaveLength(1)
+    expect(check(`import { deleteDoc } from 'firebase/firestore'\n${action('await deleteDoc(doc(db, input.id))')}`)).toHaveLength(1)
+    expect(check(`import { setDoc } from './local'\n${action('return setDoc(input)')}`)).toHaveLength(0)
+  })
+
+  // The regression a local call could hide: the text check caught these through the cookie
+  it('keeps a real write next to a cookie', () => {
+    for (const body of [
+      "await prisma.cartItem.deleteMany({ where: { cartId: input } })\n  ;(await cookies()).delete('cart')",
+      "await deleteDoc(doc(db, input))\n  cookies().set('a', input)",
+      "await db.collection('rows').insertOne(input)\n  const rows = []\n  rows.push(input)",
+      "await redis.hset(input.key, input)\n  cookies().delete('a')",
+      "await supabase.rpc('bump', input)\n  cookies().delete('a')",
+      "await queue.add('job', input)\n  const seen = new Map()\n  seen.set(input, 1)",
+    ]) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+  })
+
+  // Every request sees it, and any caller can change what the next one gets. A cache's just
+  // as shared, but what's in it can be fetched again.
+  describe('with a collection at module level', () => {
+    it('counts one that holds the app\'s data', () => {
+      for (const code of [
+        'const roles = new Map()\nexport async function grantRole(u, r) { roles.set(u, r) }',
+        'const roles = new Map()\nexport async function revokeRole(u) { roles.delete(u) }',
+        'const todos = []\nexport async function addTodo(t) { todos.push(t) }',
+        'let todos = []\nexport async function addTodo(t) { todos.push(t) }',
+        'const names = new Set()\nexport async function removeName(n) { names.delete(n) }',
+        'export const users = new Map()\nexport async function addUser(u) { users.set(u.id, u) }',
+      ]) {
+        const findings = check(code)
+        expect(findings, code).toHaveLength(1)
+        expect(findings[0].message, code).toContain('performs mutations')
+      }
+    })
+
+    it('does not count a cache or a limit map', () => {
+      for (const name of ['cache', 'memCache', 'queryCache', 'memo', 'memoized', 'lruCache', 'rateLimitMap', 'rateLimitStore', 'rate_limits', 'limiter']) {
+        expect(check(`const ${name} = new Map()\nexport async function run(k) { ${name}.set(k, 1) }`), name).toHaveLength(0)
+      }
+      expect(check('const recentCache = []\nexport async function run(k) { recentCache.push(k) }')).toHaveLength(0)
+    })
+
+    // Inside another word, or what anyone could use to get around a check
+    it('counts one that only sounds like a cache', () => {
+      for (const [name, write] of [
+        ['memories', 'memories.set(k, 1)'],
+        ['memorial', 'memorial.set(k, 1)'],
+        ['attempts', 'attempts.delete(k)'],
+        ['banned', 'banned.delete(k)'],
+        ['bannedIPs', 'bannedIPs.delete(k)'],
+        ['hits', 'hits.set(k, 1)'],
+        ['creditLimits', 'creditLimits.set(k, 1)'],
+        ['delimiters', 'delimiters.set(k, 1)'],
+      ]) {
+        expect(check(`const ${name} = new Map()\nexport async function run(k) { ${write} }`), name).toHaveLength(1)
+      }
+    })
+
+    it('does not count one made in the action', () => {
+      expect(check('export async function run(k) {\n  const roles = new Map()\n  roles.set(k, 1)\n  const todos = []\n  todos.push(k)\n  return [roles, todos]\n}')).toHaveLength(0)
+    })
+  })
+
+  describe('with a push()', () => {
+    it('reads a reference from what the file defines it as', () => {
+      for (const body of [
+        "const messages = db.ref('messages')\n  await messages.push(input)",
+        "const todos = firebase.database().ref('todos')\n  await todos.push(input)",
+        "const items = db.ref('a').child(input.id)\n  await items.push(input)",
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('reads a named event from its arguments', () => {
+      for (const body of ["await hatchet.events.push('order:created', input)", "await hatchet.event.push('order:created', input)", 'await bus.push(`order:${input.id}`, input)']) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('does not go by the name alone', () => {
+      for (const body of [
+        'const event = []\n  event.push(input)\n  return event',
+        'const ref = []\n  ref.push(input)\n  return ref',
+        "const rows = []\n  rows.push('a', 'b')\n  return rows",
+        'state.events.push(input)',
+        'return ref.current.push(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(0)
+      }
+    })
+  })
+
+  describe('with a name that also stands for something else', () => {
+    it('still reports an import, a loop variable or a catch parameter of that name', () => {
+      for (const code of [
+        "import { store } from './store'\nexport async function a() { const store = await cookies(); store.set('a', 1) }\nexport async function b(input) { await store.set('b', input) }",
+        'export async function a(items) {\n  const item = new Map()\n  item.set(1, 2)\n  for (const item of items) await item.set(1, 2)\n}',
+        'export async function a(items) {\n  const item = new Map()\n  item.set(1, 2)\n  for (const item in items) await item.set(1, 2)\n}',
+        'export async function a(input) {\n  const e = new Map()\n  e.set(1, 2)\n  try { await getRun(input) } catch (e) { await e.set(1, 2) }\n}',
+        'export async function a(input) {\n  const store = new Map()\n  store.set(1, 2)\n}\nexport async function b(input) {\n  let store\n  ;({ store } = await getStore(input))\n  await store.set(1, 2)\n}',
+        'function store() {}\nexport async function a(input) {\n  const store = new Map()\n  store.set(1, 2)\n}\nexport async function b(input) { await store.set(1, 2) }',
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+    })
+
+    it('does not take a parameter\'s type for a name', () => {
+      expect(check('export async function a(m: Map<string, Item>) { return m }\nexport async function b(k) { const seen = new Map(); seen.set(k, 1) }')).toHaveLength(0)
+      expect(check('export async function a(x: Set<Item>) { return x }\nconst Item = 1\nexport async function b(k) { const seen = new Set<string>(); seen.delete(k) }')).toHaveLength(0)
+    })
+
+    it('does not take a class of that name for the built-in', () => {
+      for (const code of [
+        "import Map from '@/models/Map'\nexport async function a(input) {\n  const map = new Map(input)\n  await map.save()\n}",
+        "import { KV as Map } from './kv'\nexport async function a(input) {\n  const m = new Map()\n  await m.set('a', input)\n}",
+        "class Map { set() {} }\nexport async function a(input) {\n  const m = new Map()\n  await m.set('a', input)\n}",
+        "export async function a(input) {\n  const m = new SuperMap()\n  await m.set('a', input)\n}",
+        "export async function a(input) {\n  const m = new MapStore()\n  await m.set('a', input)\n}",
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+    })
+
+    it('does not take an annotation of that name for the built-in', () => {
+      for (const code of [
+        "import type { Response } from '@/models/response'\nexport async function run(r: Response) { await r.save() }",
+        "import { Map } from '@/models/map'\nexport async function run(m: Map, input) { await m.update(input) }",
+        "import type { Headers } from './db'\nexport async function run(h: Headers) { await h.set('a', 'b') }",
+        "type Headers = { set(a: string): void }\nexport async function run(h: Headers) { await h.set('a') }",
+        "interface Headers { set(a: string): void }\nexport async function run(h: Headers) { await h.set('a') }",
+        "class Headers { set(a) {} }\nexport async function run(h: Headers) { await h.set('a') }",
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+    })
+
+    // A built-in has only these two of the methods that read as writes
+    it('reads only set() and delete() on a built-in', () => {
+      for (const code of [
+        'export async function run(r: Response) { await r.save() }',
+        'export async function run(input) {\n  const m = new Map()\n  await m.update(input)\n}',
+        'export async function run(input) {\n  const r = new Request(input)\n  await r.create(input)\n}',
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+    })
+
+    it('does not take a function of that name for the real one', () => {
+      for (const code of [
+        "const cookies = () => db.collection('prefs')\nexport async function a(input) { await cookies().delete(input.id) }",
+        "function cookies() { return db }\nexport async function a(input) { await cookies().set(input) }",
+        "export async function a(input) { await db.cookies().set(input) }",
+        "import { db as cookies } from './db'\nexport async function a(input) { await cookies().set('theme', input) }",
+        "import { cookies } from './db'\nexport async function a(input) { await cookies().set('theme', input) }",
+        "import { createHash } from './db'\nexport async function a(input) { await createHash(input).update(input) }",
+        "export async function a(input) { await db.createHash(input).update(input) }",
+        "export async function a(input) { await createHashTable(input).update(input) }",
+        "export async function a(input) { await myCookies().set(input) }",
+        "export async function a(input) { await cookiesStore().set(input) }",
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+      // The real ones, however they're imported or renamed
+      for (const code of [
+        "import { createHash } from 'crypto'\nconst make = createHash\nexport async function a(input) { return make('md5').update(input).digest('hex') }",
+        "import { getMutableAIState as $get } from '@ai-sdk/rsc'\nconst getState = $get<AI>\nexport async function a(input) { const s = getState(); s.update(input) }",
+        "import { cookies } from 'next/headers'\nexport async function a(input) { (await cookies()).set('theme', input) }",
+        "import { createHash } from 'crypto'\nexport async function a(input) { return createHash('md5').update(input).digest('hex') }",
+        "import { createHash } from 'node:crypto'\nexport async function a(input) { return createHash('md5').update(input).digest('hex') }",
+        "import crypto from 'crypto'\nexport async function a(input) { return crypto.createHash('md5').update(input).digest('hex') }",
+        "import * as nodeCrypto from 'node:crypto'\nexport async function a(input) { return nodeCrypto.createHmac('md5', input).update(input).digest('hex') }",
+      ]) {
+        expect(check(code), code).toHaveLength(0)
+      }
+    })
+
+    it('does not take a record for a client factory', () => {
+      expect(check("import { Asset as axios } from '@/models'\nexport async function a(input) { await axios.create({ data: input }) }")).toHaveLength(1)
+      expect(check("const axios = db.assets\nexport async function a(input) { await axios.create({ data: input }) }")).toHaveLength(1)
+      expect(check("import http from 'axios'\nexport async function a(input) { return http.create({ baseURL: input }) }")).toHaveLength(0)
+      expect(check("import axios from 'axios'\nexport async function a(input) { return axios.create({ baseURL: input }) }")).toHaveLength(0)
+      expect(check("export async function a(Object, input) { await Object.create(input) }")).toHaveLength(1)
+    })
+
+    it('does not take any .headers for a response\'s', () => {
+      for (const body of [
+        'const args = { where: { id: input.id } }\n  await prisma.headers.delete(args)',
+        'await prisma.headers.delete({ where: { id: input.id } } as any)',
+        'await kv.headers.set(input.key, input.value)',
+        'await db.searchParams.delete(input)',
+        'await prisma.cookies.delete(input)',
+        'await db.cookies.set(input)',
+        'await res.headers.update(input)',
+        'await response.cookies.save(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+      for (const body of [
+        "const res = NextResponse.next()\n  res.headers.set('a', input)",
+        "response.headers.delete('a')",
+        "requestInfo.response.headers.set('a', input)",
+        "res.cookies.set('a', input)",
+        "res.cookies.set({ name: 'a', value: input })",
+        "response.cookies.delete('a')",
+        "const target = new URL(input)\n  target.searchParams.delete('a')",
+        "redirectUrl.searchParams.set('a', input)",
+        "request.nextUrl.searchParams.delete('a')",
+      ]) {
+        expect(check(action(body)), body).toHaveLength(0)
+      }
+    })
+  })
+
+  it('reads a parameter by its type', () => {
+    for (const body of ["formData.delete('$ACTION_ID')\n  formData.set('a', 'b')"]) {
+      expect(check(`export async function run(formData: FormData) {\n  ${body}\n}`), body).toHaveLength(0)
+    }
+    expect(check("export async function run(seen: Map<string, number>) { seen.set('a', 1) }")).toHaveLength(0)
+    expect(check("export async function run(params: URLSearchParams) { params.delete('a') }")).toHaveLength(0)
+    expect(check("export async function run(headers: Headers) { headers.set('a', 'b') }")).toHaveLength(0)
+    expect(check("export async function run(store: Store) { await store.set('a', 'b') }")).toHaveLength(1)
+    expect(check("export async function run(store) { await store.set('a', 'b') }")).toHaveLength(1)
+  })
+
+  it('reads any typed array', () => {
+    for (const name of ['Uint8Array', 'Int16Array', 'Float32Array', 'BigInt64Array', 'Uint8ClampedArray']) {
+      expect(check(action(`const bytes = new ${name}(8)\n  bytes.set(input)`)), name).toHaveLength(0)
+    }
+  })
+
+  it('reads optional chaining like the plain call', () => {
+    for (const body of ['await db?.update(items).set(input)', 'await kv?.set(input.key, input.value)', 'await kv?.cache?.set?.(input.key, input.value)', 'await prisma.item?.create({ data: input })']) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+    for (const body of ["const store = await cookies()\n  store?.set('a', input)", 'const seen = new Map()\n  seen?.set(input, 1)', "res.headers?.set('a', input)", 'const stream = createStreamableValue()\n  stream?.update(input)']) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  describe('with SQL words', () => {
+    it('reads a statement in a string as a write', () => {
+      for (const body of [
+        "await db.query('INSERT INTO items VALUES (1)')",
+        "await db.query('INSERT OR REPLACE INTO items VALUES (1)')",
+        "await db.query('DELETE FROM items')",
+        "await db.query('UPDATE items SET a = 1')",
+        'await sql`UPDATE ${table} SET a = 1`',
+        "await db.query('UPDATE ' + table + ' SET a = 1')",
+        'await db.query(`\n    UPDATE items\n    SET a = 1\n  `)',
+      ]) {
+        const findings = check(action(body))
+        expect(findings, body).toHaveLength(1)
+        expect(findings[0].message, body).toContain('performs mutations')
+      }
+    })
+
+    it('reads a statement put together with +', () => {
+      expect(check(action("const q = 'UPDATE ' + input.table + ' SET a = 1'\n  return q"))).toHaveLength(1)
+      expect(check(action("const q = 'DELETE ' + 'FROM ' + input.table\n  return q"))).toHaveLength(1)
+      expect(check(action("const q = `UPDATE ${input.table} SET a = 1`\n  return q"))).toHaveLength(1)
+      expect(check(action("const q = input.a + input.b\n  return q"))).toHaveLength(0)
+    })
+
+    it('does not take a word for a statement', () => {
+      for (const code of [
+        "type Op = 'READ' | 'UPDATE'\nexport async function run(op: Op) { return op }",
+        "type Op = 'INSERT' | 'UPDATE' | 'SET'\nexport async function run(op: Op) { return op }",
+        "const OPS = { UPDATE: 1, SET: 2 }\nexport async function run(op) { return OPS[op] }",
+        "const OPS = { DELETE: 1, FROM: 2 }\nexport async function run(op) { return OPS[op] }",
+        "export async function run(op) { return op === 'UPDATE' ? 'SET' : 'GET' }",
+        "const a = 'UPDATE'\nconst b = 'SET'\nexport async function run() { return a + b }",
+        "export async function run() { return 'UPDATE: the new plans are live' }",
+        "export async function run(input) { return input.kind === 'DELETE' ? 1 : 2 }",
+        "export const DELETE = 'delete'\nexport async function run() { return DELETE }",
+      ]) {
+        expect(check(code), code).toHaveLength(0)
+      }
+    })
+
+    it('keeps the finding of a file that shows a write next to the word', () => {
+      for (const body of ["await fetch(url, { method: 'DELETE' })", "await request('DELETE', url)", "await run('UPDATE')\n  await updateRow(input)"]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+  })
+
+  // A comment is no check, and "author" isn't auth
+  describe('with what looks like an auth check', () => {
+    it('does not read a comment as one', () => {
+      for (const comment of ['// const session = await auth()', '// TODO: put getServerSession() back', '/* await requireAuth() */']) {
+        expect(check(action(`${comment}\n  await db.delete(items)`)), comment).toHaveLength(1)
+      }
+      const model = check(`import { generateText } from 'ai'\n${action('// TODO: put getServerSession() back\n  return generateText({ model, prompt: input })')}`)
+      expect(model).toHaveLength(1)
+      expect(model[0].message).toContain('calls an AI model')
+    })
+
+    it('does not read an author as one', () => {
+      expect(check(action("cookies().set('a', input)\n  await prisma.post.create({ data: { authorId: input.id } })"))).toHaveLength(1)
+      expect(check(action("cookies().set('a', input)\n  await prisma.post.create({ data: { author: input.id } })"))).toHaveLength(1)
+      for (const field of ['authorName', 'authorEmail', 'authorSlug', 'authorUrl', 'authority', 'authored']) {
+        expect(check(action(`cookies().set('a', input)\n  await prisma.post.create({ data: { ${field}: input.id } })`)), field).toHaveLength(1)
+      }
+    })
+
+    it('still reads what an author word is not', () => {
+      for (const word of ['authorization', 'authorize(input)', 'authorized', 'auth_token']) {
+        expect(check(action(`cookies().set('a', input)\n  const x = ${word}\n  await db.delete(items)`)), word).toHaveLength(0)
+      }
+    })
+
+    it('still reads the real ones', () => {
+      for (const check_ of ["const token = cookies().get('auth-token')", "const store = cookies()\n  const token = store.get('auth')", "const session = await auth()"]) {
+        expect(check(action(`${check_}\n  await db.delete(items)`)), check_).toHaveLength(0)
+      }
+    })
+
+    it('leaves a file Babel can\'t parse to the text', () => {
+      const file = makeFile(`'use server'\n${action('// const session = await auth()\n  await db.delete(items)')}\n`, { relativePath: 'app/actions/items.ts', withAst: false })
+      expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+    })
+  })
+
+  // A generated file mustn't end the scan, or stall it
+  describe('with a very long file', () => {
+    it('survives a long chain of aliases', () => {
+      const aliases = Array.from({ length: 3000 }, (_, i) => `const a${i} = a${i + 1}`).join('\n')
+      expect(() => check(`${aliases}\nconst a3000 = new Map()\nexport async function run(input) { await a0.set(input, 1) }`)).not.toThrow()
+      expect(check(`${aliases}\nconst a3000 = db.items\nexport async function run(input) { await a0.set(input, 1) }`)).toHaveLength(1)
+    })
+
+    it('does not stall on names that fan out', () => {
+      const lines = ['let v0 = new Map()']
+      for (let i = 1; i <= 40; i++) lines.push(`let v${i} = v${i - 1}`, `v${i} = v${i - 1}`)
+      expect(check(`export async function run(input) {\n${lines.join('\n')}\nv40.set(input, 1)\n}`)).toHaveLength(0)
+    })
+
+    it('survives a client defined through a long chain', () => {
+      const aliases = Array.from({ length: 20000 }, (_, i) => `const a${i} = a${i + 1}`).join('\n')
+      expect(() => check(`${aliases}\nconst a20000 = actionClient\nexport const run = a0.action(async () => { await db.delete(items) })`)).not.toThrow()
+    })
+
+    it('does not stall on many exports', () => {
+      const exports = Array.from({ length: 3000 }, (_, i) => `export const a${i} = authActionClient.action(async () => { await db.delete(items) })`).join('\n')
+      expect(check(`${exports}\nexport async function b(input) { return input }`)).toHaveLength(0)
+    })
+  })
+
+  it('does not count a hash or a stream, which have an update() of their own', () => {
+    for (const body of [
+      "return createHash('sha256').update(input).digest('hex')",
+      "return crypto.createHash('sha256').update(input).digest('hex')",
+      "return createHmac('sha256', secret).update(input).update(other).digest('hex')",
+      "const hash = createHash('md5')\n  hash.update(input)\n  return hash.digest('hex')",
+      "const hmac = crypto.createHmac('sha256', secret)\n  hmac.update(input)\n  hmac.update(other)\n  return hmac.digest('hex')",
+      "const cipher = createCipheriv('aes-256-gcm', key, iv)\n  return cipher.update(input, 'utf8', 'hex')",
+      'const stream = createStreamableValue()\n  stream.update(input)\n  stream.done()\n  return stream.value',
+      'const ui = createStreamableUI()\n  ui.update(input)\n  return ui.value',
+      'const aiState = getMutableAIState()\n  aiState.update({ ...aiState.get(), input })',
+      // Assigned, not initialized
+      'let stream\n  stream = createStreamableValue()\n  stream.update(input)',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('does not count a push onto an array, whatever it came from', () => {
+    for (const body of [
+      'const rows = []\n  rows.push(input)\n  return rows',
+      'input.items.push(1)\n  return input',
+      'const rows = await load()\n  rows.push(input)\n  return rows',
+      'const byWeek = {}\n  byWeek[input.week].push(input)\n  return byWeek',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('still counts a push onto a Firebase reference or an event client, which goes somewhere', () => {
+    for (const body of [
+      "await db.ref('items').push(input)",
+      "await db.ref('items').child(input.id).push(input)",
+      "const ref = db.ref('items')\n  await ref.push(input)",
+      "const itemsRef = db.ref('items')\n  await itemsRef.push(input)",
+      // Hatchet
+      "await hatchet.event.push('order:created', input)",
+    ]) {
+      expect(check(action(body)), body).toHaveLength(1)
+    }
+  })
+
+  it('does not count a collection or a request being built', () => {
+    for (const body of [
+      'const seen = new Map()\n  seen.set(input.id, input)\n  seen.delete(input.other)',
+      'const seen = new Map<string, Item>()\n  seen.set(input.id, input)',
+      'const seen = new Map().set(input.id, input).set(input.other, input)\n  return seen',
+      'const seen = new WeakMap()\n  seen.set(input, 1)',
+      'const seen = new Set()\n  seen.delete(input)',
+      "const params = new URLSearchParams()\n  params.set('a', input)\n  params.delete('b')",
+      "const url = new URL(input)\n  url.searchParams.set('a', input)\n  url.searchParams.delete('b')",
+      "new URL(input).searchParams.set('a', input)",
+      "const headers = new Headers()\n  headers.set('a', input)\n  headers.delete('b')",
+      "const res = await fetch(input)\n  res.headers.set('a', input)",
+      "const form = new FormData()\n  form.set('a', input)\n  form.delete('b')",
+      'const copy = Object.create(null)\n  return copy',
+      'const api = axios.create({ baseURL: input })\n  return api.get(input)',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  // A cookie changes only the caller's own browser, and they can send any cookie they like. It's
+  // often a login, a password gate or a locale switch, which an auth check would only break.
+  it("does not count a cookie, which only changes the caller's own browser", () => {
+    for (const body of [
+      "cookies().set('theme', input)",
+      "(await cookies()).set('locale', input, { path: '/' })",
+      "(await cookies()).set({ name: 'locale', value: input })",
+      "const cookieStore = await cookies()\n  cookieStore.set('theme', input)",
+      "const store = cookies()\n  store.set('theme', input)\n  store.delete('other')",
+      "cookies().delete('session')",
+      "const c = await cookies()\n  c.delete('session')\n  redirect('/login')",
+      // A password gate
+      "const link = await prisma.link.findUnique({ where: { id: input.id } })\n  if (link.password !== input.password) return { error: 'Invalid' }\n  ;(await cookies()).set(`password_${link.id}`, input.password, { httpOnly: true })",
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+    // ...but it doesn't hide a real write next to it
+    expect(check(action("cookies().set('theme', input)\n  await prisma.user.update({ where: { id: input.id }, data: input })"))).toHaveLength(1)
+  })
+
+  describe('reads a receiver by what the file defines it as, not by its name', () => {
+    it('still reports one whose definition is out of sight', () => {
+      for (const body of [
+        'await stream.update(input)',
+        'await hash.update(input)',
+        'await seen.set(input.id, input)',
+        'await seen.delete(input.id)',
+        'await params.set(input.id, input)',
+        'await store.set(input.id, input)',
+        'const { stream } = await open(input)\n  await stream.update(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports one defined as something else', () => {
+      for (const body of [
+        'const stream = db.stream(input)\n  await stream.update(input)',
+        'const hash = await db.hash(input)\n  await hash.update(input)',
+        'const headers = db.table(input)\n  await headers.delete(input)',
+        'const cookies = db.table(input)\n  await cookies.set(input)',
+        'const map = db.map\n  await map.set(input)',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports a table with the same name as one of these', () => {
+      for (const body of [
+        'await prisma.hash.update({ where: { id: input.id }, data: input })',
+        'await prisma.stream.update({ where: { id: input.id }, data: input })',
+        'await prisma.map.delete({ where: { id: input.id } })',
+        'await prisma.set.delete({ where: { id: input.id } })',
+        'await prisma.headers.update({ where: { id: input.id }, data: input })',
+        'await prisma.headers.delete({ where: { id: input.id } })',
+        'await prisma.cookies.delete({ where: { id: input.id } })',
+        'await prisma.searchParams.delete({ where: { id: input.id } })',
+        'await db.cookies.create({ data: input })',
+        'await prisma.object.create({ data: input })',
+        'await prisma.axios.create({ data: input })',
+        'await object.create({ data: input })',
+      ]) {
+        expect(check(action(body)), body).toHaveLength(1)
+      }
+    })
+
+    it('still reports a name that also stands for something else in the file', () => {
+      expect(check(`export async function a(input) {
+  const stream = createStreamableValue()
+  stream.update(input)
+}
+export async function b(input) {
+  const stream = db.stream(input)
+  await stream.update(input)
+}`)).toHaveLength(1)
+      // A parameter hides what the file defines, however it's written
+      const local = 'export async function a(input) {\n  const store = new Map()\n  store.set(input, 1)\n}'
+      for (const params of ['store, input', '{ store }, input', 'input, ...store', 'input, store = kv', '[store], input']) {
+        expect(check(`${local}
+export async function b(${params}) {
+  await store.set(input.id, input)
+}`), params).toHaveLength(1)
+      }
+      // So does a name it destructures
+      expect(check(`${local}
+export async function b(input) {
+  const { store } = await open(input)
+  await store.set(input.id, input)
+}`)).toHaveLength(1)
+      // A client in one function isn't a client in the next
+      const findings = check(`import OpenAI from 'openai'
+export async function a(input) {
+  const client = new OpenAI()
+  return client.models.list()
+}
+export async function b(input) {
+  const client = db.items
+  return client.create({ data: input })
+}`)
+      expect(findings).toHaveLength(1)
+      expect(findings[0].message).toContain('performs mutations')
+      // A type import is no value
+      expect(check(`import type { store } from './types'\n${local}`)).toHaveLength(0)
+    })
+
+    it('reads a name defined as another name', () => {
+      expect(check(action('const seen = new Map()\n  const copy = seen\n  copy.set(input.id, input)'))).toHaveLength(0)
+      expect(check(action('const seen = db.items\n  const copy = seen\n  await copy.set(input.id, input)'))).toHaveLength(1)
+      expect(check(action('const a = b\n  const b = a\n  await a.set(input.id, input)'))).toHaveLength(1)
+    })
+
+    it('reads a renamed import by the name it was exported under', () => {
+      expect(check(`import { cookies as nextCookies } from 'next/headers'\n${action("(await nextCookies()).set('theme', input)")}`)).toHaveLength(0)
+      expect(check(`import { createHash as hash } from 'node:crypto'\n${action("return hash('md5').update(input).digest('hex')")}`)).toHaveLength(0)
+      expect(check(`import { db as cookies } from './db'\n${action("await cookies().set('theme', input)")}`)).toHaveLength(1)
+    })
+
+    it('does not take what a Map holds for the Map', () => {
+      expect(check(action("const models = new Map()\n  await models.get('user').update(input)"))).toHaveLength(1)
+    })
+  })
+
+  it('does not read comments or strings as calls', () => {
+    for (const body of [
+      '// await prisma.item.delete({ where: { id: input.id } })',
+      '/* await db.update(items).set(input) */',
+      "// cookies().set('a', input)\n  return input",
+      "return 'run db.delete(items) first'",
+      'return `then db.update(items)`',
+    ]) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+  })
+
+  it('does not read a comment as SQL', () => {
+    for (const body of ['// UPDATE: this only reads now', '/* DELETE FROM items once it ships */', '// INSERT the row later']) {
+      expect(check(action(body)), body).toHaveLength(0)
+    }
+    expect(check(`// UPDATE: reads only\n${action('return input')}`)).toHaveLength(0)
+    // SQL in a string is still a write, and a comment next to it changes nothing
+    expect(check(action("// UPDATE: reads only\n  await db.query('DELETE FROM items')"))).toHaveLength(1)
+  })
+
+  it('does not count a checked action\'s writes, read this way, against its neighbors', () => {
+    expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await db.delete(items).where(parsedInput) })
+export async function b(input) {
+  const rows = []
+  rows.push(input)
+  return rows
+}`)).toHaveLength(0)
+    expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { await db.query('DELETE FROM items') })
+export async function b(input) { return input }`)).toHaveLength(0)
+  })
+
+  it('leaves a file Babel can\'t parse to the text check', () => {
+    for (const body of ['const rows = []\n  rows.push(input)', 'const stream = createStreamableValue()\n  stream.update(input)', "cookies().set('theme', input)", '// UPDATE: reads only']) {
+      const file = makeFile(`'use server'\n${action(body)}\n`, { relativePath: 'app/actions/items.ts', withAst: false })
+      expect(serverActionAuthRule.check(file, project), body).toHaveLength(1)
+    }
+  })
+
+  it('reports at the same severity with auth middleware', () => {
+    const middleware = makeProject({ hasAuthMiddleware: true })
+    expect(check(action('await db.delete(items)'), middleware).map(f => f.severity)).toEqual(['info'])
+    expect(check(action("cookies().set('theme', input)"), middleware)).toHaveLength(0)
+    const apiOnly = makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true })
+    expect(check(action('await db.delete(items)'), apiOnly).map(f => f.severity)).toEqual(['warning'])
+    expect(check(action('const rows = []\n  rows.push(input)'), apiOnly)).toHaveLength(0)
+  })
+
+  // Through the scanner, with the shapes the regex used to trip on
+  it('works through the scanner', async () => {
+    const result = await scanFiles({
+      'app/actions/locale.ts': `"use server";
+import { cookies } from "next/headers";
+
+export async function setLocale(locale: string) {
+  const cookieStore = await cookies();
+  cookieStore.set("NEXT_LOCALE", locale);
+}
+`,
+      'app/actions/hash.ts': `"use server";
+import { createHash } from "node:crypto";
+
+export async function hashEmail(email: string) {
+  return createHash("sha256").update(email).digest("hex");
+}
+`,
+      'app/actions/items.ts': `"use server";
+import { prisma } from "@/lib/prisma";
+
+export async function deleteItem(id: string) {
+  await prisma.item.delete({ where: { id } });
+}
+`,
+    })
+    expect(result.findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.file)).toEqual(['app/actions/items.ts'])
+  })
+})
+
+// A model call spends the app's credits on whatever the caller sends, so it's reported like a
+// write, for what it is. Such an action often streams through an update() that isn't a write.
+describe('server-action-auth on actions that call an AI model', () => {
+  const check = (code: string, proj = project, relativePath = 'app/actions/ai.ts') =>
+    serverActionAuthRule.check(makeFile(`'use server'\n${code}\n`, { relativePath }), proj)
+  const action = (setup: string, body: string) => `${setup}\nexport async function run(input) {\n  ${body}\n}`
+
+  const SDK = "import { generateText } from 'ai'"
+  const CALL = 'return generateText({ model, prompt: input })'
+
+  it('reports a model call with no auth check', () => {
+    const findings = check(action(SDK, CALL))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].severity).toBe('warning')
+    expect(findings[0].line).toBe(1)
+    expect(findings[0].message).toBe('Server action calls an AI model without any authentication check — anyone can call this action and spend your credits')
+    expect(findings[0].fix).toContain('Add auth check')
+    expect(findings[0].fix).toContain('rate-limit')
+  })
+
+  it('reports one that streams to the browser, whose update() is no write', () => {
+    for (const code of [
+      action("import { streamText } from 'ai'\nimport { createStreamableValue } from '@ai-sdk/rsc'", `const stream = createStreamableValue()
+  ;(async () => {
+    const { textStream } = streamText({ model, prompt: input })
+    for await (const delta of textStream) stream.update(delta)
+    stream.done()
+  })()
+  return { value: stream.value }`),
+      action("import { streamObject } from 'ai'\nimport { createStreamableValue } from 'ai/rsc'", `const stream = createStreamableValue()
+  const { partialObjectStream } = streamObject({ model, schema, prompt: input })
+  for await (const partial of partialObjectStream) stream.update(partial)
+  stream.done()
+  return stream.value`),
+      action("import { streamUI, getMutableAIState } from '@ai-sdk/rsc'", `const aiState = getMutableAIState()
+  aiState.update({ ...aiState.get(), input })
+  return streamUI({ model, prompt: input, text: ({ content }) => content })`),
+    ]) {
+      const findings = check(code)
+      expect(findings, code).toHaveLength(1)
+      expect(findings[0].message, code).toContain('calls an AI model')
+    }
+  })
+
+  it("reads each of the AI SDK's model calls", () => {
+    for (const name of ['generateText', 'streamText', 'generateObject', 'streamObject', 'embed', 'embedMany', 'generateImage', 'experimental_generateImage', 'experimental_generateSpeech', 'experimental_transcribe', 'rerank']) {
+      expect(check(action(`import { ${name} } from 'ai'`, `return ${name}({ model, prompt: input })`)), name).toHaveLength(1)
+    }
+    expect(check(action("import { streamUI } from 'ai/rsc'", 'return streamUI({ model, prompt: input })'))).toHaveLength(1)
+    expect(check(action("import { generateText as ask } from 'ai'", 'return ask({ model, prompt: input })'))).toHaveLength(1)
+  })
+
+  it('reads a model client the file makes', () => {
+    for (const [setup, body] of [
+      ["import { GoogleGenerativeAI } from '@google/generative-ai'", 'const genAI = new GoogleGenerativeAI(key)\n  return genAI.getGenerativeModel({ model: name }).generateContent(input)'],
+      ["import { GoogleGenAI } from '@google/genai'", 'const ai = new GoogleGenAI({ apiKey: key })\n  return ai.models.generateContent({ model: name, contents: input })'],
+      ["import { ChatOpenAI } from '@langchain/openai'", 'const llm = new ChatOpenAI({ model: name })\n  return llm.invoke(input)'],
+      ["import { ChatAnthropic as Chat } from '@langchain/anthropic'", 'return new Chat({ model: name }).invoke(input)'],
+      ["import Anthropic from '@anthropic-ai/sdk'", 'const client = new Anthropic()\n  return client.messages.stream({ model: name, messages: input })'],
+    ]) {
+      const findings = check(action(setup, body))
+      expect(findings, setup).toHaveLength(1)
+      expect(findings[0].message, setup).toContain('calls an AI model')
+    }
+  })
+
+  it('reads the common model APIs, wherever the client comes from', () => {
+    for (const call of [
+      'openai.chat.completions.create({ model: name, messages: input })',
+      'openai.chat.completions.stream({ model: name, messages: input })',
+      'openai.beta.chat.completions.parse({ model: name, messages: input })',
+      'groq.chat.completions.create({ model: name, messages: input })',
+      'getClient().chat.completions.create({ model: name, messages: input })',
+      'anthropic.messages.create({ model: name, messages: input })',
+      'anthropic.messages.stream({ model: name, messages: input })',
+      'anthropicClient.messages.create({ model: name, messages: input })',
+    ]) {
+      const findings = check(`import { openai, groq, anthropic, anthropicClient, getClient } from './ai'\n${action('', `return ${call}`)}`)
+      expect(findings, call).toHaveLength(1)
+      expect(findings[0].message, call).toContain('calls an AI model')
+    }
+    // ...and a rate limit clears them like any other
+    expect(check(action('', 'await ratelimit.limit(ip)\n  return openai.chat.completions.create({ model: name, messages: input })'))).toHaveLength(0)
+  })
+
+  it('still reads the same words elsewhere as a write', () => {
+    for (const call of [
+      'prisma.completions.create({ data: input })',
+      'prisma.chat.create({ data: input })',
+      'prisma.chat.completions.delete({ where: { id: input.id } })',
+      'prisma.message.create({ data: input })',
+      'db.messages.create({ data: input })',
+      'twilio.messages.create({ to: input.to, body: input.body })',
+      'mg.messages.create(domain, input)',
+      'anthropic.messages.delete(input.id)',
+    ]) {
+      const findings = check(action('', `return ${call}`))
+      expect(findings, call).toHaveLength(1)
+      expect(findings[0].message, call).toContain('performs mutations')
+    }
+  })
+
+  it('does not take other imports for a model call', () => {
+    for (const code of [
+      // Same names from elsewhere
+      action("import { generateText } from './lib/text'", 'return generateText(input)'),
+      action('function embed(input) { return input }', 'return embed(input)'),
+      // The AI SDK's other exports
+      action("import { generateId, convertToModelMessages } from 'ai'", 'return { id: generateId(), messages: convertToModelMessages(input) }'),
+      // A model provider's factory makes no call by itself, and a message class isn't a client
+      action("import { openai } from '@ai-sdk/openai'", "return openai('gpt-4').modelId"),
+      action("import { HumanMessage } from '@langchain/core/messages'", 'return new HumanMessage(input).content'),
+      // Imported, never made
+      action("import OpenAI from 'openai'", 'return input as OpenAI.Message'),
+      action("import type { GenerateTextResult } from 'ai'", 'return input as GenerateTextResult'),
+      // A name it's only mentioned by
+      action(SDK, '// return generateText({ model, prompt: input })\n  return input'),
+    ]) {
+      expect(check(code), code).toHaveLength(0)
+    }
+  })
+
+  it('reports a write first, with a model call next to it', () => {
+    const findings = check(action(SDK, 'const { text } = await generateText({ model, prompt: input })\n  await prisma.note.create({ data: { text } })'))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('performs mutations')
+    expect(findings[0].fix).not.toContain('rate-limit')
+  })
+
+  it('counts the checks a write counts', () => {
+    expect(check(action(SDK, `const session = await auth()\n  if (!session) throw new Error('Unauthorized')\n  ${CALL}`))).toHaveLength(0)
+    expect(check(`${SDK}\nexport const run = authActionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))`)).toHaveLength(0)
+    expect(check(action(SDK, CALL), project, 'tests/actions/ai.ts')).toHaveLength(0)
+    // ...and a checked action's model call doesn't count against a neighbor
+    expect(check(`${SDK}
+export const a = authActionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))
+export async function b(input) { return input }`)).toHaveLength(0)
+    expect(check(`${SDK}
+export const a = authActionClient.action(async () => 1)
+export async function b(input) { return generateText({ model, prompt: input }) }`)).toHaveLength(1)
+  })
+
+  // Anyone can still call it, but the bill has a limit: what a public action needs. So a limit
+  // is a call on the action's path, not a word in the file.
+  describe('with a rate limit', () => {
+    it('accepts one in place of an auth check', () => {
+      for (const limit of [
+        'const { success } = await ratelimit.limit(ip)\n  if (!success) throw new Error("Too many requests")',
+        'await checkRateLimit(ip)',
+        'await rateLimit(ip)',
+        'await enforceRateLimiter(ip)',
+        'await limiter.limit(ip)',
+        'await limiter.consume(ip)',
+        'await rateLimiter.removeTokens(1)',
+        "const { success } = await Upstash.slidingWindow(5, '1 m')",
+        'const rl = new Ratelimit({ redis })\n  await rl.limit(ip)',
+        // A check that decides, outside a catch
+        "if (await isRateLimited(ip)) throw new Error('slow down')",
+        'await limiter(ip)',
+        'await rateLimitByIp(ip)',
+        'await checkRateLimitByIp(ip)',
+        'await enforceRateLimitForUser(input)',
+        'const rl = getLimiter()\n  await rl.limit(ip)',
+      ]) {
+        expect(check(action(SDK, `${limit}\n  ${CALL}`)), limit).toHaveLength(0)
+      }
+    })
+
+    it('accepts one in the chain, or in a helper on the way', () => {
+      expect(check(`${SDK}\nexport const run = actionClient.use(rateLimitMiddleware).action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))`)).toHaveLength(0)
+      expect(check(`${SDK}\nexport const run = withRateLimit(async (input) => generateText({ model, prompt: input }))`)).toHaveLength(0)
+      expect(check(`${SDK}\nexport async function run(input) { return rateLimiter(async () => generateText({ model, prompt: input })) }`)).toHaveLength(0)
+      expect(check(`${SDK}\nasync function guard(ip) { await rateLimit(ip) }\nexport async function run(input, ip) {\n  await guard(ip)\n  return generateText({ model, prompt: input })\n}`)).toHaveLength(0)
+    })
+
+    it('does not take a word for one', () => {
+      for (const [setup, body] of [
+        // The provider's own limit
+        [`import OpenAI from 'openai'`, `try {\n    return await openai.chat.completions.create({ model: name, messages: input })\n  } catch (e) {\n    if (e instanceof OpenAI.RateLimitError) return null\n    throw e\n  }`],
+        [SDK, `try {\n    return await generateText({ model, prompt: input })\n  } catch (e) {\n    if (isRateLimitError(e)) return null\n    throw new RateLimitError('slow down')\n  }`],
+        [SDK, `if (e.code === 'rate_limit_exceeded') return null\n  ${CALL}`],
+        // The provider's limit again, read after the call
+        [SDK, `try {\n    return await generateText({ model, prompt: input })\n  } catch (e) {\n    if (isRateLimited(e)) return null\n    throw e\n  }`],
+        [SDK, 'return retryOnRateLimit(() => generateText({ model, prompt: input }))'],
+        [SDK, 'const r = await generateText({ model, prompt: input })\n  logRateLimit(r.response)\n  return r'],
+        [SDK, 'const r = await generateText({ model, prompt: input })\n  parseRateLimit(r.response)\n  return r'],
+        [SDK, 'const r = await generateText({ model, prompt: input })\n  handleRateLimit(r.response)\n  return r'],
+        // Reading one, or resetting it, limits nothing
+        [SDK, `const key = rateLimitKey(input)\n  ${CALL}`],
+        [SDK, `const current = getRateLimit(input)\n  ${CALL}`],
+        [SDK, `resetRateLimit(input)\n  ${CALL}`],
+        [SDK, `setRateLimit(input)\n  ${CALL}`],
+        [SDK, `const over = rateLimitExceeded(input)\n  ${CALL}`],
+        // A cap on concurrency: every caller still gets through
+        [`${SDK}\nimport pLimit from 'p-limit'`, 'const limiter = pLimit(2)\n  return limiter(() => generateText({ model, prompt: input }))'],
+        // lodash's, which paces a stream
+        [`import { streamText } from 'ai'\nimport { throttle } from 'lodash'`, `const stream = createStreamableValue()\n  const send = throttle((t) => stream.update(t), 100)\n  for await (const t of streamText({ model, prompt: input }).textStream) send(t)`],
+        // "generate" ends in "rate"
+        [SDK, `const generateLimit = 5\n  ${CALL}`],
+        // A query's limit
+        [SDK, `const rows = await db.select().from(items).limit(5)\n  return generateText({ model, prompt: rows })`],
+        // A comment or a string limits nothing
+        [SDK, `// await rateLimit(ip)\n  ${CALL}`],
+        [SDK, `// TODO: rateLimit this\n  ${CALL}`],
+        [SDK, `const note = 'rateLimit(ip) goes here'\n  ${CALL}`],
+        // Set up, never called
+        [`${SDK}\nimport { Ratelimit } from '@upstash/ratelimit'`, CALL],
+      ]) {
+        const findings = check(action(setup, body))
+        expect(findings, body).toHaveLength(1)
+        expect(findings[0].message, body).toContain('calls an AI model')
+      }
+    })
+
+    it("does not take a neighbor's for its own", () => {
+      expect(check(`${SDK}
+export async function a(ip) { await rateLimit(ip) }
+export async function b(input) { return generateText({ model, prompt: input }) }`)).toHaveLength(1)
+      expect(check(`${SDK}
+export const a = authActionClient.action(async () => { await rateLimit(ip) })
+export async function b(input) { return generateText({ model, prompt: input }) }`)).toHaveLength(1)
+      // Every action that calls the model needs one
+      expect(check(`${SDK}
+export async function a(input, ip) { await rateLimit(ip); return generateText({ model, prompt: input }) }
+export async function b(input) { return generateText({ model, prompt: input }) }`)).toHaveLength(1)
+      expect(check(`${SDK}
+export async function a(input, ip) { await rateLimit(ip); return generateText({ model, prompt: input }) }
+export async function b(input, ip) { await limiter.limit(ip); return generateText({ model, prompt: input }) }`)).toHaveLength(0)
+    })
+
+    it('is no check on a write', () => {
+      const findings = check(action(SDK, 'await ratelimit.limit(ip)\n  await prisma.note.create({ data: input })'))
+      expect(findings).toHaveLength(1)
+      expect(findings[0].message).toContain('performs mutations')
+    })
+
+    // It may not cover this action, so it lowers the severity, the way auth middleware does
+    it('rates it info when the middleware rate-limits', () => {
+      const proj = makeProject({ hasRateLimiting: true, rateLimitsInMiddleware: true })
+      const findings = check(action(SDK, CALL), proj)
+      expect(findings).toHaveLength(1)
+      expect(findings[0].severity).toBe('info')
+      expect(findings[0].message).toContain('rate limiting detected')
+      // ...and leaves a write alone
+      expect(check(action(SDK, 'await prisma.note.create({ data: input })'), proj).map(f => f.severity)).toEqual(['warning'])
+    })
+
+    it('rates a public action info when the middleware rate-limits', () => {
+      const proj = makeProject({ hasRateLimiting: true, rateLimitsInMiddleware: true })
+      const findings = check(action(SDK, CALL), proj, 'app/actions/feedback.ts')
+      expect(findings.map(f => f.severity)).toEqual(['info'])
+      expect(findings[0].message).toContain('rate limiting detected')
+    })
+
+    // Having the package says nothing about this action
+    it('does not rate it lower for a rate-limiting dependency', () => {
+      const findings = check(action(SDK, CALL), makeProject({ hasRateLimiting: true }))
+      expect(findings.map(f => f.severity)).toEqual(['warning'])
+      expect(findings[0].message).toContain('anyone can call this action')
+    })
+
+    it('reads the middleware through the scanner', async () => {
+      const severities = async (files: Record<string, string>) =>
+        (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth').map(f => f.severity)
+      const ask = { 'app/actions/ask.ts': `'use server'\n${action(SDK, CALL)}\n` }
+      expect(await severities(ask)).toEqual(['warning'])
+      expect(await severities({ ...ask, 'middleware.ts': "import { rateLimit } from './limit'\nexport default async function middleware(req) { return rateLimit(req) }\n" })).toEqual(['info'])
+      expect(await severities({ ...ask, 'package.json': JSON.stringify({ name: 'app', dependencies: { '@upstash/ratelimit': '1.0.0', next: '16.0.0' } }) })).toEqual(['warning'])
+      expect(await severities({ ...ask, 'proxy.ts': 'export async function proxy(req) { const { success } = await limiter.limit(req.ip); return success }\n' })).toEqual(['info'])
+      expect(await severities({ ...ask, 'src/middleware.ts': 'export async function middleware(req) { return checkRateLimit(req) }\n' })).toEqual(['info'])
+    })
+
+    // A comment, lodash's throttle() or a matcher that never runs on an action: none covers it
+    it('does not read the middleware as covering what it can\'t', async () => {
+      const findings = async (files: Record<string, string>) =>
+        (await scanFiles(files)).findings.filter(f => f.ruleId === 'server-action-auth')
+      const ask = { 'app/actions/ask.ts': `'use server'\n${action(SDK, CALL)}\n` }
+      for (const middleware of [
+        '// TODO: rateLimit here\nexport function middleware() {}\n',
+        "const note = 'rateLimit(req)'\nexport function middleware() { return note }\n",
+        'export function middleware(req) { return throttle(req) }\n',
+        "export default async function middleware(req) { return rateLimit(req) }\nexport const config = { matcher: ['/api/:path*'] }\n",
+      ]) {
+        const [finding] = await findings({ ...ask, 'middleware.ts': middleware })
+        expect(finding?.severity, middleware).toBe('warning')
+        expect(finding?.message, middleware).not.toContain('rate limiting detected')
+      }
+      // With auth in the same middleware, the message says why it doesn't cover the action
+      const [auth] = await findings({ ...ask, 'middleware.ts': "import { clerkMiddleware } from '@clerk/nextjs/server'\nexport default clerkMiddleware(async (a, r) => { await rateLimit(r) })\nexport const config = { matcher: ['/api/:path*'] }\n" })
+      expect(auth.severity).toBe('warning')
+      expect(auth.message).toContain("matcher doesn't cover pages")
+    })
+  })
+
+  it('says so in the fix for each kind of finding', () => {
+    expect(check(action(SDK, CALL))[0].fix).toContain('rate-limit')
+    expect(check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true }))[0].fix).toContain('rate-limit')
+    expect(check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true }))[0].fix).toContain('rate-limit')
+    expect(check(action(SDK, 'await prisma.note.create({ data: input })'), makeProject({ hasAuthMiddleware: true }))[0].fix).not.toContain('rate-limit')
+  })
+
+  it('reads a call however the SDK got here', () => {
+    for (const [setup, body] of [
+      ["import * as ai from 'ai'", 'return ai.streamText({ model, prompt: input })'],
+      ["import * as rsc from '@ai-sdk/rsc'", 'return rsc.streamUI({ model, prompt: input })'],
+      ['', "const { streamText } = await import('ai')\n  return streamText({ model, prompt: input })"],
+      ["import { streamText } from 'ai'", 'return (streamText as any)({ model, prompt: input })'],
+      ["import { streamText } from 'ai'", 'return streamText!({ model, prompt: input })'],
+    ]) {
+      const findings = check(action(setup, body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].message, body).toContain('calls an AI model')
+    }
+  })
+
+  it('reads the clients of other providers', () => {
+    for (const [setup, make] of [
+      ["import OpenAI from 'openai'", 'new OpenAI()'],
+      ["import { AzureOpenAI } from 'openai'", 'new AzureOpenAI()'],
+      ["import { Mistral } from '@mistralai/mistralai'", 'new Mistral()'],
+      ["import { CohereClient } from 'cohere-ai'", 'new CohereClient()'],
+      ["import Groq from 'groq-sdk'", 'new Groq()'],
+      ["import Replicate from 'replicate'", 'new Replicate()'],
+      ["import { HfInference } from '@huggingface/inference'", 'new HfInference()'],
+      ["import { Ollama } from 'ollama'", 'new Ollama()'],
+      ["import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime'", 'new BedrockRuntimeClient({})'],
+      ["import { ChatGroq } from '@langchain/groq'", 'new ChatGroq({})'],
+      ["import * as sdk from 'openai'", 'new sdk.OpenAI()'],
+    ]) {
+      const findings = check(action(setup, `const client = ${make}\n  return client.ask(input)`))
+      expect(findings, setup).toHaveLength(1)
+      expect(findings[0].message, setup).toContain('calls an AI model')
+    }
+  })
+
+  // createStreamableValue() and getMutableAIState() are the AI SDK's, but neither calls a model
+  it('does not take a stream or AI state for a model call', () => {
+    for (const [setup, body] of [
+      ["import { getMutableAIState } from 'ai/rsc'", 'const aiState = getMutableAIState()\n  aiState.done({ ...aiState.get(), input })'],
+      ["import { createStreamableValue } from 'ai/rsc'", 'const progress = createStreamableValue(0)\n  progress.done(100)\n  return progress.value'],
+      ["import { createStreamableUI } from '@ai-sdk/rsc'", 'const ui = createStreamableUI()\n  ui.update(input)\n  return ui.value'],
+      ["import { getMutableAIState } from 'ai/rsc'", 'const state = getMutableAIState()\n  state.update(input)'],
+    ]) {
+      expect(check(action(setup, body)), body).toHaveLength(0)
+    }
+  })
+
+  // A model behind a helper is out of sight, but the helper isn't shown harmless, so the file
+  // stays as reported as it was
+  it('keeps the finding of a stream fed by a helper it can\'t read', () => {
+    const findings = check(action("import { createStreamableValue } from 'ai/rsc'\nimport { ask } from './model'", 'const stream = createStreamableValue()\n  for await (const t of ask(input)) stream.update(t)\n  stream.done()\n  return stream.value'))
+    expect(findings).toHaveLength(1)
+    expect(findings[0].message).toContain('performs mutations')
+  })
+
+  // What's kept is a guess, and the model call is a fact, so that's the message. A limit clears
+  // the model call, not the guess, and middleware that limits doesn't lower it.
+  it('says model call over a kept finding', () => {
+    const body = 'const stream = createStreamableValue()\n  for await (const t of ask(input)) stream.update(t)\n  return generateText({ model, prompt: input })'
+    const setup = `${SDK}\nimport { createStreamableValue } from 'ai/rsc'\nimport { ask } from './model'`
+    expect(check(action(setup, body))[0].message).toContain('calls an AI model')
+    expect(check(action(setup, `await rateLimit(ip)\n  ${body}`))[0].message).toContain('performs mutations')
+    const limited = check(action(setup, body), { ...project, rateLimitsInMiddleware: true })
+    expect(limited[0].severity).toBe('warning')
+    expect(limited[0].message).toContain('calls an AI model')
+    const plain = check(action(SDK, CALL), { ...project, rateLimitsInMiddleware: true })
+    expect(plain[0].severity).toBe('info')
+  })
+
+  // A limit clears the model call, and what's left of it isn't a guess at a write
+  it('leaves a model call out of what keeps a finding', () => {
+    const keep = 'await rateLimit(ip)\n  const seen = new Map()\n  seen.set(input, 1)\n  '
+    for (const [setup, body] of [
+      ['', 'return openai.chat.completions.stream({ model, messages: input })'],
+      ["import ollama from 'ollama'", 'return ollama.chat(input)'],
+      ["import OpenAI from 'openai'", 'const client = new OpenAI()\n  return client.images.generate(input)'],
+    ]) {
+      expect(check(action(setup, `${keep}${body}`)), body).toHaveLength(0)
+    }
+  })
+
+  // A definite write says so whatever else is there
+  it('says mutation over a model call', () => {
+    expect(check(action(SDK, `await db.item.create({ data: input })\n  ${CALL}`))[0].message).toContain('performs mutations')
+    expect(check(action(SDK, `await db.query('DELETE FROM items')\n  ${CALL}`))[0].message).toContain('performs mutations')
+  })
+
+  describe('reads where the call is', () => {
+    it('follows an action into helpers and clients in the file', () => {
+      for (const code of [
+        `${SDK}\nconst summarize = (p) => generateText({ model, prompt: p })\nexport async function run(input) { return summarize(input) }`,
+        `${SDK}\nfunction summarize(p) { return generateText({ model, prompt: p }) }\nfunction outer(p) { return summarize(p) }\nexport async function run(input) { return outer(input) }`,
+        `import OpenAI from 'openai'\nconst client = new OpenAI()\nexport async function run(input) { return client.models.list() }`,
+        `${SDK}\nconst run = async (input) => generateText({ model, prompt: input })\nexport { run }`,
+        `${SDK}\nexport default async function run(input) { return generateText({ model, prompt: input }) }`,
+        `${SDK}\nexport const run = actionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))`,
+      ]) {
+        expect(check(code), code).toHaveLength(1)
+      }
+    })
+
+    it('leaves out what only a checked action reaches', () => {
+      for (const code of [
+        `import OpenAI from 'openai'\nconst openai = new OpenAI()\nexport const ask = authActionClient.action(async ({ parsedInput }) => openai.models.list(parsedInput))\nexport async function ping() { return 1 }`,
+        `${SDK}\nconst summarize = (p) => generateText({ model, prompt: p })\nexport const ask = authActionClient.action(async ({ parsedInput }) => summarize(parsedInput))\nexport async function ping() { return 1 }`,
+      ]) {
+        expect(check(code), code).toHaveLength(0)
+      }
+    })
+
+    it('leaves out what no action reaches', () => {
+      expect(check(`${SDK}\nasync function unused(p) { return generateText({ model, prompt: p }) }\nexport async function ping() { return 1 }`)).toHaveLength(0)
+    })
+
+    it('reads only the action when the directive is inside it', () => {
+      const file = (code: string) => makeFile(code, { relativePath: 'app/page.tsx' })
+      // The page calls the model while rendering, and its action does something else
+      expect(serverActionAuthRule.check(file(`import { generateText } from 'ai'
+import { revalidatePath } from 'next/cache'
+export default async function Page() {
+  const { text } = await generateText({ model, prompt: 'Tip of the day' })
+  async function refresh() {
+    'use server'
+    revalidatePath('/')
+  }
+  return <form action={refresh}><p>{text}</p></form>
+}`), project)).toHaveLength(0)
+      const inside = serverActionAuthRule.check(file(`import { generateText } from 'ai'
+export default async function Page() {
+  async function ask(formData) {
+    'use server'
+    return generateText({ model, prompt: formData.get('q') })
+  }
+  return <form action={ask} />
+}`), project)
+      expect(inside).toHaveLength(1)
+      expect(inside[0].message).toContain('calls an AI model')
+      expect(inside[0].line).toBe(4)
+    })
+
+    it('does not take a parameter for the import it hides', () => {
+      expect(check(`${SDK}\nexport async function run(generateText, input) { return generateText(input) }`)).toHaveLength(0)
+      expect(check(`import { embed } from 'ai'\nexport async function run(rows) { return rows.map(embed => embed.id) }`)).toHaveLength(0)
+      expect(check(`import { embed } from 'ai'\nexport async function run(rows) {\n  function local(embed) { return embed(rows) }\n  return local(x => x)\n}`)).toHaveLength(0)
+    })
+
+    it('does not take an error class for a client', () => {
+      expect(check(`import { OpenAIError } from 'openai'\nexport async function run(input) { if (!input) throw new OpenAIError('missing'); return input }`)).toHaveLength(0)
+      expect(check(`import { GoogleGenerativeAIError } from '@google/generative-ai'\nexport async function run(input) { if (!input) throw new GoogleGenerativeAIError('missing'); return input }`)).toHaveLength(0)
+    })
+  })
+
+  // No auth needed doesn't make the model free: there's nobody to check, so it needs a limit
+  describe('in an action that is public by design', () => {
+    const PUBLIC = 'Server action calls an AI model with no rate limit — anyone can call this public action and spend your credits'
+    const GUARDED = (body: string) => `${SDK}\nexport const run = actionClient.use(throwIfAuthenticated).action(async ({ parsedInput }) => ${body})`
+
+    it('reports a model call behind a guest guard', () => {
+      for (const code of [
+        GUARDED('generateText({ model, prompt: parsedInput })'),
+        GUARDED('openai.chat.completions.create({ model: name, messages: parsedInput })'),
+      ]) {
+        const findings = check(code)
+        expect(findings, code).toHaveLength(1)
+        expect(findings[0].message).toBe(PUBLIC)
+        expect(findings[0].severity).toBe('warning')
+        expect(findings[0].fix).toContain('Rate-limit')
+        expect(findings[0].fix).not.toContain('auth()')
+      }
+      expect(check(`${SDK}\nexport const run = actionClient.use(throwIfAuthenticated).use(rateLimit).action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))`)).toHaveLength(0)
+    })
+
+    it('reports a model call on a public-named path', () => {
+      for (const path of ['app/actions/feedback.ts', 'app/actions/contact.ts', 'app/signup/actions.ts']) {
+        const findings = check(action(SDK, CALL), project, path)
+        expect(findings, path).toHaveLength(1)
+        expect(findings[0].message).toBe(PUBLIC)
+      }
+      expect(check(action(SDK, `await rateLimit(ip)\n  ${CALL}`), project, 'app/actions/feedback.ts')).toHaveLength(0)
+      // A write there is still fine, as before
+      expect(check(action(SDK, 'await prisma.note.create({ data: input })'), project, 'app/actions/feedback.ts')).toHaveLength(0)
+    })
+
+    it('still asks for a check where one could go', () => {
+      const findings = check(`${SDK}
+export const a = actionClient.use(throwIfAuthenticated).action(async () => 1)
+export async function b(input) { return generateText({ model, prompt: input }) }`)
+      expect(findings).toHaveLength(1)
+      expect(findings[0].message).toContain('without any authentication check')
+    })
+  })
+
+  it('does not count a model call in a checked action next to a guest guard', () => {
+    expect(check(`${SDK}
+export const a = authActionClient.action(async ({ parsedInput }) => generateText({ model, prompt: parsedInput }))
+export const b = actionClient.use(throwIfAuthenticated).action(async () => 1)`)).toHaveLength(0)
+  })
+
+  it('reads any .create() on a client the file makes as a model call', () => {
+    for (const [setup, body] of [
+      ["import Anthropic from '@anthropic-ai/sdk'", 'const client = new Anthropic()\n  return client.messages.create({ model: name, messages: input })'],
+      ["import OpenAI from 'openai'", 'const client = new OpenAI()\n  return client.responses.create({ model: name, input })'],
+      ["import OpenAI from 'openai'", 'const client = new OpenAI()\n  return client.embeddings.create({ model: name, input })'],
+      ["import OpenAI from 'openai'", 'const client = new OpenAI()\n  return client.beta.threads.create()'],
+      // By the client's own name, from anywhere
+      ['', 'return openai.responses.create({ model: name, input })'],
+      ['', 'return openai.embeddings.create({ model: name, input })'],
+      ['', 'return openAI.audio.speech.create({ model: name, input })'],
+      ['', 'return anthropic.beta.messages.create({ model: name, messages: input })'],
+      ['', 'return groqClient.audio.transcriptions.create({ file: input })'],
+    ]) {
+      const findings = check(action(setup, body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].message, body).toContain('calls an AI model')
+      expect(check(action(setup, `await rateLimit(ip)\n  ${body}`)), body).toHaveLength(0)
+    }
+    // A client's other methods, and tables that aren't clients
+    for (const body of [
+      'return openaiLogs.create({ data: input })',
+      'return prisma.openai.create({ data: input })',
+      'return anthropic.messages.delete(input.id)',
+    ]) {
+      const findings = check(action('', body))
+      expect(findings, body).toHaveLength(1)
+      expect(findings[0].message, body).toContain('performs mutations')
+    }
+    expect(check(action("import OpenAI from 'openai'", 'const client = new OpenAI()\n  const other = db.items\n  return other.create({ data: input })'))[0].message).toContain('performs mutations')
+  })
+
+  // A model of the database, named for what it holds. The file says so, or its capital does.
+  it('does not take a name for a client against what the file says', () => {
+    for (const [setup, body] of [
+      ['', "const Gemini = mongoose.model('Gemini')\n  return Gemini.create(input)"],
+      ['', "const gemini = mongoose.model('Gemini')\n  return gemini.create(input)"],
+      ['', "const openai = db.collection('openai')\n  return openai.create(input)"],
+      ["import { Gemini } from '@/models'", 'return Gemini.create(input)'],
+      ["import { Anthropic } from '@/models'", 'return Anthropic.create(input)'],
+    ]) {
+      for (const limit of ['', 'await rateLimit(input.ip)\n  ']) {
+        const findings = check(action(setup, `${limit}${body}`))
+        expect(findings, body).toHaveLength(1)
+        expect(findings[0].message, body).toContain('performs mutations')
+      }
+    }
+  })
+
+  it('reads the two APIs through optional chaining', () => {
+    expect(check(action('', 'return openai?.chat?.completions?.create({ model: name, messages: input })'))[0].message).toContain('calls an AI model')
+    expect(check(action('', 'return anthropic?.messages?.create({ model: name, messages: input })'))[0].message).toContain('calls an AI model')
+  })
+
+  // A package's other exports are something else
+  it('goes by the whole package name', () => {
+    for (const setup of ["import { Thing } from 'openai-helpers'", "import { Thing } from '@langchain/core/messages'", "import { Thing } from 'my-ai'"]) {
+      expect(check(action(setup, 'return new Thing(input)')), setup).toHaveLength(0)
+    }
+    expect(check(action("import { generateText } from 'ai-tools'", 'return generateText(input)'))).toHaveLength(0)
+    expect(check(action("import { myGenerateText } from 'ai'", 'return myGenerateText(input)'))).toHaveLength(0)
+    // Only off a namespace import
+    expect(check(action("import { thing } from 'ai'", 'return thing.generateText(input)'))).toHaveLength(0)
+  })
+
+  it('survives a file Babel can\'t parse', () => {
+    const file = makeFile(`'use server'\n${action(SDK, CALL)}\n`, { relativePath: 'app/actions/ai.ts', withAst: false })
+    expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+  })
+
+  it('rates it by the auth middleware like a write', () => {
+    const middleware = check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true }))
+    expect(middleware).toHaveLength(1)
+    expect(middleware[0].severity).toBe('info')
+    expect(middleware[0].message).toBe('Server action calls an AI model without an inline auth check (middleware auth detected — verify coverage)')
+    expect(middleware[0].fix).toContain('in the action')
+
+    const apiOnly = check(action(SDK, CALL), makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true }))
+    expect(apiOnly).toHaveLength(1)
+    expect(apiOnly[0].severity).toBe('warning')
+    expect(apiOnly[0].message).toBe("Server action calls an AI model without any authentication check (middleware auth detected, but its matcher doesn't cover pages)")
+  })
+
+  it('works through the scanner', async () => {
+    const result = await scanFiles({
+      'lib/ai/summarize.ts': `"use server";
+import { anthropic } from "@ai-sdk/anthropic";
+import { createStreamableValue } from "@ai-sdk/rsc";
+import { streamText } from "ai";
+
+export async function summarize(prompt: string) {
+  const stream = createStreamableValue();
+  (async () => {
+    const { textStream } = streamText({ model: anthropic("claude-haiku-5-5"), prompt });
+    for await (const delta of textStream) stream.update(delta);
+    stream.done();
+  })();
+  return { value: stream.value };
+}
+`,
+    })
+    const findings = result.findings.filter(f => f.ruleId === 'server-action-auth')
+    expect(findings.map(f => f.file)).toEqual(['lib/ai/summarize.ts'])
+    expect(findings[0].message).toContain('calls an AI model')
   })
 })
