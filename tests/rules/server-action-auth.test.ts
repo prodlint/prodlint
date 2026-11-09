@@ -3181,6 +3181,7 @@ describe('server-action-auth on what goes out and stays out', () => {
       clears(HELPER, 'await sendEmail({ to: process.env.ADMIN, subject: input.subject })')
       clears("import { sendVerificationEmail } from '@/lib/mail'", 'await sendVerificationEmail(input.email, input.token)')
       clears("import { sendPasswordResetEmail } from '@/lib/mail'", 'await sendPasswordResetEmail(input.email, input.token)')
+      clears("import { sendWelcomeEmail } from '@/lib/mail'", 'await sendWelcomeEmail(input.email)')
       // With nothing handed to it, the helper picks the address: that could be anyone's
       onlyKeeps("import { sendAdminAlertEmail } from '@/lib/mail'", 'await sendAdminAlertEmail()')
     })
@@ -3366,7 +3367,9 @@ describe('server-action-auth on what goes out and stays out', () => {
     // The verdict doesn't flip on an unrelated push() either
     it('does not keep a finding for an action it leaves alone', () => {
       expect(check(action(`await requireAdmin()\n  ${NEXT_TO_A_PUSH}${WRITE}`))).toHaveLength(0)
-      expect(check(`export async function login(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`)).toHaveLength(0)
+      for (const name of ['login', 'register', 'signUp', 'signOut', 'forgotPassword', 'subscribeToNewsletter']) {
+        expect(check(`export async function ${name}(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`), name).toHaveLength(0)
+      }
       expect(check(`const login = async (input) => {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}\nexport { login }`)).toHaveLength(0)
       // Through a helper only it reaches, and only that
       expect(check(`async function send(input) { ${WRITE} }\nexport async function login(input) {\n  ${NEXT_TO_A_PUSH}return send(input)\n}`)).toHaveLength(0)
@@ -3383,11 +3386,13 @@ describe('server-action-auth on what goes out and stays out', () => {
         expect(check(`export async function ${name}(input) {\n  ${WRITE}\n}`), name).toHaveLength(0)
         expect(check(`export async function ${name}(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`), name).toHaveLength(1)
       }
+      // ...next to a login, which is left alone
+      expect(check(`export async function login(input) { ${WRITE} }\nexport async function updatePassword(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`)).toHaveLength(1)
     })
 
     // Setting up an admin SDK checks nothing about who's calling
     it('does not take setting up an admin client for a check', () => {
-      for (const body of ['const admin = getAdmin()', 'const admin = await getAdminApp()', 'await ensureAdminInitialized()', 'const db = requireAdminClient()', 'initAdmin()']) {
+      for (const body of ['const admin = getAdmin()', 'const admin = await getAdminApp()', 'await ensureAdminInitialized()', 'await ensureAdminInit()', 'const db = requireAdminClient()', 'initAdmin()']) {
         expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(1)
       }
     })
