@@ -867,7 +867,6 @@ describe('server-action-auth on what counts as a mutation', () => {
       'await redis.del(input.key)\n  await cache.set(input.key, input.value)',
       // Another service
       'await stripe.customers.create({ email: input.email })',
-      "await fetch(url, { method: 'DELETE' })",
     ]) {
       const findings = check(action(body))
       expect(findings, body).toHaveLength(1)
@@ -877,7 +876,8 @@ describe('server-action-auth on what counts as a mutation', () => {
   })
 
   describe('with an effect outside the process that is not read as a write', () => {
-    const OUTWARD = [
+    // These count by themselves: see 'server-action-auth on what goes out and stays out'
+    const SHOWN = [
       "await fetch(url, { method: 'POST', body: JSON.stringify(input) })",
       'await fetch(url, { method: "PUT", body: input })',
       "await fetch(url, { method: 'PATCH', body: input })",
@@ -885,29 +885,32 @@ describe('server-action-auth on what counts as a mutation', () => {
       "await fetch(url, { method: 'delete' })",
       "const options = { method: 'POST', body: input }\n  await fetch(url, options)",
       "await fetch(url, { method: input.id ? 'PUT' : 'POST', body: input })",
+      'await env.KV.put(input.key, input.value)',
+      'await transporter.sendMail(input)',
+      'await resend.emails.send(input)',
+      "const method = 'POST'\n  await fetch(url, { method })",
+      "await fetch(url, { 'method': 'POST' })",
+      'await fetch(url, { method: `POST` })',
+    ]
+    // A client or a helper from another file, or one that isn't imported at all, can do what this can't see
+    const OUTWARD = [
       'await axios.post(url, input)',
       'await axios.put(url, input)',
       'await axios.patch(url, input)',
       'await api.post(url, input)',
       'await apiClient.POST(url, input)',
       'await apiClient.PATCH(url, input)',
-      'await env.KV.put(input.key, input.value)',
       'await fs.writeFile(input.path, input.data)',
       'fs.writeFileSync(input.path, input.data)',
       'await writeFile(input.path, input.data)',
       'await fs.promises.appendFile(input.path, input.data)',
       'await fs.unlink(input.path)',
       'await rm(input.path)',
-      'await transporter.sendMail(input)',
       'await sendEmail(input)',
-      'await resend.emails.send(input)',
       'await s3.send(new PutObjectCommand(input))',
       'await s3.send(new DeleteObjectCommand(input))',
       'await ses.send(new SendEmailCommand(input))',
       // However the method gets there
-      "const method = 'POST'\n  await fetch(url, { method })",
-      "await fetch(url, { 'method': 'POST' })",
-      'await fetch(url, { method: `POST` })',
       "init.method = 'POST'\n  await fetch(url, init)",
       "await api(url, 'POST', input)",
       // More of the file system
@@ -966,18 +969,20 @@ describe('server-action-auth on what counts as a mutation', () => {
     // A signed POST that places an order was only ever reported for its hash's update().
     // Reading calls properly mustn't lose that.
     it('keeps the finding its file had', () => {
-      for (const outward of OUTWARD) {
+      for (const outward of [...SHOWN, ...OUTWARD]) {
         for (const local of LOCAL) {
           const findings = check(action(`${local}\n  ${outward}`))
           expect(findings, `${local}\n${outward}`).toHaveLength(1)
-          expect(findings[0].message).toContain('performs mutations')
+          expect(findings[0].severity).toBe('warning')
         }
+      }
+      for (const outward of OUTWARD) {
+        expect(check(action(`${LOCAL[0]}\n  ${outward}`))[0].message, outward).toContain('performs mutations')
       }
     })
 
-    // So many aren't writes: a POST can be a GraphQL read, a token exchange or a captcha check,
-    // and a file a temp file. That's for another day, and no file gets a new finding here.
-    it('reports nothing on its own, as before', () => {
+    // It can't tell what these do, and most of the clients it read forward the caller's token
+    it('reports nothing on its own', () => {
       for (const outward of OUTWARD) {
         expect(check(action(outward)), outward).toHaveLength(0)
       }
@@ -2475,5 +2480,1080 @@ export async function summarize(prompt: string) {
     const findings = result.findings.filter(f => f.ruleId === 'server-action-auth')
     expect(findings.map(f => f.file)).toEqual(['lib/ai/summarize.ts'])
     expect(findings[0].message).toContain('calls an AI model')
+  })
+})
+
+// A request, a file, mail or a command changes something outside the process, and outlives the request.
+// These count by themselves, when the file shows all of it, unless it shows it isn't a write. A POST
+// that isn't one doesn't keep a finding next to an unrelated push() either.
+describe('server-action-auth on what goes out and stays out', () => {
+  const check = (code: string, proj = project, relativePath = 'app/actions/items.ts') =>
+    serverActionAuthRule.check(makeFile(`'use server'\n${code}\n`, { relativePath }), proj)
+  const action = (body: string) => `export async function run(input) {\n  ${body}\n}`
+  const NEXT_TO_A_PUSH = 'const rows = []\n  rows.push(input)\n  '
+  const AXIOS = "import axios from 'axios'"
+  const API = "import { api } from '@/lib/api'"
+  const FS = "import fs from 'node:fs/promises'\nimport { join } from 'node:path'\nimport { tmpdir } from 'node:os'"
+  const POST = (url: string, rest = 'body: input') => `await fetch(${url}, { method: 'POST', ${rest} })`
+  const ORDERS = "'https://api.example.com/orders'"
+
+  const counts = (setup: string, body: string, message: RegExp) => {
+    const findings = check(`${setup}\n${action(body)}`)
+    expect(findings, body).toHaveLength(1)
+    expect(findings[0].severity, body).toBe('warning')
+    expect(findings[0].message, body).toMatch(message)
+    expect(findings[0].message, body).toContain('anyone can call this action')
+    const kept = check(`${setup}\n${action(`${NEXT_TO_A_PUSH}${body}`)}`)
+    expect(kept, body).toHaveLength(1)
+  }
+  // Isn't a write: nothing alone, and nothing next to a push()
+  const clears = (setup: string, body: string) => {
+    expect(check(`${setup}\n${action(body)}`), body).toHaveLength(0)
+    expect(check(`${setup}\n${action(`${NEXT_TO_A_PUSH}${body}`)}`), `next to a push: ${body}`).toHaveLength(0)
+  }
+  // Can't tell: nothing alone, but it doesn't clear a finding either
+  const onlyKeeps = (setup: string, body: string) => {
+    expect(check(`${setup}\n${action(body)}`), body).toHaveLength(0)
+    expect(check(`${setup}\n${action(`${NEXT_TO_A_PUSH}${body}`)}`), `next to a push: ${body}`).toHaveLength(1)
+  }
+  const REQUEST = /^Server action sends a write request without any authentication check/
+  const FILES = /^Server action writes files without any authentication check/
+  const MAIL = /^Server action sends email without any authentication check/
+  const CLOUD = /^Server action writes to a cloud service without any authentication check/
+
+  describe('with a request', () => {
+    it('counts one the file shows all of', () => {
+      for (const body of [
+        `await fetch(url, { method: 'POST', body: JSON.stringify(input) })`,
+        `await fetch(url, { method: "PUT", body: input })`,
+        `await fetch(url, { method: 'PATCH', body: input })`,
+        `await fetch(url, { method: 'post', body: input })`,
+        `await fetch(url, { method: 'DELETE' })`,
+        `await fetch(url, { method: 'delete' })`,
+        `const options = { method: 'POST', body: input }\n  await fetch(url, options)`,
+        `await fetch(url, { method: input.id ? 'PUT' : 'POST', body: input })`,
+        `const method = 'POST'\n  await fetch(url, { method })`,
+        `await fetch(url, { 'method': 'POST' })`,
+        'await fetch(url, { method: `POST` })',
+        `await fetch(new Request(url, { method: 'POST', body: input }))`,
+        `await env.API.fetch(url, { method: 'POST', body: input })`,
+        `const stub = env.ROOM.get(input)\n  await stub.fetch(url, { method: 'POST', body: input })`,
+      ]) {
+        counts('', body, REQUEST)
+      }
+    })
+
+    it('counts one through an HTTP package, or a client the file makes of it', () => {
+      for (const [setup, body] of [
+        [AXIOS, 'await axios.post(url, input)'],
+        [AXIOS, 'await axios.put(url, input)'],
+        [AXIOS, 'await axios.patch(url, input)'],
+        [AXIOS, `await axios({ method: 'post', url, data: input })`],
+        [AXIOS, `await axios.request({ method: 'POST', url, data: input })`],
+        ["import ky from 'ky'", 'await ky.post(url, { json: input })'],
+        ["import got from 'got'", 'await got.put(url, { json: input })'],
+        ["import fetch from 'node-fetch'", `await fetch(url, { method: 'POST', body: input })`],
+        ["import { fetch as send } from 'undici'", `await send(url, { method: 'POST', body: input })`],
+        [AXIOS, `const client = axios.create({ baseURL: url })\n  await client.post('/orders', input)`],
+        ["import ky from 'ky'", `const client = ky.extend({ prefixUrl: url })\n  await client.post('orders', { json: input })`],
+      ]) {
+        counts(setup, body, REQUEST)
+      }
+    })
+
+    // delete() was a write before any of this, wherever it is: only what shows it isn't one clears it
+    it('keeps a delete() through a client the file shows a write', () => {
+      for (const [path, body] of [
+        ['app/actions/items.ts', 'await axios.delete(url)'],
+        ['app/actions/items.ts', `const client = axios.create({ baseURL: url })\n  await client.delete('/orders')`],
+        ['lib/auth/actions.ts', 'await axios.delete(`${API}/users/${input.id}`)'],
+        ['app/api/items/route.ts', 'await axios.delete(`${API}/users/${input.id}`)'],
+      ]) {
+        const findings = check(`${AXIOS}\n${action(body)}`, project, path)
+        expect(findings, `${path}: ${body}`).toHaveLength(1)
+        expect(findings[0].message).toContain('performs mutations')
+      }
+      expect(check(`${AXIOS}\n${action('await requireAdmin()\n  await axios.delete(url)')}`)).toHaveLength(1)
+      clears(AXIOS, 'await axios.delete(url, { headers: { Authorization: input.jwt } })')
+      clears(AXIOS, "await axios.delete(`${API}/auth/session`)")
+    })
+
+    // What hands a URL to a helper that builds it isn't what the URL is for
+    it('reads a URL helper\'s strings, not its parameters', () => {
+      expect(check("export async function run(input, token) {\n  await fetch(buildUrl('/orders', token), { method: 'POST', body: input })\n}")).toHaveLength(1)
+      clears('', POST("buildUrl('/auth/login')"))
+    })
+
+    it('reads a header given to a name in the function that gives it', () => {
+      const a = `export async function a(input) {\n  const headers = {}\n  headers.Authorization = input.jwt\n  ${POST('url', 'headers, body: input')}\n}`
+      const b = `export async function b(input) {\n  const headers = { 'Content-Type': 'text/plain' }\n  ${POST('url', 'headers, body: input')}\n}`
+      expect(check(a)).toHaveLength(0)
+      expect(check(`${a}\n${b}`)).toHaveLength(1)
+      // Set as the module loads, it's every request's
+      expect(check(`${AXIOS}\naxios.defaults.headers.common.Authorization = getToken\n${action('await axios.post(url, input)')}`)).toHaveLength(0)
+    })
+
+    // Most of the imported clients read on the sample forward the caller's token
+    it('does not count one through what it can\'t see', () => {
+      for (const [setup, body] of [
+        [API, 'await api.post(url, input)'],
+        [API, 'await api.put(url, input)'],
+        ["import { apiClient } from '@/lib/api'", 'await apiClient.POST(url, input)'],
+        ["import { sdk } from '@/lib/sdk'", `await sdk.client.fetch('/store/orders', { method: 'POST', body: input })`],
+        ['', `await fetchWithRetry(url, { method: 'POST', body: input })`],
+        ["import { makeClient } from './client'", 'const client = makeClient()\n  await client.post(url, input)'],
+        ['', 'await axios.post(url, input)'], // Not this package: the file never imports it
+      ]) {
+        onlyKeeps(setup, body)
+      }
+    })
+
+    it('does not take a read for one', () => {
+      for (const body of [
+        'await fetch(url)',
+        `await fetch(url, { method: 'GET' })`,
+        `await fetch(url, { cache: 'no-store' })`,
+        `// await fetch(url, { method: 'POST' })`,
+      ]) {
+        clears('', body)
+      }
+      clears(AXIOS, 'await axios.get(url)')
+    })
+
+    it('does not take a function of that name for fetch', () => {
+      expect(check(`function fetch(a, b) { return a }\n${action(`return fetch(url, { method: 'POST' })`)}`)).toHaveLength(0)
+      expect(check(`export async function run(fetch, input) { return fetch(url, { method: 'POST' }) }`)).toHaveLength(0)
+    })
+
+    it('reads a client by what made it', () => {
+      onlyKeeps("import { foo } from './foo'", 'const client = foo.extend({ prefixUrl: url })\n  await client.post(url, input)')
+    })
+
+    it('reads each package\'s arguments where it has them', () => {
+      // ky and got take one object of options: their body and headers are in there
+      clears("import ky from 'ky'", 'await ky.post(url, { json: input, headers: { Authorization: input.jwt } })')
+      clears("import ky from 'ky'", `await ky.post(url, { json: { query: 'query { a }' } })`)
+      clears("import ky from 'ky'", `const client = ky.extend({ prefixUrl: url })\n  await client.post('items', { json: input, headers: { Authorization: input.jwt } })`)
+      // axios has them separately, and delete() has no data
+      clears(AXIOS, `const client = axios.create({ baseURL: url })\n  await client.post('items', input, { headers: { Authorization: input.jwt } })`)
+    })
+  })
+
+  describe('with a GraphQL query over POST', () => {
+    it('does not count a read', () => {
+      for (const [setup, body] of [
+        ['', POST('url', 'body: JSON.stringify({ query })')],
+        ['', POST('url', 'body: JSON.stringify({ query, variables })')],
+        ['', POST('url', 'body: JSON.stringify({ query: GET_ITEMS, variables })')],
+        ['', POST('url', 'body: JSON.stringify({ query: itemsQuery })')],
+        ['', POST('url', 'body: JSON.stringify({ query: SinglePostDocument })')],
+        ['', POST('url', 'body: JSON.stringify({ query: `query { items { id } }` })')],
+        ['', POST('url', 'body: JSON.stringify({ query: `{ items { id } }` })')],
+        ['', "const query = `{ items { id } }`\n  " + POST('url', 'body: JSON.stringify({ query })')],
+        ['', "const payload = { query: 'query { a }' }\n  " + POST('url', 'body: JSON.stringify(payload)')],
+        ['', POST("'https://api.github.com/graphql'", 'body: input')],
+        ['', 'const doc = gql`query { a }`\n  ' + POST('url', 'body: JSON.stringify({ query: doc })')],
+        [AXIOS, `await axios.post(url, { query: 'query { a }' })`],
+        [AXIOS, `await axios.post('https://leetcode.com/graphql', input)`],
+      ]) {
+        clears(setup, body)
+      }
+    })
+
+    it('counts a mutation', () => {
+      for (const [setup, body] of [
+        ['', POST('url', 'body: JSON.stringify({ query: `mutation { addItem { id } }` })')],
+        ['', POST('url', 'body: JSON.stringify({ query: `\n  mutation Add { addItem { id } }` })')],
+        ['', POST('url', 'body: JSON.stringify({ query: `# adds one\n  mutation { addItem { id } }` })')],
+        ['', POST('url', 'body: JSON.stringify({ query: CREATE_ITEM_MUTATION })')],
+        ['', POST('url', 'body: JSON.stringify({ query: createCartMutation })')],
+        ['', POST('url', 'body: JSON.stringify({ query: CREATE_ITEM })')],
+        ['', POST('url', 'body: JSON.stringify({ query: deleteItem })')],
+        ['', "const query = `mutation { a }`\n  " + POST('url', 'body: JSON.stringify({ query })')],
+        ['', 'const doc = gql`mutation { a }`\n  ' + POST('url', 'body: JSON.stringify({ query: doc })')],
+        [AXIOS, 'await axios.post(url, { query: `mutation { a }` })'],
+      ]) {
+        counts(setup, body, REQUEST)
+      }
+    })
+
+    // A helper takes whatever it's given, and this file gives it a mutation
+    it('counts a query it can\'t read in a file that has a mutation', () => {
+      expect(check("const ADD = `mutation { a }`\nasync function gql(query) { return fetch(url, { method: 'POST', body: JSON.stringify({ query }) }) }\nexport async function run() { return gql(ADD) }")).toHaveLength(1)
+      expect(check("async function gql(query) { return fetch(url, { method: 'POST', body: JSON.stringify({ query }) }) }\nexport async function run() { return gql(ADD_ITEM_MUTATION) }")).toHaveLength(1)
+      expect(check("const LIST = `query { a }`\nasync function gql(query) { return fetch(url, { method: 'POST', body: JSON.stringify({ query }) }) }\nexport async function run() { return gql(LIST) }")).toHaveLength(0)
+      expect(check(`const ADD = 'mutation { a }'\n${action(POST("'https://x.dev/graphql'", 'body: input'))}`)).toHaveLength(1)
+    })
+
+    it('reads a query by its own name, whatever else the file has', () => {
+      for (const query of ['GET_ITEMS', 'itemsQuery', 'SinglePostDocument']) {
+        expect(check(`const ADD = 'mutation { a }'\n${action(POST('url', `body: JSON.stringify({ query: ${query} })`))}`), query).toHaveLength(0)
+      }
+    })
+
+    // A saved search sends one
+    it('does not take any field named query for GraphQL', () => {
+      counts('', POST(ORDERS, 'body: JSON.stringify({ name: input.name, query: input.q })'), REQUEST)
+      counts('', POST(ORDERS, 'body: JSON.stringify({ query: input.query })'), REQUEST)
+      clears('', POST(ORDERS, 'body: JSON.stringify({ query: input.query, variables: input.vars })'))
+      clears('', POST("'https://x.dev/graphql'", 'body: JSON.stringify({ query: input.query })'))
+    })
+
+    it('reads a query by its own text, whatever else the file has', () => {
+      expect(check(`const ADD = 'mutation { a }'\n${action('const doc = gql`query { a }`\n  ' + POST('url', 'body: JSON.stringify({ query: doc })'))}`)).toHaveLength(0)
+    })
+  })
+
+  describe('with a token exchange', () => {
+    it('does not count one', () => {
+      for (const body of [
+        POST('url', `body: new URLSearchParams({ grant_type: 'client_credentials' })`),
+        POST('url', `body: 'grant_type=refresh_token&refresh_token=' + input`),
+        POST('url', `body: JSON.stringify({ grant_type: 'password' })`),
+        POST("'https://accounts.example.com/oauth/token'"),
+        POST('TOKEN_ENDPOINT'),
+        POST('tokenUrl'),
+      ]) {
+        clears('', body)
+      }
+      clears(AXIOS, `await axios.post('https://api.example.com/oauth/access_token', input)`)
+    })
+
+    it('counts what only sounds like one', () => {
+      counts('', POST(ORDERS, `body: new URLSearchParams({ grant: 'x', type: 'y' })`), REQUEST)
+      // What a query string or a parameter says isn't what the URL is for
+      counts('', POST('`https://api.example.com/orders?token=${key}`'), REQUEST)
+      counts('', POST('`https://api.example.com/invites/${token}/accept`'), REQUEST)
+    })
+  })
+
+  describe('with a captcha check', () => {
+    it('does not count one', () => {
+      for (const body of [
+        POST("'https://www.google.com/recaptcha/api/siteverify'"),
+        POST('`https://www.google.com/recaptcha/api/siteverify?secret=${key}&response=${input}`'),
+        POST('RECAPTCHA_VERIFY_URL'),
+        POST("'https://challenges.cloudflare.com/turnstile/v0/siteverify'"),
+        POST("'https://hcaptcha.com/siteverify'"),
+      ]) {
+        clears('', body)
+      }
+      clears(AXIOS, 'await axios.post(`https://www.google.com/recaptcha/api/siteverify?secret=${key}&response=${input}`)')
+    })
+
+    it('counts the write next to it', () => {
+      counts('', `${POST("'https://hcaptcha.com/siteverify'")}\n  ${POST(ORDERS)}`, REQUEST)
+    })
+  })
+
+  describe('with a login or register proxy', () => {
+    it('does not count one, whatever the client', () => {
+      for (const url of ['/auth/login', '/api/logout', '/register', '/users/sign-up', '/users/signin', '/forgot-password', '/reset-password', '/verify-otp', '/api/createAccount', '/auth/user/']) {
+        clears('', POST(`\`\${API_URL}${url}\``))
+        clears(API, `await api.post('${url}', input)`)
+      }
+    })
+
+    it('reads the words of a URL, not what it has in it', () => {
+      for (const url of ['/orders', '/blogin', '/authors', '/catalog']) {
+        counts('', POST(`\`\${API_URL}${url}\``), REQUEST)
+      }
+    })
+
+    it('leaves an action named for it out of it', () => {
+      for (const name of ['login', 'loginUser', 'logout', 'registerUser', 'signUp', 'signIn', 'forgotPassword', 'resetPassword', 'verifyEmail', 'sendOtp', 'verifyCaptcha', 'submitContactForm', 'subscribeToNewsletter', 'joinWaitlist', 'sendFeedback', 'submitLead', 'sendInquiry']) {
+        expect(check(`export async function ${name}(input) { ${POST(ORDERS)} }`), name).toHaveLength(0)
+        expect(check(`export const ${name} = async (input) => { ${POST(ORDERS)} }`), name).toHaveLength(0)
+        expect(check(`const ${name} = async (input) => { ${POST(ORDERS)} }\nexport { ${name} }`), name).toHaveLength(0)
+      }
+    })
+
+    it('reads each action on its own', () => {
+      expect(check(`export async function login(input) { ${POST(ORDERS)} }\nexport async function pay(input) { ${POST(ORDERS)} }`)).toHaveLength(1)
+      const helper = `async function send(input) { ${POST(ORDERS)} }\n`
+      expect(check(`${helper}export async function login(input) { return send(input) }`)).toHaveLength(0)
+      expect(check(`${helper}export async function login(input) { return send(input) }\nexport async function pay(input) { return send(input) }`)).toHaveLength(1)
+    })
+
+    it('leaves a path the rule calls public out of it, as it does a write', () => {
+      expect(check(action(POST(ORDERS)), project, 'app/contactus/actions.ts')).toHaveLength(0)
+    })
+
+    it('leaves a path that says so out of it, and only this', () => {
+      for (const path of ['app/(auth)/forgot-password/actions.ts', 'lib/auth/actions.ts', 'actions/verify-email.ts', 'lib/captcha.ts', 'app/enquiries/actions.ts', 'app/waitlist/actions.ts']) {
+        expect(check(action(POST(ORDERS)), project, path), path).toHaveLength(0)
+        expect(check(action('await prisma.item.create({ data: input })'), project, path), path).toHaveLength(1)
+      }
+      expect(check(action(POST(ORDERS)), project, 'app/author/actions.ts')).toHaveLength(1)
+    })
+  })
+
+  describe('with a request that carries the caller\'s token', () => {
+    it('does not count one: its backend can check it', () => {
+      for (const [setup, body] of [
+        ['', `const token = cookies().get('jwt')?.value\n  ${POST('url', 'headers: { Authorization: `Bearer ${token}` }, body: input')}`],
+        ['', POST('url', 'headers: { Authorization: `Bearer ${input.jwt}` }, body: input')],
+        ['', POST('url', `headers: { Cookie: (await headers()).get('cookie') }, body: input`)],
+        ['', POST('url', `headers: { cookie: cookies().toString() }, body: input`)],
+        ['', POST('url', `headers: { 'x-access-token': input.jwt }, body: input`)],
+        ['', POST('url', `headers: { 'X-Auth-Token': input.jwt }, body: input`)],
+        ['', POST('url', 'headers: { token: input.jwt }, body: input')],
+        ['', POST('url', 'headers: await getHeaders(), body: input')],
+        ['', POST('url', 'headers: input.headers, body: input')],
+        ['', POST('url', `headers: { ...getAuthHeaders(), 'Content-Type': 'text/plain' }, body: input`)],
+        ['', `const h = new Headers()\n  h.set('Authorization', input.jwt)\n  ${POST('url', 'headers: h, body: input')}`],
+        ['', `const h = new Headers()\n  h.append('Cookie', input.jwt)\n  ${POST('url', 'headers: h, body: input')}`],
+        ['', `const h = { 'Content-Type': 'text/plain' }\n  h.Authorization = input.jwt\n  ${POST('url', 'headers: h, body: input')}`],
+        ['', `const h = {}\n  h['Authorization'] = input.jwt\n  ${POST('url', 'headers: h, body: input')}`],
+        ['', POST('url', 'headers: new Headers({ Authorization: input.jwt }), body: input')],
+        ['', POST('url', `credentials: 'include', body: input`)],
+        ['', POST('url', 'body: JSON.stringify({ token: input.jwt, item: input.item })')],
+        [AXIOS, 'await axios.post(url, input, { headers: { Authorization: input.jwt } })'],
+        [AXIOS, 'await axios.post(url, input, { withCredentials: true })'],
+        [AXIOS, 'await axios.delete(url, { headers: { Authorization: input.jwt } })'],
+        [AXIOS, 'const client = axios.create({ headers: { Authorization: input.jwt } })\n  await client.post(url, input)'],
+        [AXIOS, 'const client = axios.create({ baseURL: url })\n  client.interceptors.request.use(addToken)\n  await client.post(url, input)'],
+        [AXIOS, 'axios.defaults.headers.common.Authorization = input.jwt\n  await axios.post(url, input)'],
+      ]) {
+        clears(setup, body)
+      }
+    })
+
+    it('reads a parameter as the caller\'s', () => {
+      expect(check(`export async function run(input, jwt) { ${POST('url', 'headers: { Authorization: `Bearer ${jwt}` }, body: input')} }`)).toHaveLength(0)
+      expect(check(`export async function run(input, headers) { ${POST('url', 'headers, body: input')} }`)).toHaveLength(0)
+    })
+
+    it('reads every value a name stands for', () => {
+      const h = (value: string) => `const headers = ${value}\n  ${POST('url', 'headers, body: input')}`
+      const two = (a: string, b: string) => `export async function a(input) { ${h(a)} }\nexport async function b(input) { ${h(b)} }`
+      expect(check(two(`{ 'Content-Type': 'text/plain' }`, `{ Accept: 'text/plain' }`))).toHaveLength(1)
+      expect(check(two(`{ 'Content-Type': 'text/plain' }`, '{ Authorization: input.jwt }'))).toHaveLength(0)
+    })
+
+    it('counts one with the server\'s own secret, or nothing that says who\'s calling', () => {
+      for (const [setup, body] of [
+        ['', POST('url', 'headers: { Authorization: `Bearer ${process.env.API_KEY}` }, body: input')],
+        ['', POST('url', 'headers: { Authorization: process.env.API_KEY }, body: input')],
+        ['', `const key = process.env.API_KEY\n  ${POST('url', 'headers: { Authorization: `Bearer ${key}` }, body: input')}`],
+        ['', `const { API_KEY } = process.env\n  ${POST('url', 'headers: { Authorization: `Bearer ${API_KEY}` }, body: input')}`],
+        ['', POST('url', 'headers: { Authorization: `Basic ${Buffer.from(`${process.env.ID}:${process.env.SECRET}`).toString("base64")}` }, body: input')],
+        ['', POST('url', `headers: { Authorization: 'Bearer abc' }, body: input`)],
+        ['', POST('url', 'headers: { Authorization: `Bearer ${API_KEY}` }, body: input')],
+        ["import { env } from '@/env'", POST('url', 'headers: { Authorization: env.API_KEY }, body: input')],
+        ['', POST('url', `headers: { 'Content-Type': 'application/json' }, body: input`)],
+        ['', POST('url', `headers: { 'x-api-key': input.key }, body: input`)], // Not one of the caller's identity
+        ['', `const h = { 'Content-Type': 'text/plain' }\n  ${POST('url', 'headers: h, body: input')}`],
+        ['', POST('url', 'body: JSON.stringify({ author: input.name })')], // Not "auth"
+        ['', POST('url', 'headers: { authorization: true }, body: input')],
+        ['', POST('url', `headers: new Headers({ 'Content-Type': 'text/plain' }), body: input`)],
+        ["import { DEFAULT_HEADERS } from '@/lib/http'", POST('url', 'headers: DEFAULT_HEADERS, body: input')],
+        ["import { DEFAULT_HEADERS } from '@/lib/http'", POST('url', 'headers: { ...DEFAULT_HEADERS, Accept: "text/plain" }, body: input')],
+        // What's sent isn't who's sending it, whatever a parameter holds
+        ['', POST('url', 'body: JSON.stringify({ ...input })')],
+        ['', POST('url', 'body: JSON.stringify(input)')],
+        [AXIOS, 'await axios.post(url, { ...input })'],
+        [AXIOS, 'await axios.patch(url, { ...input }, { headers: { Accept: "text/plain" } })'],
+        [AXIOS, `await axios.post(url, input, { headers: { 'Content-Type': 'application/json' } })`],
+        [AXIOS, 'const client = axios.create({ headers: { Authorization: process.env.API_KEY } })\n  await client.post(url, input)'],
+      ]) {
+        counts(setup, body, REQUEST)
+      }
+    })
+  })
+
+  describe('with a POST that reads', () => {
+    it('does not count one fetch() is told to cache', () => {
+      clears('', POST('url', 'body: input, next: { revalidate: 60 }'))
+      clears('', POST('url', `body: input, next: { tags: ['items'] }`))
+      clears('', POST('url', `body: input, cache: 'force-cache'`))
+      counts('', POST('url', `body: input, cache: 'no-store'`), REQUEST)
+      counts('', POST('url', 'body: input, next: input.tags ? { tags: input.tags } : undefined'), REQUEST)
+    })
+
+    it('does not count one whose URL says it reads', () => {
+      for (const url of ['/search', '/items/lookup', '/rooms/availability', '/getItems', '/get_landing_page/', '/shipping/calculate', '/listOrders']) {
+        clears('', POST(`\`\${API_URL}${url}\``))
+      }
+      for (const url of ['/research', '/getaways', '/items', '/createOrder']) {
+        counts('', POST(`\`\${API_URL}${url}\``), REQUEST)
+      }
+      // What a helper that builds the URL is called says nothing about what the URL is for
+      counts('', POST('getApiUrl()'), REQUEST)
+      counts('', POST("new URL('/orders', getBaseUrl())"), REQUEST)
+      clears('', POST("new URL('/getItems', getBaseUrl())"))
+    })
+
+    it('does not count analytics', () => {
+      clears('', POST('`${POSTHOG_HOST}/capture/`'))
+      clears('', POST("'https://plausible.io/api/event'"))
+      clears('', POST("'https://www.google-analytics.com/mp/collect'"))
+      // Taking the money is a capture too
+      counts('', POST('`https://api-m.paypal.com/v2/checkout/orders/${input.id}/capture`'), REQUEST)
+      counts('', POST("'https://api.example.com/track'"), REQUEST)
+    })
+
+    it('does not take checking in for a check', () => {
+      clears('', POST('`${API_URL}/orders/check`'))
+      counts('', POST('`${API_URL}/guests/check-in`'), REQUEST)
+      counts('', POST('`${API_URL}/cart/checkout`'), REQUEST)
+    })
+  })
+
+  describe('with a public form', () => {
+    it('does not count one by where it posts, or what it says', () => {
+      for (const body of [
+        POST("'https://api.example.com/contact'"),
+        POST('process.env.CONTACT_FORM_ENDPOINT'),
+        POST("'https://api.example.com/newsletter/subscribe'"),
+        POST("'https://api.example.com/leads'"),
+        POST("'https://connect.mailerlite.com/api/subscribers'"),
+        POST('webhook', `body: JSON.stringify({ content: 'New contact form submission' })`),
+        POST('webhook', 'body: JSON.stringify({ content: `New waitlist signup: ${input}` })'),
+        // A contact form's shape, wherever it goes
+        POST(ORDERS, 'body: JSON.stringify({ name: input.name, email: input.email, message: input.message })'),
+      ]) {
+        clears('', body)
+      }
+      counts('', POST(ORDERS, 'body: JSON.stringify({ email: input.email, total: input.total })'), REQUEST)
+      counts('', POST(ORDERS, 'body: JSON.stringify({ name: input.name, message: input.message })'), REQUEST)
+    })
+
+    it('does not take a field for a form', () => {
+      counts('', POST("'https://api.razorpay.com/v1/invoices'", 'body: JSON.stringify({ customer: { contact: input.phone } })'), REQUEST)
+    })
+
+    it('does not count mail sent over HTTP to one fixed address', () => {
+      clears('', POST("'https://api.resend.com/emails'", `body: JSON.stringify({ to: 'me@example.com', subject: input })`))
+      counts('', POST("'https://api.resend.com/emails'", 'body: JSON.stringify({ to: input.to, subject: input })'), REQUEST)
+    })
+  })
+
+  describe('with a model behind a request', () => {
+    const MODEL = 'Server action calls an AI model without any authentication check — anyone can call this action and spend your credits'
+
+    it('reports it as a model call', () => {
+      for (const [setup, body] of [
+        ['', POST("'https://api.openai.com/v1/chat/completions'")],
+        ['', POST("'https://api.anthropic.com/v1/messages'")],
+        ['', POST('`https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=${key}`')],
+        ['', POST("'https://openrouter.ai/api/v1/chat/completions'")],
+        ['', POST("'https://api.groq.com/openai/v1/chat/completions'")],
+        ['', POST("'https://my.host/v1/chat/completions'")],
+        ['', POST('`https://api.elevenlabs.io/v1/text-to-speech/${voice}`')],
+        ['', POST("'https://api.replicate.com/v1/predictions'")],
+        ['', POST('`https://api.cloudflare.com/client/v4/accounts/${id}/ai/run/${model}`')],
+        ['', POST('process.env.OPENAI_URL')],
+        ['', POST('`${endpoint}/api/chat`', 'body: JSON.stringify({ model, messages })')],
+        ['', POST('url', 'body: JSON.stringify({ model: name, prompt: input })')],
+        [AXIOS, `await axios.post('https://api.openai.com/v1/chat/completions', input)`],
+      ]) {
+        const findings = check(`${setup}\n${action(body)}`)
+        expect(findings, body).toHaveLength(1)
+        expect(findings[0].message, body).toBe(MODEL)
+      }
+    })
+
+    it('takes a limit, as any other model call does', () => {
+      expect(check(action(`await rateLimit(input)\n  ${POST("'https://api.openai.com/v1/chat/completions'")}`))).toHaveLength(0)
+    })
+
+    // What the file shows it does comes before what a name says it might
+    describe('next to a write', () => {
+      const SDK = "import { generateText } from 'ai'"
+      const HELPER = "import { saveChat } from '@/lib/chats'"
+
+      it('reports what goes out over the model', () => {
+        const [finding] = check(`${SDK}\n${action(`await generateText(input)\n  ${POST(ORDERS)}`)}`)
+        expect(finding.message).toMatch(REQUEST)
+      })
+
+      it('reports the model over a helper named like a write', () => {
+        const findings = check(`${SDK}\n${HELPER}\n${action('await generateText(input)\n  await saveChat(input)')}`)
+        expect(findings).toHaveLength(1)
+        expect(findings[0].message).toBe(MODEL)
+        expect(findings[0].fix).toContain('rate-limit')
+        expect(findings[0].fix).not.toContain("remove 'use server'")
+      })
+
+      it('reports the helper once the model is limited', () => {
+        const findings = check(`${SDK}\n${HELPER}\n${action('await rateLimit(input)\n  await generateText(input)\n  await saveChat(input)')}`)
+        expect(findings).toHaveLength(1)
+        expect(findings[0].message).toContain('calls saveChat()')
+      })
+
+      it('does not take a limit in middleware as an answer to the helper', () => {
+        const findings = check(`${SDK}\n${HELPER}\n${action('await generateText(input)\n  await saveChat(input)')}`, makeProject({ rateLimitsInMiddleware: true }))
+        expect(findings[0].severity).toBe('warning')
+      })
+
+      it('lowers a model by a limit in middleware when there\'s nothing else', () => {
+        expect(check(`${SDK}\n${action('await generateText(input)')}`, makeProject({ rateLimitsInMiddleware: true }))[0].severity).toBe('info')
+      })
+    })
+
+    it('does not take a model of a table for one', () => {
+      counts('', POST(ORDERS, 'body: JSON.stringify({ model: input.car })'), REQUEST)
+    })
+
+    it('reads a model\'s host through any client, and nothing else through one it can\'t see', () => {
+      expect(check(`${API}\n${action(`await api.post('https://api.openai.com/v1/chat/completions', input)`)}`)[0].message).toBe(MODEL)
+      expect(check(`${API}\n${action(`await api.post('/gemini/chat', input)`)}`)).toHaveLength(0)
+      expect(check(`${API}\n${action('await api.post(url, { model, messages })')}`)).toHaveLength(0)
+    })
+  })
+
+  describe('with a file write', () => {
+    it('counts one from the file system, however it got here', () => {
+      for (const [setup, body] of [
+        [FS, 'await fs.writeFile(input.path, input.data)'],
+        [FS, 'await fs.appendFile(input.path, input.data)'],
+        [FS, 'await fs.unlink(input.path)'],
+        [FS, 'await fs.rm(input.path)'],
+        [FS, 'await fs.rmdir(input.path)'],
+        [FS, 'await fs.rename(input.from, input.to)'],
+        [FS, 'await fs.copyFile(input.from, input.to)'],
+        ["import fs from 'fs'", 'fs.writeFileSync(input.path, input.data)'],
+        ["import fs from 'fs'", 'fs.unlinkSync(input.path)'],
+        ["import fs from 'fs'", 'fs.createWriteStream(input.path)'],
+        ["import fs from 'fs'", 'await fs.promises.writeFile(input.path, input.data)'],
+        ["import * as fs from 'fs'", 'await fs.promises.unlink(input.path)'],
+        ["import { promises as fs } from 'fs'", 'await fs.writeFile(input.path, input.data)'],
+        ["import { promises } from 'node:fs'", 'await promises.writeFile(input.path, input.data)'],
+        ["import { writeFile } from 'fs/promises'", 'await writeFile(input.path, input.data)'],
+        ["import { writeFile as save } from 'node:fs/promises'", 'await save(input.path, input.data)'],
+        ["import { unlink } from 'fs/promises'", 'await unlink(input.path)'],
+        ["import { createWriteStream } from 'fs'", 'createWriteStream(input.path)'],
+        ["import fse from 'fs-extra'", 'await fse.outputFile(input.path, input.data)'],
+        ["const fs = require('fs')", 'fs.writeFileSync(input.path, input.data)'],
+      ]) {
+        counts(setup, body, FILES)
+      }
+    })
+
+    it('does not take a helper of that name for it', () => {
+      onlyKeeps("import { rename } from './files'", 'await rename(input.from, input.to)')
+      onlyKeeps('', 'await fs.writeFile(input.path, input.data)')
+      onlyKeeps("const fs = require('./my-fs')", 'fs.writeFileSync(input.path, input.data)')
+      expect(check(`export async function run(writeFile, input) { return writeFile(input) }`)).toHaveLength(0)
+    })
+
+    it('does not count a directory or a read', () => {
+      onlyKeeps(FS, 'await fs.mkdir(input.path, { recursive: true })')
+      clears(FS, 'return fs.readFile(input.path)')
+    })
+
+    it('does not count a temp file', () => {
+      for (const [setup, body] of [
+        [FS, 'await fs.writeFile(join(tmpdir(), input.name), input.data)'],
+        [FS, 'await fs.writeFile(`/tmp/${input.name}`, input.data)'],
+        [FS, 'const tempPath = join(dir, input.name)\n  await fs.writeFile(tempPath, input.data)'],
+        [FS, 'const tmpFile = join(dir, input.name)\n  await fs.writeFile(tmpFile, input.data)'],
+        [FS, 'await fs.unlink(tempPath)'],
+        // Written, then deleted
+        [FS, 'const p = join(dir, input.name)\n  await fs.writeFile(p, input.data)\n  await parseIt(p)\n  await fs.unlink(p)'],
+        [FS, 'const p = join(dir, input.name)\n  try {\n    await fs.writeFile(p, input.data)\n  } finally {\n    await fs.unlink(p)\n  }'],
+        ["import { writeFile, unlink } from 'fs/promises'", 'await writeFile(input.path, input.data)\n  await unlink(input.path)'],
+      ]) {
+        clears(setup, body)
+      }
+    })
+
+    it('counts what stays', () => {
+      for (const body of [
+        // Deleted only if it fails: that's a rollback
+        'const p = join(dir, input.name)\n  try {\n    await fs.writeFile(p, input.data)\n  } catch (e) {\n    await fs.unlink(p)\n  }',
+        'await fs.writeFile(`public/uploads/${input.name}`, input.data)',
+        // A temp file put in its place
+        'await fs.rename(tempPath, finalPath)',
+        'const p = join(dir, input.name)\n  await fs.writeFile(p, input.data)\n  await fs.copyFile(p, input.target)\n  await fs.unlink(p)',
+        // Another path
+        'await fs.writeFile(input.a, input.data)\n  await fs.unlink(input.b)',
+        // Deleted to make way for what's written: that one stays
+        'await fs.unlink(input.path)\n  await fs.writeFile(input.path, input.data)',
+      ]) {
+        counts(FS, body, FILES)
+      }
+      // Each action on its own: one writes, the other deletes
+      expect(check(`${FS}\nexport async function up(input) { await fs.writeFile(path, input) }\nexport async function down(input) { await fs.unlink(path) }`)).toHaveLength(1)
+    })
+
+    it('does not count a log or a cache', () => {
+      for (const body of [
+        'await fs.appendFile(logFile, input)',
+        `await fs.appendFile('./logs/app.log', input)`,
+        'await fs.appendFile(LOG_PATH, input)',
+        'await fs.writeFile(cachePath, input)',
+        `await fs.writeFile('./.cache/a.json', input)`,
+      ]) {
+        clears(FS, body)
+      }
+      for (const body of [`await fs.writeFile('./blog/post.md', input)`, `await fs.writeFile('./catalog.json', input)`, 'await fs.writeFile(cacheless, input)']) {
+        counts(FS, body, FILES)
+      }
+    })
+
+    it('does not count a public form kept in a file', () => {
+      clears(FS, `await fs.appendFile(join(dir, 'enquiries.jsonl'), input)`)
+      clears(FS, 'await fs.appendFile(CONTACT_FILE_PATH, input)')
+      clears(FS, `await fs.appendFile(join(dir, 'registrations.jsonl'), input)`)
+    })
+  })
+
+  describe('with mail', () => {
+    it('counts mail to an address the caller can set', () => {
+      for (const body of [
+        'await transporter.sendMail(input)',
+        'await transporter.sendMail({ from, to: input.to, subject, html })',
+        'await transporter.sendMail({ from, ...input })',
+        'await resend.emails.send({ from, to: [input.email], subject: input.subject, html })',
+        'await resend.emails.send({ from, to, subject, html })',
+        'await resend.batch.send(input)',
+        'await sgMail.send({ to: input.to })',
+        'await postmark.sendEmail({ To: input.to })',
+        'const mailOptions = { to: input.to, html: input.body }\n  await transporter.sendMail(mailOptions)',
+        `await transporter.sendMail({ to: input.to || 'me@example.com' })`,
+      ]) {
+        counts('', body, MAIL)
+      }
+    })
+
+    it('does not count a contact form: one address that doesn\'t change', () => {
+      for (const [setup, body] of [
+        ['', 'await transporter.sendMail({ from: input.email, to: process.env.CONTACT_EMAIL, html: input.message })'],
+        ['', `await resend.emails.send({ from, to: 'me@example.com', subject: input.subject, html: input.message })`],
+        ['', `await resend.emails.send({ from, to: ['me@example.com'], html: input.message })`],
+        ['', `const { SMTP_EMAIL } = process.env\n  await transport.sendMail({ to: SMTP_EMAIL, html: input.message })`],
+        ['', 'const ADMIN = process.env.ADMIN\n  await transport.sendMail({ to: ADMIN, html: input.message })'],
+        ['', 'await transport.sendMail({ to: ADMIN_EMAIL, html: input.message })'],
+        ['', `const mailOptions = { to: 'me@example.com', html: input.message }\n  await transporter.sendMail(mailOptions)`],
+        ['', 'await transporter.sendMail({ from, subject, html: input.message })'], // The transport's default
+        ['', 'await resend.emails.send({ from, to: parseList(process.env.TO), html: input.message })'],
+        ['', 'await resend.emails.send({ from, to: process.env.TO.split(","), html: input.message })'],
+        ["import { env } from '@/env'", 'await resend.emails.send({ from, to: env.EMAIL_TO, html: input.message })'],
+        ["import { config } from '@/config'", 'await resend.emails.send({ from, to: config.email, html: input.message })'],
+        ["import { siteConfig } from '@/config/site'", 'await resend.emails.send({ from, to: siteConfig.email, html: input.message })'],
+      ]) {
+        clears(setup, body)
+      }
+      // A parameter of that name is whatever the caller says
+      expect(check(`export async function run(input, config) { await resend.emails.send({ to: config.email, html: input }) }`)).toHaveLength(1)
+    })
+
+    it('reads every object a name stands for', () => {
+      expect(check(`export async function a(i) { const mailOptions = { to: 'a@example.com', html: i }; return t.sendMail(mailOptions) }\nexport async function b(i) { const mailOptions = { to: 'b@example.com', html: i }; return t.sendMail(mailOptions) }`)).toHaveLength(0)
+      expect(check(`export async function a(i) { const mailOptions = { to: 'a@example.com', html: i }; return t.sendMail(mailOptions) }\nexport async function b(i) { const mailOptions = { to: i.to, html: i }; return t.sendMail(mailOptions) }`)).toHaveLength(1)
+      // One of them a parameter: that could be anything
+      expect(check(`export async function a(i) { const mailOptions = { to: 'a@example.com', html: i }; return t.sendMail(mailOptions) }\nexport async function b(mailOptions) { return t.sendMail(mailOptions) }`)).toHaveLength(1)
+    })
+
+    it('does not count an account\'s own mail: it\'s how signing in works', () => {
+      for (const body of [
+        `await resend.emails.send({ to: input.email, subject: 'Verify your email', html })`,
+        `await resend.emails.send({ to: input.email, subject: 'Reset your password', html })`,
+        `await transporter.sendMail({ to: input.email, subject: 'Your one-time password', html })`,
+        `await transporter.sendMail({ to: input.email, subject: 'Confirm your email', html })`,
+        `await transporter.sendMail({ to: input.email, subject: 'Welcome', html })`,
+        `await transporter.sendMail({ to: input.email, subject: 'Account already exists', html })`,
+      ]) {
+        clears('', body)
+      }
+      for (const body of ['await resend.emails.send({ to: input.email, subject, react: ResetPasswordEmail({ link }) })', 'await transporter.sendMail({ to: input.email, subject, html: emailVerificationTemplate(url) })']) {
+        expect(check(action(body)), body).toHaveLength(0)
+      }
+      counts('', `await transporter.sendMail({ to: input.email, subject: 'Your invoice', html })`, MAIL)
+      // By whole words: a footprint isn't an OTP, and a preset isn't a reset
+      counts('', `await transporter.sendMail({ to: input.email, subject: 'Your carbon footprint report', html })`, MAIL)
+      counts('', `await transporter.sendMail({ to: input.email, subject: 'Your preset is ready', html })`, MAIL)
+      counts("import { sendPresetEmail } from '@/lib/mail'", 'await sendPresetEmail(input.to)', MAIL)
+      // Only what it says: a caller's text could read anything
+      counts('', `await transporter.sendMail({ to: input.email, subject: input.subject, html: input.password })`, MAIL)
+    })
+
+    it('reads a mail helper the same way', () => {
+      const HELPER = "import { sendEmail } from '@/lib/mail'"
+      counts(HELPER, 'await sendEmail(input)', MAIL)
+      counts(HELPER, 'await sendEmail(input.to, input.subject)', MAIL)
+      counts(HELPER, 'await sendEmail({ to: input.to, subject: input.subject })', MAIL)
+      counts("import { sendMail as notify } from './mail'", 'await notify(input)', MAIL)
+      clears(HELPER, `await sendEmail('me@example.com', input.subject)`)
+      clears(HELPER, 'await sendEmail(process.env.ADMIN, input.subject)')
+      clears(HELPER, 'await sendEmail({ to: process.env.ADMIN, subject: input.subject })')
+      clears("import { sendVerificationEmail } from '@/lib/mail'", 'await sendVerificationEmail(input.email, input.token)')
+      clears("import { sendPasswordResetEmail } from '@/lib/mail'", 'await sendPasswordResetEmail(input.email, input.token)')
+      clears("import { sendWelcomeEmail } from '@/lib/mail'", 'await sendWelcomeEmail(input.email)')
+      // With nothing handed to it, the helper picks the address: that could be anyone's
+      onlyKeeps("import { sendAdminAlertEmail } from '@/lib/mail'", 'await sendAdminAlertEmail()')
+    })
+  })
+
+  describe('with an AWS command', () => {
+    const S3 = "import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'"
+
+    it('counts one that writes', () => {
+      counts(S3, 'await s3.send(new PutObjectCommand(input))', CLOUD)
+      counts(S3, 'await s3.send(new DeleteObjectCommand(input))', CLOUD)
+      counts(S3, 'await s3.send(new CopyObjectCommand(input))', CLOUD)
+      // A signed URL is an upload anyone who has it can make
+      counts(S3, 'return getSignedUrl(s3, new PutObjectCommand(input))', CLOUD)
+      counts("import { PutCommand } from '@aws-sdk/lib-dynamodb'", 'await db.send(new PutCommand(input))', CLOUD)
+      counts("import { PublishCommand } from '@aws-sdk/client-sns'", 'await sns.send(new PublishCommand(input))', CLOUD)
+      counts("import * as S3 from '@aws-sdk/client-s3'", 'await s3.send(new S3.PutObjectCommand(input))', CLOUD)
+    })
+
+    it('does not count one that reads, or a class of that name from elsewhere', () => {
+      clears(S3, 'return s3.send(new GetObjectCommand(input))')
+      clears(S3, 'return s3.send(new ListObjectsV2Command(input))')
+      onlyKeeps("import { PutObjectCommand } from './commands'", 'await s3.send(new PutObjectCommand(input))')
+    })
+
+    it('reads mail by its address', () => {
+      const SES = "import { SendEmailCommand } from '@aws-sdk/client-ses'"
+      counts(SES, 'await ses.send(new SendEmailCommand({ Destination: { ToAddresses: [input.to] }, Message: input }))', MAIL)
+      counts(SES, 'await ses.send(new SendEmailCommand(input))', MAIL)
+      clears(SES, 'await ses.send(new SendEmailCommand({ Destination: { ToAddresses: [process.env.ADMIN] }, Message: input }))')
+    })
+  })
+
+  describe('with a key-value store or a bucket', () => {
+    it('counts a write', () => {
+      for (const [setup, body] of [
+        ['', 'await env.KV.put(input.key, input.value)'],
+        ['', 'await env.MY_KV.put(input.key, input.value)'],
+        ['', 'await env.UPLOADS.put(input.key, input.value)'],
+        ['', 'await kv.put(input.key, input.value)'],
+        ['', 'await myKv.put(input.key, input.value)'],
+        ['', 'await bucket.put(input.key, input.value)'],
+        ['', 'await env.R2.put(input.key, input.value)'],
+        ["import { put } from '@vercel/blob'", `await put(input.name, input.file, { access: 'public' })`],
+        ["import { del } from '@vercel/blob'", 'await del(input.url)'],
+        // A cart keeps its TTL, and reads what it's about to change: neither is a cache
+        ['', 'const cart = await kv.get(input.id)\n  await kv.put(input.id, input.cart, { expirationTtl: 60 })'],
+      ]) {
+        counts(setup, body, CLOUD)
+      }
+    })
+
+    it('does not count a read-through cache', () => {
+      for (const body of [
+        'await env.KV.put(cacheKey, value)',
+        'await env.KV.put(`cache:${input}`, value)',
+        'await kv.put(PROJECT_CACHE_KEY, value, { expirationTtl: 60 })',
+        'const cached = await env.KV.get(cacheKey)\n  if (cached) return cached\n  const fresh = await loadIt(input)\n  await env.KV.put(cacheKey, fresh)',
+      ]) {
+        clears('', body)
+      }
+    })
+
+    it('does not count what signing in keeps there, or a public form', () => {
+      expect(check(action('await env.KV.put(getResetTokenKey(input), value)'))).toHaveLength(0)
+      clears('', 'await env.KV.put(`password-reset:${input}`, value)')
+      clears('', 'await waitlist_kv.put(input, value)')
+      clears('', 'await env.KV.put(`waitlist:${input}`, value)')
+    })
+
+    it('does not take anything with a put() for one', () => {
+      onlyKeeps("import { put } from './store'", 'await put(input.name, input.file)')
+      onlyKeeps(API, 'await api.put(url, input)')
+      counts(AXIOS, 'await axios.put(url, input)', REQUEST)
+      // The Cache API's
+      expect(check(action('const cache = await caches.open(input)\n  await cache.put(input, value)'))).toHaveLength(0)
+      clears('', 'const cache = await getCache(input)\n  await cache.put(input, value)')
+      // A bucket with the word in its name still holds what it's given
+      counts('', 'await env.NEXT_INC_CACHE_R2_BUCKET.put(`responses/${input}.json`, value)', CLOUD)
+    })
+  })
+
+  describe('with a helper named like a write', () => {
+    it('counts one from the project', () => {
+      for (const [setup, call, name] of [
+        ["import { deletePhoto } from '@/lib/photos'", 'await deletePhoto(input.id)', 'deletePhoto'],
+        ["import { createTodo } from './todos'", 'await createTodo(input)', 'createTodo'],
+        ["import { saveMeal } from '../lib/meals'", 'await saveMeal(input)', 'saveMeal'],
+        ["import { updateUser } from '~/server/users'", 'await updateUser(input)', 'updateUser'],
+        ["import { removeFromCart } from 'lib/cart'", 'await removeFromCart(input)', 'removeFromCart'],
+        ["import { addBookmark } from '#/data'", 'await addBookmark(input)', 'addBookmark'],
+        ["import { uploadImage } from '@/lib/images'", 'await uploadImage(input)', 'uploadImage'],
+        ["import { publishPost } from '@/lib/posts'", 'await publishPost(input)', 'publishPost'],
+        ["import { sendInvoice } from '@/lib/billing'", 'await sendInvoice(input)', 'sendInvoice'],
+        ["import { markPaid } from '@/lib/billing'", 'await markPaid(input)', 'markPaid'],
+        ["import { writeJsonFile } from './base'", 'await writeJsonFile(input)', 'writeJsonFile'],
+        // By the name it was exported under
+        ["import { deletePhoto as drop } from '@/lib/photos'", 'await drop(input.id)', 'deletePhoto'],
+      ]) {
+        const message = new RegExp(`^Server action calls ${name}\\(\\), which reads as a write, without any authentication check`)
+        counts(setup, call, message)
+      }
+    })
+
+    it('does not count what it can\'t tell is one', () => {
+      for (const [setup, body] of [
+        // From a package
+        ["import { createTodo } from 'todo-sdk'", 'await createTodo(input)'],
+        // Not much of a name
+        ["import { update } from './db'", 'await update(input)'],
+        ["import { remove } from './db'", 'await remove(input)'],
+        // A service could forward a token
+        ["import * as photos from './photos'", 'await photos.deletePhoto(input)'],
+        ["import { photos } from './photos'", 'await photos.deletePhoto(input)'],
+        // Not imported, or a verb that isn't on the list
+        ['', 'await deletePhoto(input)'],
+        ["import { guardarUsuario } from './db'", 'await guardarUsuario(input)'],
+      ]) {
+        onlyKeeps(setup, body)
+      }
+    })
+
+    it('reads a helper in the file by its body', () => {
+      expect(check(`function deletePhoto(id) { return id }\n${action('return deletePhoto(input)')}`)).toHaveLength(0)
+      expect(check(`async function deletePhoto(id) { ${POST(ORDERS)} }\n${action('return deletePhoto(input)')}`)).toHaveLength(1)
+    })
+
+    it('does not take a parameter or a read for one', () => {
+      expect(check(`export async function run(deletePhoto, input) { return deletePhoto(input) }`)).toHaveLength(0)
+      expect(check(`import { deletePhoto } from './photos'\nexport async function run(deletePhoto, input) { return deletePhoto(input) }`)).toHaveLength(0)
+      expect(check(`import { getUser as deletePhoto } from './users'\n${action('return deletePhoto(input)')}`)).toHaveLength(0)
+    })
+
+    it('does not count a helper that makes a value', () => {
+      for (const name of ['createErrorResponse', 'createSupabaseServer', 'createClient', 'createApiKey', 'createShortUrl', 'createServerAction', 'createSessionToken', 'createFormData', 'createSlug', 'createStore', 'createTemplate', 'createBlogGenerator', 'addDays', 'addMinutes', 'addLeadingZeros', 'removeAccents', 'removeDiacritics', 'removeHtmlTags', 'updateSession', 'resetForm']) {
+        expect(check(`import { ${name} } from '@/lib/utils'\n${action(`return ${name}(input)`)}`), name).toHaveLength(0)
+      }
+    })
+
+    // Not counting one isn't saying it's harmless: resetPassword() is a write
+    it('keeps the finding of what it doesn\'t count', () => {
+      for (const [setup, body] of [
+        ["import { createApiKey } from '@/lib/keys'", 'await createApiKey(input)'],
+        ["import { resetPassword } from './accounts'", 'await resetPassword(input)'],
+        ["import { createInquiry } from './crm'", 'await createInquiry(input)'],
+        ["import { saveDraft } from './actions'", 'await saveDraft(input)'],
+        ["import { createPost } from './api'", 'await createPost(input, token)'],
+      ]) {
+        onlyKeeps(setup, body)
+      }
+    })
+
+    it('leaves another action to its own reading', () => {
+      for (const setup of ["import { updateProjectAction as saveDraft } from './projects'", "import { saveDraft } from '@/actions/drafts'", "import { saveDraft } from './actions'", "import { saveDraft } from '@/app/_actions'", "import { saveDraft } from './drafts.action'"]) {
+        expect(check(`${setup}\n${action('await saveDraft(input)')}`), setup).toHaveLength(0)
+      }
+      counts("import { saveDraft } from './transactions'", 'await saveDraft(input)', /saveDraft/)
+    })
+
+    it('does not count what signing in or a public form does', () => {
+      for (const setup of ["import { resetPassword as run2 } from './accounts'", "import { createVerification as run2 } from './accounts'", "import { createInquiry as run2 } from './crm'", "import { createLead as run2 } from './crm'"]) {
+        expect(check(`${setup}\n${action('await run2(input)')}`), setup).toHaveLength(0)
+      }
+    })
+
+    it('does not count one handed the caller\'s token', () => {
+      for (const arg of ['token', 'accessToken', 'session', 'input.jwt']) {
+        expect(check(`import { createPost } from './api'\n${action(`await createPost(input, ${arg})`)}`), arg).toHaveLength(0)
+      }
+      counts("import { createPost } from './api'", 'await createPost(input, title)', /createPost/)
+    })
+  })
+
+  describe('reads each action', () => {
+    const WRITE = POST(ORDERS)
+
+    it('does not count one that checks the user in a way the patterns don\'t know', () => {
+      for (const body of ['await requireAdmin()', 'await requireUser()', 'await assertOwner(input)', 'await ensureAdmin()', 'await checkPermission(input)', 'await requireRole(input)', 'const user = await getCurrentUser()', 'const user = await getUser()', 'const me = await getLoggedInUser()', 'const id = await getUserId()', 'const user = await fetchUser()', 'const user = await db.requireUser()']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(0)
+      }
+    })
+
+    // The verdict doesn't flip on an unrelated push() either
+    it('does not keep a finding for an action it leaves alone', () => {
+      expect(check(action(`await requireAdmin()\n  ${NEXT_TO_A_PUSH}${WRITE}`))).toHaveLength(0)
+      for (const name of ['login', 'register', 'signUp', 'signOut', 'forgotPassword', 'subscribeToNewsletter']) {
+        expect(check(`export async function ${name}(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`), name).toHaveLength(0)
+      }
+      expect(check(`const login = async (input) => {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}\nexport { login }`)).toHaveLength(0)
+      // Through a helper only it reaches, and only that
+      expect(check(`async function send(input) { ${WRITE} }\nexport async function login(input) {\n  ${NEXT_TO_A_PUSH}return send(input)\n}`)).toHaveLength(0)
+      expect(check(`async function send(input) { ${WRITE} }\nexport async function login(input) {\n  ${NEXT_TO_A_PUSH}return send(input)\n}\nexport async function pay(input) { return send(input) }`)).toHaveLength(1)
+      // A write comes first, whatever the action's called
+      expect(check(`export async function login(input) { await prisma.item.create({ data: input }) }`)).toHaveLength(1)
+      // What only keeps a finding still does, next to what it doesn't leave alone
+      expect(check(`export async function login(input) { ${WRITE} }\nexport async function run(input) {\n  ${NEXT_TO_A_PUSH}await clearCart(input)\n}`)).toHaveLength(1)
+    })
+
+    // An auth word in a name isn't a public action: updatePassword() changes someone's password
+    it('keeps the finding of an action with only an auth word in its name', () => {
+      for (const name of ['updatePassword', 'verifyPayment', 'refreshFeed', 'regenerateToken']) {
+        expect(check(`export async function ${name}(input) {\n  ${WRITE}\n}`), name).toHaveLength(0)
+        expect(check(`export async function ${name}(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`), name).toHaveLength(1)
+      }
+      // ...next to a login, which is left alone
+      expect(check(`export async function login(input) { ${WRITE} }\nexport async function updatePassword(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`)).toHaveLength(1)
+    })
+
+    // Setting up an admin SDK checks nothing about who's calling
+    it('does not take setting up an admin client for a check', () => {
+      for (const body of ['const admin = getAdmin()', 'const admin = await getAdminApp()', 'await ensureAdminInitialized()', 'await ensureAdminInit()', 'const db = requireAdminClient()', 'initAdmin()']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(1)
+      }
+    })
+
+    it('does not take a look-up of someone else for one', () => {
+      expect(check(action(`const user = await getUser(input.id)\n  ${WRITE}`))).toHaveLength(1)
+      expect(check(action(`const user = await getCurrentUser(input.id)\n  ${WRITE}`))).toHaveLength(1)
+      expect(check(action(`const admin = isAdminRoute()\n  ${WRITE}`))).toHaveLength(1)
+      expect(check(action(`const user = await getUserById()\n  ${WRITE}`))).toHaveLength(1)
+      expect(check(action(`validateUserInput(input)\n  ${WRITE}`))).toHaveLength(1)
+      expect(check(action(`verifyUserEmail(input)\n  ${WRITE}`))).toHaveLength(1)
+    })
+
+    it('reads a verification of the caller as a check', () => {
+      expect(check(action(`await verifyUser(input)\n  ${WRITE}`))).toHaveLength(0)
+      expect(check(action(`await validateAdmin(input)\n  ${WRITE}`))).toHaveLength(0)
+      expect(check(action(`if (!(await isAdmin())) return\n  ${WRITE}`))).toHaveLength(0)
+      expect(check(action(`if (!(await hasPermission(input))) return\n  ${WRITE}`))).toHaveLength(0)
+    })
+
+    it('finds the check through the file\'s own helpers', () => {
+      expect(check(`async function guard() { return requireAdmin() }\n${action(`await guard()\n  ${WRITE}`)}`)).toHaveLength(0)
+    })
+
+    it('does not let one action\'s check cover another', () => {
+      expect(check(`export async function a(input) { await requireAdmin()\n ${WRITE} }\nexport async function b(input) { ${WRITE} }`)).toHaveLength(1)
+      expect(check(`export async function a(input) { await requireAdmin()\n ${WRITE} }`)).toHaveLength(0)
+    })
+
+    it('leaves a checked action or a guest action out of it', () => {
+      expect(check(`export const run = authActionClient.action(async ({ parsedInput }) => { ${WRITE} })`)).toHaveLength(0)
+      expect(check(`export const run = actionClient.use(throwIfAuthenticated).action(async ({ parsedInput }) => { ${WRITE} })`)).toHaveLength(0)
+      expect(check(`export const a = authActionClient.action(async ({ parsedInput }) => { ${WRITE} })\nexport async function b(input) { return input }`)).toHaveLength(0)
+    })
+
+    it('follows an action into the file\'s helpers, and nowhere else', () => {
+      expect(check(`async function send(input) { ${WRITE} }\n${action('return send(input)')}`)).toHaveLength(1)
+      expect(check(`const send = async (input) => { ${WRITE} }\n${action('return send(input)')}`)).toHaveLength(1)
+      expect(check(`async function unused(input) { ${WRITE} }\n${action('return input')}`)).toHaveLength(0)
+      expect(check(`${WRITE}\n${action('return input')}`)).toHaveLength(0)
+    })
+
+    it('reads only the action in a page with an inline one', () => {
+      const page = (body: string) => serverActionAuthRule.check(makeFile(body, { relativePath: 'app/page.tsx' }), project)
+      expect(page(`export default async function Page() {\n  await fetch(url, { method: 'POST' })\n  async function act(fd) {\n    'use server'\n    return fd\n  }\n  return <form action={act} />\n}\n`)).toHaveLength(0)
+      expect(page(`export default async function Page() {\n  async function act(fd) {\n    'use server'\n    await fetch(url, { method: 'POST', body: fd })\n  }\n  return <form action={act} />\n}\n`)).toHaveLength(1)
+      // One it leaves alone, as it would an export
+      expect(page(`export default async function Page() {\n  async function act(fd) {\n    'use server'\n    await requireAdmin()\n    await fetch(url, { method: 'POST', body: fd })\n  }\n  return <form action={act} />\n}\n`)).toHaveLength(0)
+      expect(page(`export default async function Page() {\n  async function login(fd) {\n    'use server'\n    await fetch(url, { method: 'POST', body: fd })\n  }\n  return <form action={login} />\n}\n`)).toHaveLength(0)
+    })
+
+    it('leaves a route handler to auth-checks', () => {
+      expect(check(`export async function POST(input) { ${WRITE} }`, project, 'app/api/items/route.ts')).toHaveLength(0)
+      expect(check(`export async function run(input) { ${WRITE} }`, project, 'pages/api/items.ts')).toHaveLength(0)
+    })
+
+    it('leaves a public-named path out of it, as it does a write', () => {
+      for (const body of [WRITE, 'await transporter.sendMail(input)', 'await env.KV.put(input.key, input.value)']) {
+        expect(check(action(body), project, 'app/actions/contact.ts'), body).toHaveLength(0)
+        expect(check(action(body), project, 'app/login/actions.ts'), body).toHaveLength(0)
+      }
+    })
+  })
+
+  describe('in what it reports', () => {
+    it('says what it read, unless a write comes first', () => {
+      expect(check(action(`await prisma.item.create({ data: input })\n  ${POST(ORDERS)}`))[0].message).toContain('performs mutations')
+      expect(check(action(`await transporter.sendMail(input)\n  ${POST(ORDERS)}`))[0].message).toMatch(/^Server action (?:sends email|sends a write request)/)
+    })
+
+    it('says what the file shows before what only a name says', () => {
+      const HELPER = "import { saveChat } from '@/lib/chats'"
+      expect(check(`${HELPER}\n${action(`await saveChat(input)\n  ${POST(ORDERS)}`)}`)[0].message).toMatch(REQUEST)
+      expect(check(`${HELPER}\n${action(`${POST(ORDERS)}\n  await saveChat(input)`)}`)[0].message).toMatch(REQUEST)
+      expect(check(`${HELPER}\nasync function send(input) { ${POST(ORDERS)} }\n${action('await saveChat(input)\n  await send(input)')}`)[0].message).toMatch(REQUEST)
+    })
+
+    it('asks whether it should be an action at all', () => {
+      const [finding] = check(action(POST(ORDERS)))
+      expect(finding.fix).toContain('const session = await auth()')
+      expect(finding.fix).toContain("If only server code calls it, remove 'use server' instead")
+      expect(check(action('await prisma.item.create({ data: input })'))[0].fix).not.toContain("remove 'use server'")
+    })
+
+    it('rates it by the auth middleware like a write', () => {
+      const middleware = check(action(POST(ORDERS)), makeProject({ hasAuthMiddleware: true }))
+      expect(middleware).toHaveLength(1)
+      expect(middleware[0].severity).toBe('info')
+      expect(middleware[0].message).toBe('Server action sends a write request without an inline auth check (middleware auth detected — verify coverage)')
+      expect(middleware[0].fix).toContain('in the action')
+      expect(middleware[0].fix).toContain("remove 'use server'")
+
+      const apiOnly = check(action(POST(ORDERS)), makeProject({ hasAuthMiddleware: true, authMiddlewareExcludesPages: true }))
+      expect(apiOnly[0].severity).toBe('warning')
+      expect(apiOnly[0].message).toBe("Server action sends a write request without any authentication check (middleware auth detected, but its matcher doesn't cover pages)")
+    })
+
+    it('stays a warning under rate-limiting middleware', () => {
+      const findings = check(action(POST(ORDERS)), makeProject({ rateLimitsInMiddleware: true }))
+      expect(findings[0].severity).toBe('warning')
+      expect(findings[0].message).toContain('anyone can call this action')
+    })
+
+    it('leaves a file Babel can\'t parse to the text check', () => {
+      const file = makeFile(`'use server'\n${action(POST(ORDERS))}\n`, { relativePath: 'app/actions/items.ts', withAst: false })
+      expect(serverActionAuthRule.check(file, project)).toHaveLength(0)
+    })
+
+    it('leaves an action with an auth check alone', () => {
+      expect(check(action(`const session = await auth()\n  ${POST(ORDERS)}`))).toHaveLength(0)
+    })
+
+    it('works through the scanner', async () => {
+      const result = await scanFiles({
+        'lib/mail.ts': `"use server";
+import nodemailer from "nodemailer";
+
+const transporter = nodemailer.createTransport({ url: process.env.SMTP_URL });
+
+export async function sendMail({ to, subject, html }: { to: string; subject: string; html: string }) {
+  await transporter.sendMail({ from: process.env.MAIL_FROM, to, subject, html });
+}
+`,
+        'app/actions.ts': `"use server";
+const API = process.env.API_URL;
+
+export async function pay(amount: number) {
+  await fetch(\`\${API}/charges\`, { method: "POST", headers: { Authorization: \`Bearer \${process.env.API_KEY}\` }, body: JSON.stringify({ amount }) });
+}
+`,
+        'app/data.ts': `"use server";
+export async function listItems() {
+  const res = await fetch(process.env.API_URL + "/graphql", { method: "POST", body: JSON.stringify({ query: "{ items { id } }" }) });
+  return res.json();
+}
+`,
+      })
+      const findings = result.findings.filter(f => f.ruleId === 'server-action-auth')
+      expect(findings.map(f => f.file).sort()).toEqual(['app/actions.ts', 'lib/mail.ts'])
+    })
+  })
+
+  describe('with a very long file', () => {
+    it('does not stall on many requests', () => {
+      const lines = Array.from({ length: 5000 }, (_, i) => `  await fetch(url${i}, { method: 'POST', headers, body: input })`).join('\n')
+      expect(check(`export async function run(input, headers) {\n${lines}\n}`)).toHaveLength(0)
+    })
+
+    it('does not stall on many file writes', () => {
+      const lines = Array.from({ length: 5000 }, (_, i) => `  await fs.writeFile(tempPath${i}, input)`).join('\n')
+      expect(check(`${FS}\nexport async function run(input) {\n${lines}\n}`)).toHaveLength(0)
+    })
+
+    it('survives a long chain of aliases', () => {
+      const aliases = Array.from({ length: 3000 }, (_, i) => `const u${i} = u${i + 1}`).join('\n')
+      expect(() => check(`${aliases}\nconst u3000 = 'https://api.example.com/orders'\n${action(POST('u0'))}`)).not.toThrow()
+    })
+
+    it('survives a deep string', () => {
+      const deep = Array.from({ length: 2000 }, () => "'a'").join(' + ')
+      expect(() => check(action(POST(deep)))).not.toThrow()
+    })
   })
 })
