@@ -21,10 +21,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     check, a login or register proxy, a request carrying the caller's token, a POST that `fetch()`
     is told to cache or whose URL says it reads, analytics, a public form (contact, newsletter,
     waitlist, leads), mail to one fixed address, an account's own mail, temp files, logs and caches.
+    A DELETE is read by the caller's token alone: its URL names what it removes, so an
+    `axios.delete()` of `/contacts/:id` is still reported. A `credentials` or
+    `withCredentials` option isn't a token, since a request the server makes has none of the
+    caller's cookies to send.
   - **Left alone:** an action that calls something like `requireAdmin()` or a bare
     `getCurrentUser()`, which `AUTH_PATTERNS` doesn't know, and one named for a login, a sign-up or
-    a public form. One with only another auth word in its name, like `updatePassword()`, isn't
-    reported for these new kinds of write, but keeps a finding it had before.
+    a public form. A helper that checks something else isn't a check, by how its name ends
+    (`checkUserInput()`, `checkUserExists()`, `ensureUsersTable()`), and neither is making sure
+    someone else exists (`ensureUser(authorId)`). One with only another auth word in its name,
+    like `updatePassword()`, isn't reported for these new kinds of write, but keeps a finding it
+    had before.
   - **Still only keeps a finding:** a request through an imported client (`api.post()`), since
     most of those read on a sample forward the caller's token, and a helper it doesn't count.
   - **A request to a model's host** (`api.openai.com`, `/chat/completions`) is reported as a model
