@@ -293,9 +293,12 @@ const HARMLESS_SOURCE = /^(?:(?:node:)?(?:path|crypto|url|querystring|os)|zod|da
 // a command. So does a helper from the project named like a write: few of them check the user. A
 // client from another file can add the caller's token where this can't see it, and most of them do,
 // so a request through one only keeps a finding, as above. What the file shows isn't a write does
-// neither, whatever the method: reads, signing in, public forms, a request with the caller's token.
+// neither: a request with the caller's token, whatever the method, and a POST that reads, signs in
+// or fills in a public form.
 const HTTP_PACKAGE = /^(?:axios|ky|got|superagent|needle|node-fetch|undici|cross-fetch|isomorphic-fetch|isomorphic-unfetch|ofetch|wretch)$/
 const HTTP_WRITE_CALL = /^(?:post|put|patch)$/i
+// These change what the URL names. Only a POST's URL can name what it does instead: /search, /login, /contact
+const CHANGES_WHAT_URL_NAMES = /^(?:put|patch|delete)$/i
 const FILE_PACKAGE = /^(?:(?:node:)?fs(?:\/promises)?|fs-extra)$/
 const FILE_WRITE = /^(?:writeFile|appendFile|unlink|rm|rmdir|rename|copyFile|cp|createWriteStream|truncate|outputFile|outputJson|writeJson|remove|move)(?:Sync)?$/
 const FILE_CREATE = /^(?:writeFile|createWriteStream|outputFile|outputJson|writeJson)(?:Sync)?$/
@@ -435,7 +438,7 @@ interface HttpRequest {
   options: Node | null | undefined
   headers: Node | null
   methods: Node[] // the strings that say which method, if any do
-  deletes?: boolean // a DELETE, or could be one
+  changes?: boolean // a PUT, a PATCH or a DELETE, or could be one: it changes what its URL names
   hidden: boolean // through a client the file doesn't show
   client?: { config: Node | null; axios: boolean } | null
   receiver?: Node
@@ -779,8 +782,8 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   const configured = (options: Node | null, url: Node | null | undefined, hidden: boolean, client?: HttpRequest['client'], receiver?: Node): HttpRequest | null => {
     const methods = methodsIn(options)
     if (methods.length === 0) return null
-    const deletes = methods.some(method => shown(method).toUpperCase().trim() === 'DELETE')
-    return { url: url ?? propertyOf(options, /^url$/), options, body: propertyOf(options, /^(?:body|data|json|form)$/), headers: propertyOf(options, /^headers$/), methods, deletes, hidden, client, receiver }
+    const changes = methods.some(method => CHANGES_WHAT_URL_NAMES.test(shown(method).trim()))
+    return { url: url ?? propertyOf(options, /^url$/), options, body: propertyOf(options, /^(?:body|data|json|form)$/), headers: propertyOf(options, /^headers$/), methods, changes, hidden, client, receiver }
   }
 
   const isStore = (receiver: Node): boolean => rootName(receiver) === 'env' || STORE_NAME.test(lastName(receiver))
@@ -809,14 +812,13 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     if (name === 'request' && client && first) return configured(boundOnce(first), null, false, client, receiver)
     if (client && (HTTP_WRITE_CALL.test(name) || /^delete$/i.test(name))) {
       // axios has the data second, unless there's none to send. The rest have it in their options.
-      const deletes = /^delete$/i.test(name)
-      const options = deletes || !client.axios ? second : third
+      const options = /^delete$/i.test(name) || !client.axios ? second : third
       const read = options ? boundOnce(options) : null
-      return { url: first, body: client.axios ? second : propertyOf(read, /^(?:json|body|form)$/), options: read, headers: propertyOf(read, /^headers$/), methods: [], deletes, hidden: false, client, receiver }
+      return { url: first, body: client.axios ? second : propertyOf(read, /^(?:json|body|form)$/), options: read, headers: propertyOf(read, /^headers$/), methods: [], changes: CHANGES_WHAT_URL_NAMES.test(name), hidden: false, client, receiver }
     }
     // Upper case is an OpenAPI client's: apiClient.POST(url, input). A store and a cache have a put() of their own.
     if (!HTTP_WRITE_CALL.test(name) || (name === 'put' && (isStore(receiver) || isCacheApi(receiver)))) return null
-    return { url: first, body: second, options: third, headers: null, methods: [], hidden: true }
+    return { url: first, body: second, options: third, headers: null, methods: [], changes: CHANGES_WHAT_URL_NAMES.test(name), hidden: true }
   }
   const requests = new Map<Node, HttpRequest | null>()
   const requestOf = (call: CallExpression | OptionalCallExpression): HttpRequest | null => {
@@ -876,9 +878,9 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   }
 
   const isNoWriteRequest = (request: HttpRequest): boolean => {
-    // A DELETE removes what its URL names, whatever that's called: the words that say a POST reads,
-    // signs in or fills in a public form say nothing of one. Only the caller's token does.
-    if (request.deletes) return carriesToken(request)
+    // A PUT, a PATCH or a DELETE changes what its URL names, whatever that's called: the words that
+    // say a POST reads, signs in or fills in a public form say nothing of one. Only the caller's token does.
+    if (request.changes) return carriesToken(request)
     const url = urlOf(request)
     const words = wordsOf(url)
     const payload = payloadOf(request)
