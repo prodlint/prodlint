@@ -2548,7 +2548,6 @@ describe('server-action-auth on what goes out and stays out', () => {
         [AXIOS, 'await axios.post(url, input)'],
         [AXIOS, 'await axios.put(url, input)'],
         [AXIOS, 'await axios.patch(url, input)'],
-        [AXIOS, 'await axios.delete(url)'],
         [AXIOS, `await axios({ method: 'post', url, data: input })`],
         [AXIOS, `await axios.request({ method: 'POST', url, data: input })`],
         ["import ky from 'ky'", 'await ky.post(url, { json: input })'],
@@ -2556,11 +2555,42 @@ describe('server-action-auth on what goes out and stays out', () => {
         ["import fetch from 'node-fetch'", `await fetch(url, { method: 'POST', body: input })`],
         ["import { fetch as send } from 'undici'", `await send(url, { method: 'POST', body: input })`],
         [AXIOS, `const client = axios.create({ baseURL: url })\n  await client.post('/orders', input)`],
-        [AXIOS, `const client = axios.create({ baseURL: url })\n  await client.delete('/orders')`],
         ["import ky from 'ky'", `const client = ky.extend({ prefixUrl: url })\n  await client.post('orders', { json: input })`],
       ]) {
         counts(setup, body, REQUEST)
       }
+    })
+
+    // delete() was a write before any of this, wherever it is: only what shows it isn't one clears it
+    it('keeps a delete() through a client the file shows a write', () => {
+      for (const [path, body] of [
+        ['app/actions/items.ts', 'await axios.delete(url)'],
+        ['app/actions/items.ts', `const client = axios.create({ baseURL: url })\n  await client.delete('/orders')`],
+        ['lib/auth/actions.ts', 'await axios.delete(`${API}/users/${input.id}`)'],
+        ['app/api/items/route.ts', 'await axios.delete(`${API}/users/${input.id}`)'],
+      ]) {
+        const findings = check(`${AXIOS}\n${action(body)}`, project, path)
+        expect(findings, `${path}: ${body}`).toHaveLength(1)
+        expect(findings[0].message).toContain('performs mutations')
+      }
+      expect(check(`${AXIOS}\n${action('await requireAdmin()\n  await axios.delete(url)')}`)).toHaveLength(1)
+      clears(AXIOS, 'await axios.delete(url, { headers: { Authorization: input.jwt } })')
+      clears(AXIOS, "await axios.delete(`${API}/auth/session`)")
+    })
+
+    // What hands a URL to a helper that builds it isn't what the URL is for
+    it('reads a URL helper\'s strings, not its parameters', () => {
+      expect(check("export async function run(input, token) {\n  await fetch(buildUrl('/orders', token), { method: 'POST', body: input })\n}")).toHaveLength(1)
+      clears('', POST("buildUrl('/auth/login')"))
+    })
+
+    it('reads a header given to a name in the function that gives it', () => {
+      const a = `export async function a(input) {\n  const headers = {}\n  headers.Authorization = input.jwt\n  ${POST('url', 'headers, body: input')}\n}`
+      const b = `export async function b(input) {\n  const headers = { 'Content-Type': 'text/plain' }\n  ${POST('url', 'headers, body: input')}\n}`
+      expect(check(a)).toHaveLength(0)
+      expect(check(`${a}\n${b}`)).toHaveLength(1)
+      // Set as the module loads, it's every request's
+      expect(check(`${AXIOS}\naxios.defaults.headers.common.Authorization = getToken\n${action('await axios.post(url, input)')}`)).toHaveLength(0)
     })
 
     // Most of the imported clients read on the sample forward the caller's token
@@ -2659,6 +2689,14 @@ describe('server-action-auth on what goes out and stays out', () => {
       for (const query of ['GET_ITEMS', 'itemsQuery', 'SinglePostDocument']) {
         expect(check(`const ADD = 'mutation { a }'\n${action(POST('url', `body: JSON.stringify({ query: ${query} })`))}`), query).toHaveLength(0)
       }
+    })
+
+    // A saved search sends one
+    it('does not take any field named query for GraphQL', () => {
+      counts('', POST(ORDERS, 'body: JSON.stringify({ name: input.name, query: input.q })'), REQUEST)
+      counts('', POST(ORDERS, 'body: JSON.stringify({ query: input.query })'), REQUEST)
+      clears('', POST(ORDERS, 'body: JSON.stringify({ query: input.query, variables: input.vars })'))
+      clears('', POST("'https://x.dev/graphql'", 'body: JSON.stringify({ query: input.query })'))
     })
 
     it('reads a query by its own text, whatever else the file has', () => {
@@ -3124,6 +3162,10 @@ describe('server-action-auth on what goes out and stays out', () => {
         expect(check(action(body)), body).toHaveLength(0)
       }
       counts('', `await transporter.sendMail({ to: input.email, subject: 'Your invoice', html })`, MAIL)
+      // By whole words: a footprint isn't an OTP, and a preset isn't a reset
+      counts('', `await transporter.sendMail({ to: input.email, subject: 'Your carbon footprint report', html })`, MAIL)
+      counts('', `await transporter.sendMail({ to: input.email, subject: 'Your preset is ready', html })`, MAIL)
+      counts("import { sendPresetEmail } from '@/lib/mail'", 'await sendPresetEmail(input.to)', MAIL)
       // Only what it says: a caller's text could read anything
       counts('', `await transporter.sendMail({ to: input.email, subject: input.subject, html: input.password })`, MAIL)
     })
@@ -3139,6 +3181,8 @@ describe('server-action-auth on what goes out and stays out', () => {
       clears(HELPER, 'await sendEmail({ to: process.env.ADMIN, subject: input.subject })')
       clears("import { sendVerificationEmail } from '@/lib/mail'", 'await sendVerificationEmail(input.email, input.token)')
       clears("import { sendPasswordResetEmail } from '@/lib/mail'", 'await sendPasswordResetEmail(input.email, input.token)')
+      // With nothing handed to it, the helper picks the address: that could be anyone's
+      onlyKeeps("import { sendAdminAlertEmail } from '@/lib/mail'", 'await sendAdminAlertEmail()')
     })
   })
 
@@ -3331,6 +3375,21 @@ describe('server-action-auth on what goes out and stays out', () => {
       expect(check(`export async function login(input) { await prisma.item.create({ data: input }) }`)).toHaveLength(1)
       // What only keeps a finding still does, next to what it doesn't leave alone
       expect(check(`export async function login(input) { ${WRITE} }\nexport async function run(input) {\n  ${NEXT_TO_A_PUSH}await clearCart(input)\n}`)).toHaveLength(1)
+    })
+
+    // An auth word in a name isn't a public action: updatePassword() changes someone's password
+    it('keeps the finding of an action with only an auth word in its name', () => {
+      for (const name of ['updatePassword', 'verifyPayment', 'refreshFeed', 'regenerateToken']) {
+        expect(check(`export async function ${name}(input) {\n  ${WRITE}\n}`), name).toHaveLength(0)
+        expect(check(`export async function ${name}(input) {\n  ${NEXT_TO_A_PUSH}${WRITE}\n}`), name).toHaveLength(1)
+      }
+    })
+
+    // Setting up an admin SDK checks nothing about who's calling
+    it('does not take setting up an admin client for a check', () => {
+      for (const body of ['const admin = getAdmin()', 'const admin = await getAdminApp()', 'await ensureAdminInitialized()', 'const db = requireAdminClient()', 'initAdmin()']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(1)
+      }
     })
 
     it('does not take a look-up of someone else for one', () => {

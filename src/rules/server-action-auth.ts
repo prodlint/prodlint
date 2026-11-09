@@ -331,20 +331,28 @@ const CACHE_WORDS = /\b(?:cached?|caches|memo)\b/
 
 // A header or a field that says who's calling, and an account's own mail
 const CALLER_WORD = /^(?:auth|authorization|cookie|cookies|token|session|jwt|bearer)$/i
-const ACCOUNT_MAIL = /verif|reset|password|otp|one.?time|welcome|confirm|magic|invit|activat|sign.?in|log.?in|account/i
+const ACCOUNT_MAIL = /\b(?:verif\w*|reset|password|otp|one ?time|welcome|confirm|magic|invit\w*|activat\w*|sign ?in|log ?in|account)\b/
 // What only a server's own value is built from
 const CONFIG_ROOT = /^(?:process|env|\w*[cC]onfig|CONFIG)$/
 const CONSTANT_NAME = /^[A-Z][A-Z0-9_]*$/
 
 // A check of who's calling, or a look-up of them with nothing to look up, that AUTH_PATTERNS doesn't know
 const CHECKS_USER = /^(?:require|assert|ensure|must|check)\w*(?:User|Admin|Owner|Role|Permissions?|Member|Access|LoggedIn|SignedIn)\w*$|^(?:verify|validate)(?:User|Admin|Owner|Role|Permissions?|Access)$|^is(?:LoggedIn|SignedIn|Admin|Owner|Member)$|^has(?:Permission|Role|Access)s?$/
-const LOOKS_UP_USER = /^(?:get|fetch|load|find)(?:Current|LoggedIn|Logged|Authenticated|Authed|Signed|Session|Server|App)?(?:User|Admin|Viewer|Me|Member|Owner)(?:Id|Session|FromServer)?$/
+const LOOKS_UP_USER = /^(?:get|fetch|load|find)(?:Current|LoggedIn|Logged|Authenticated|Authed|Signed|Session|Server|App)?(?:User|Viewer|Me|Member|Owner)(?:Id|Session|FromServer)?$/
+// ...not one that sets up an admin SDK or a client: ensureAdminInitialized(), getAdminApp()
+const SETS_UP = /(?:Init|Initialized|App|Client|Sdk|SDK|Instance|Connection)$/
 
 // A query string isn't what a URL is about
 const wordsOf = (text: string) => nameWords(text.split('?')[0]).join(' ').toLowerCase()
 const saysPublic = (text: string): boolean => {
   const words = wordsOf(text)
   return AUTH_FLOW_WORDS.test(words) || CAPTCHA_WORDS.test(words) || PUBLIC_FORM_WORDS.test(words)
+}
+// What only a public action is called, to leave what it keeps alone too: updatePassword() isn't one
+const PUBLIC_BY_DESIGN = /\b(?:log ?in|log ?out|sign ?in|sign ?out|sign ?up|register|forgot)\b/
+const saysPublicByDesign = (text: string): boolean => {
+  const words = wordsOf(text)
+  return PUBLIC_BY_DESIGN.test(words) || CAPTCHA_WORDS.test(words) || PUBLIC_FORM_WORDS.test(words)
 }
 const saysCaller = (name: string) => nameWords(name).some(word => CALLER_WORD.test(word))
 
@@ -631,7 +639,10 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     const receiver = unwrapExpression(callee.object)
     if (/^push$/i.test(method)) return pushesOut(receiver, call)
     if (!WRITE_METHOD.test(method) || callsModelApi(call)) return false
-    if (/^delete$/i.test(method) && clientOf(receiver)) return false // read as a request, below
+    if (/^delete$/i.test(method) && clientOf(receiver)) {
+      const request = requestOf(call)
+      return !request || !isNoWriteRequest(request) // the caller's token, a login proxy...
+    }
     if (/^(?:set|delete)$/i.test(method) && isRequestPart(receiver)) return false
     if (/^create$/i.test(method) && createsNoRecord(receiver)) return false
     const kind = localKind(receiver)
@@ -653,13 +664,14 @@ function readCalls(program: Program, imports: Map<string, Import>) {
 
   // What a URL, a path or a key shows: its strings, and the names it's built from. A plain parameter
   // filled into a template says nothing about what the URL is for.
-  const shown = (expression: Node | null | undefined, depth = 0, inTemplate = false): string => {
+  // A plain parameter handed to what builds a URL doesn't either, if quiet.
+  const shown = (expression: Node | null | undefined, depth = 0, inTemplate = false, quiet = false): string => {
     if (!expression || depth > MAX_SHOWN) return ''
     const node = unwrapExpression(expression)
-    const part = (n: Node | null | undefined) => shown(n, depth + 1)
+    const part = (n: Node | null | undefined) => shown(n, depth + 1, false, quiet)
     if (node.type === 'StringLiteral') return node.value
     if (node.type === 'TemplateLiteral') {
-      return node.quasis.map((q, i) => `${q.value.raw} ${node.expressions[i] ? shown(node.expressions[i], depth + 1, true) : ''}`).join(' ')
+      return node.quasis.map((q, i) => `${q.value.raw} ${node.expressions[i] ? shown(node.expressions[i], depth + 1, true, quiet) : ''}`).join(' ')
     }
     if (node.type === 'BinaryExpression' || node.type === 'LogicalExpression') return `${part(node.left)} ${part(node.right)}`
     if (node.type === 'ConditionalExpression') return `${part(node.consequent)} ${part(node.alternate)}`
@@ -669,7 +681,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
       return inTemplate && !follow && !CONSTANT_NAME.test(node.name) ? '' : `${node.name} ${follow}`
     }
     if (isMember(node)) return `${part(node.object)} ${propertyName(node)}`
-    if (isCall(node) || node.type === 'NewExpression') return `${lastName(node.callee)} ${node.arguments.map(part).join(' ')}`
+    if (isCall(node) || node.type === 'NewExpression') return `${lastName(node.callee)} ${node.arguments.map(n => shown(n, depth + 1, quiet, quiet)).join(' ')}`
     if (node.type === 'ObjectExpression') {
       return node.properties.map(p => p.type === 'ObjectProperty' ? `${keyName(p.key)} ${part(p.value)}` : p.type === 'SpreadElement' ? part(p.argument) : '').join(' ')
     }
@@ -702,22 +714,23 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   // What's given the caller's token after it's made: headers.set('Authorization', token), or an
   // interceptor, which is what it's for
   let tokenBearers: Set<string> | undefined
-  const bearsToken = (name: string): boolean => {
+  const bearsToken = (name: string, at: Node): boolean => {
     if (!tokenBearers) {
       const bearers = new Set<string>()
+      const add = (n: Node, root: string) => bearers.add(isFunction(topLevelOf(n)) || topLevelOf(n).type === 'ExportNamedDeclaration' || topLevelOf(n).type === 'ExportDefaultDeclaration' ? `${root}@${topLevelOf(n).start}` : root)
       walkAST(program, n => {
         if (n.type === 'AssignmentExpression' && isMember(n.left)) {
-          if (saysCaller(n.left.computed ? shown(n.left.property) : propertyName(n.left)) && !isFixed(n.right)) bearers.add(rootName(n.left))
+          if (saysCaller(n.left.computed ? shown(n.left.property) : propertyName(n.left)) && !isFixed(n.right)) add(n, rootName(n.left))
         } else if (isMember(n) && propertyName(n) === 'interceptors') {
           bearers.add(rootName(n))
         } else if (isCall(n)) {
           const callee = unwrapExpression(n.callee)
-          if (isMember(callee) && /^(?:set|append)$/.test(propertyName(callee)) && saysCaller(shown(n.arguments[0])) && !isFixed(n.arguments[1])) bearers.add(rootName(callee.object))
+          if (isMember(callee) && /^(?:set|append)$/.test(propertyName(callee)) && saysCaller(shown(n.arguments[0])) && !isFixed(n.arguments[1])) add(n, rootName(callee.object))
         }
       })
       tokenBearers = bearers
     }
-    return tokenBearers.has(name)
+    return tokenBearers.has(name) || tokenBearers.has(`${name}@${topLevelOf(at).start}`)
   }
 
   // A field that says who's calling in a way a backend can check. The server's own secret doesn't.
@@ -727,7 +740,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   const forwardsToken = (headers: Node | null | undefined, depth = 0): boolean => {
     if (!headers || depth > MAX_SHOWN) return false
     const node = unwrapExpression(headers)
-    if (node.type === 'Identifier') return bearsToken(node.name) || (!isFixed(node) && (values.get(node.name) ?? [null]).some(value => !value || forwardsToken(value, depth + 1)))
+    if (node.type === 'Identifier') return bearsToken(node.name, node) || (!isFixed(node) && (values.get(node.name) ?? [null]).some(value => !value || forwardsToken(value, depth + 1)))
     if (node.type === 'NewExpression' && lastName(node.callee) === 'Headers') return forwardsToken(node.arguments[0], depth + 1)
     if (node.type !== 'ObjectExpression') return true
     return node.properties.some(p => p.type === 'SpreadElement' ? !isFixed(p.argument) && forwardsToken(p.argument, depth + 1) : namesCaller(p))
@@ -765,6 +778,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   }
 
   const isStore = (receiver: Node): boolean => rootName(receiver) === 'env' || STORE_NAME.test(lastName(receiver))
+  const isCacheApi = (receiver: Node): boolean => /^caches?$/i.test(lastName(receiver))
 
   const readRequest = (call: CallExpression | OptionalCallExpression): HttpRequest | null => {
     const callee = unwrapExpression(call.callee)
@@ -794,7 +808,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
       return { url: first, body: client.axios ? second : propertyOf(read, /^(?:json|body|form)$/), options: read, headers: propertyOf(read, /^headers$/), methods: [], hidden: false, client, receiver }
     }
     // Upper case is an OpenAPI client's: apiClient.POST(url, input). A store and a cache have a put() of their own.
-    if (!HTTP_WRITE_CALL.test(name) || (name === 'put' && (isStore(receiver) || /^caches?$/i.test(lastName(receiver))))) return null
+    if (!HTTP_WRITE_CALL.test(name) || (name === 'put' && (isStore(receiver) || isCacheApi(receiver)))) return null
     return { url: first, body: second, options: third, headers: null, methods: [], hidden: true }
   }
   const requests = new Map<Node, HttpRequest | null>()
@@ -826,6 +840,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     const value = boundOnce(query)
     const text = stringText(value.type === 'TaggedTemplateExpression' ? value.quasi : value)
     if (text !== null) return !MUTATION.test(text)
+    if (!propertyOf(payload, /^variables$/) && !GRAPHQL_URL_WORDS.test(urlWords) && unwrapExpression(query).type !== 'Identifier') return false
     const words = nameWords(lastName(unwrapExpression(query)))
     if (words.some(word => /^mutations?$/i.test(word)) || NAMES_A_MUTATION.test(words[0] ?? '')) return false
     return NAMES_A_READ_QUERY.test(words[0] ?? '') || (words.length > 1 && words.some(word => QUERY_WORD.test(word))) || !fileHasMutation()
@@ -836,13 +851,15 @@ function readCalls(program: Program, imports: Map<string, Import>) {
 
   // A model behind a request. Through a client the file doesn't show, only by the host: that could be
   // the app's own backend.
+  const urlOf = (request: HttpRequest) => shown(request.url, 0, false, true)
+
   const requestsModel = (request: HttpRequest): boolean => {
-    const url = shown(request.url)
+    const url = urlOf(request)
     return MODEL_URL.test(url) || (!request.hidden && (MODEL_WORDS.test(wordsOf(url)) || looksLikeChat(payloadOf(request))))
   }
 
   const isNoWriteRequest = (request: HttpRequest): boolean => {
-    const url = shown(request.url)
+    const url = urlOf(request)
     const words = wordsOf(url)
     const payload = payloadOf(request)
     const to = propertyOf(payload, /^to$/)
@@ -858,7 +875,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
       // The caller's token, however it gets there
       forwardsToken(request.headers) || !!propertyOf(request.options, /^(?:credentials|withCredentials)$/) ||
       forwardsToken(propertyOf(request.client?.config, /^headers$/)) ||
-      (request.receiver?.type === 'Identifier' && bearsToken(request.receiver.name)) ||
+      (request.receiver?.type === 'Identifier' && bearsToken(request.receiver.name, request.receiver)) ||
       (payload?.type === 'ObjectExpression' && payload.properties.some(namesCaller)) ||
       // Mail over HTTP, by the same test as other mail
       (!!to && isFixed(to)) ||
@@ -958,7 +975,9 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     const name = realName(callee.name)
     if (/^send\w*(?:Mail|Email)\w*$/i.test(name)) {
       const [first] = call.arguments
-      const noWrite = ACCOUNT_MAIL.test(name) || AUTH_FLOW_WORDS.test(wordsOf(name)) || (objectsOf(first) ? isNoWriteMail(first) : isFixed(first))
+      // With nothing to go on, the helper picks the address
+      if (!first) return { does: 'sends email', writes: null }
+      const noWrite = ACCOUNT_MAIL.test(wordsOf(name)) || AUTH_FLOW_WORDS.test(wordsOf(name)) || (objectsOf(first) ? isNoWriteMail(first) : isFixed(first))
       return { does: 'sends email', writes: !noWrite }
     }
     const words = nameWords(name)
@@ -986,7 +1005,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
       const noWrite = CACHE_WORDS.test(key) || AUTH_FLOW_WORDS.test(key) || PUBLIC_FORM_WORDS.test(key) || PUBLIC_FORM_WORDS.test(wordsOf(lastName(callee.object)))
       return { does: 'writes to a cloud service', writes: !noWrite }
     }
-    if (isMember(callee) && propertyName(callee) === 'put' && /^caches?$/i.test(lastName(callee.object))) return { does: 'writes to a cloud service', writes: false }
+    if (isMember(callee) && propertyName(callee) === 'put' && isCacheApi(unwrapExpression(callee.object))) return { does: 'writes to a cloud service', writes: false }
     if (callee.type !== 'Identifier') return isMail(node) ? { does: 'sends email', writes: !isNoWriteMail(node.arguments[0]) } : null
     if (!imports.has(callee.name) || values.has(callee.name)) return null
     if (importedFrom(callee.name, /^@vercel\/blob$/) && /^(?:put|del|copy)$/.test(realName(callee.name))) return { does: 'writes to a cloud service', writes: true }
@@ -1007,6 +1026,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   const checksUser = (node: Node): boolean => {
     if (!isCall(node)) return false
     const name = realName(lastName(node.callee))
+    if (SETS_UP.test(name)) return false
     return (CHECKS_USER.test(name) && !nameWords(name).slice(1).some(word => WRITE_VERB.test(word))) || (LOOKS_UP_USER.test(name) && node.arguments.length === 0)
   }
 
@@ -1225,12 +1245,17 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     hasOutward: (skip: Set<Node>) => subtreeContains(program, isOutward, skip),
     // Actions that say they're public by design, or check the user in a way AUTH_PATTERNS doesn't know.
     // What goes out and stays out doesn't count in these, or keep a finding.
-    leftAlone(open: Node[], skip: Set<Node>): Node[] {
+    // An action with only an auth word in its name (updatePassword) still keeps one.
+    leftAlone(open: Node[], skip: Set<Node>): { outward: Node[]; kept: Node[] } {
       const { inline, fileLevel } = inlineActions()
       const anyChecks = subtreeContains(program, checksUser, skip)
-      return (fileLevel ? [...open, ...inline] : inline)
-        .filter(action => saysPublic(actionName(action)) || (anyChecks && [action, ...reach([action], skip)].some(definition => subtreeContains(definition, checksUser, skip))))
-        .flatMap(action => action.type === 'Identifier' && definitions.has(action.name) ? [action, definitions.get(action.name)!] : [action])
+      const actions = fileLevel ? [...open, ...inline] : inline
+      const checks = (action: Node) => anyChecks && [action, ...reach([action], skip)].some(definition => subtreeContains(definition, checksUser, skip))
+      const withValues = (list: Node[]) => list.flatMap(action => action.type === 'Identifier' && definitions.has(action.name) ? [action, definitions.get(action.name)!] : [action])
+      return {
+        outward: withValues(actions.filter(action => saysPublic(actionName(action)) || checks(action))),
+        kept: withValues(actions.filter(action => saysPublicByDesign(actionName(action)) || checks(action))),
+      }
     },
     // What goes out and stays out, read per action. What the file shows comes before what only a name says.
     outwardWrite(open: Node[], alone: Node[], skip: Set<Node>): Effect | null {
@@ -1299,10 +1324,10 @@ export const serverActionAuthRule: Rule = {
     // only then what's kept because it can't be shown to be neither. A route handler is auth-checks'
     // to read, even with the directive.
     const writes = !publicPath && (calls ? calls.hasStatement(skip) || calls.hasWrite(skip) : maybeWrite)
-    const alone = calls?.leftAlone(open, skip) ?? []
-    const outward = writes || !calls || publicPath || saysPublic(file.relativePath) || isApiRoute(file.relativePath) ? null : calls.outwardWrite(open, alone, skip)
+    const alone = calls?.leftAlone(open, skip) ?? { outward: [], kept: [] }
+    const outward = writes || !calls || publicPath || saysPublic(file.relativePath) || isApiRoute(file.relativePath) ? null : calls.outwardWrite(open, alone.outward, skip)
     const modelCalls = writes || (outward && !outward.named) || !calls ? null : calls.modelCalls(open, guests)
-    const keptSkip = alone.length && calls ? new Set<Node>([...skip, ...alone, ...calls.helpersOf([...covered, ...alone])]) : skip
+    const keptSkip = alone.kept.length && calls ? new Set<Node>([...skip, ...alone.kept, ...calls.helpersOf([...covered, ...alone.kept])]) : skip
     const kept = !writes && !outward && !publicPath && maybeWrite && (calls?.hasOutward(keptSkip) ?? false)
     const hasMutation = writes || (!!outward && !modelCalls) || (kept && !modelCalls)
 

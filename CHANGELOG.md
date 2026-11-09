@@ -21,8 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     check, a login or register proxy, a request carrying the caller's token, a POST that `fetch()`
     is told to cache or whose URL says it reads, analytics, a public form (contact, newsletter,
     waitlist, leads), mail to one fixed address, an account's own mail, temp files, logs and caches.
-  - **Left alone:** an action named for one of those, and one that calls something like
-    `requireAdmin()` or a bare `getCurrentUser()`, which `AUTH_PATTERNS` doesn't know.
+  - **Left alone:** an action that calls something like `requireAdmin()` or a bare
+    `getCurrentUser()`, which `AUTH_PATTERNS` doesn't know, and one named for a login, a sign-up or
+    a public form. One with only another auth word in its name, like `updatePassword()`, isn't
+    reported for these new kinds of write, but keeps a finding it had before.
   - **Still only keeps a finding:** a request through an imported client (`api.post()`), since
     most of those read on a sample forward the caller's token, and a helper it doesn't count.
   - **A request to a model's host** (`api.openai.com`, `/chat/completions`) is reported as a model
