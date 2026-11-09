@@ -2611,6 +2611,52 @@ describe('server-action-auth on what goes out and stays out', () => {
       clears(AXIOS, 'const client = axios.create({ headers: { Authorization: input.jwt } })\n  await client.delete(`/contacts/${input.id}`)')
     })
 
+    // So does a PUT or a PATCH: it changes what its URL names
+    it('reads a PUT or a PATCH by the caller\'s token alone', () => {
+      for (const method of ['PUT', 'PATCH', 'put', 'patch', 'Patch']) {
+        const call = method.toLowerCase()
+        for (const url of [
+          '`${process.env.AUTH_SERVICE_URL}/admin/users/${input.id}`',
+          '`${API}/contacts/${input.id}`',
+          '`${API}/leads/${input.id}`',
+          '`${API}/availability/${input.id}`',
+          '`${API}/oauth/apps/${input.id}`',
+          '`${API}/search/saved/${input.id}`',
+          '`${API}/users/${input.id}/preview`',
+          '`${POSTHOG_HOST}/api/persons/${input.id}`',
+          '`${API}/graphql`',
+        ]) {
+          counts('', `await fetch(${url}, { method: '${method}', body: JSON.stringify(input) })`, REQUEST)
+          counts(AXIOS, `await axios.${call}(${url}, input)`, REQUEST)
+          counts("import ky from 'ky'", `await ky.${call}(${url}, { json: input })`, REQUEST)
+          // Out of sight, it only keeps a finding
+          onlyKeeps(API, `await api.${call}(${url}, input)`)
+        }
+        // Nor what it's told to cache, or what it sends
+        for (const rest of [
+          'next: { revalidate: 0 }, body: JSON.stringify(input)',
+          "cache: 'force-cache', body: JSON.stringify(input)",
+          "body: JSON.stringify({ to: 'me@example.com', subject: input.subject })",
+          'body: JSON.stringify({ email: input.email, message: input.message })',
+          "body: JSON.stringify({ source: 'newsletter', email: input.email })",
+        ]) {
+          counts('', `await fetch(${ORDERS}, { method: '${method}', ${rest} })`, REQUEST)
+        }
+        // The caller's token clears it, in the headers or in the body: a password reset sends its own
+        clears('', `await fetch(\`\${API}/contacts/\${input.id}\`, { method: '${method}', headers: { Authorization: input.jwt }, body: JSON.stringify(input) })`)
+        clears(AXIOS, `await axios.${call}(\`\${API}/auth/reset-password\`, { token: input.token, password: input.password })`)
+      }
+      onlyKeeps("import { apiClient } from '@/lib/api'", "await apiClient.PUT('/contacts/{id}', { params: { path: { id: input.id } }, body: input })")
+      // One that could be a PUT is read as one
+      counts('', "await fetch(`${API}/contacts`, { method: input.id ? 'PUT' : 'POST', body: JSON.stringify(input) })", REQUEST)
+      clears('', "await fetch(`${API}/contacts`, { method: 'POST', body: JSON.stringify(input) })")
+      // A public form by PUT is left alone by what its action or its path is called, not by its URL
+      const LEAD = "await fetch(`${process.env.BACKEND_URL}/lead`, { method: 'PUT', body: JSON.stringify({ email: input.email }) })"
+      counts('', LEAD, REQUEST)
+      expect(check(`export async function joinWaitlist(input) {\n  ${LEAD}\n}`)).toHaveLength(0)
+      expect(check(action(LEAD), project, 'lib/lead.ts')).toHaveLength(0)
+    })
+
     // What hands a URL to a helper that builds it isn't what the URL is for
     it('reads a URL helper\'s strings, not its parameters', () => {
       expect(check("export async function run(input, token) {\n  await fetch(buildUrl('/orders', token), { method: 'POST', body: input })\n}")).toHaveLength(1)

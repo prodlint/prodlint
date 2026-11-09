@@ -21,10 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     check, a login or register proxy, a request carrying the caller's token, a POST that `fetch()`
     is told to cache or whose URL says it reads, analytics, a public form (contact, newsletter,
     waitlist, leads), mail to one fixed address, an account's own mail, temp files, logs and caches.
-    A DELETE is read by the caller's token alone: its URL names what it removes, so an
-    `axios.delete()` of `/contacts/:id` is still reported. A `credentials` or
-    `withCredentials` option isn't a token, since a request the server makes has none of the
-    caller's cookies to send.
+    A PUT, a PATCH or a DELETE is read by the caller's token alone: its URL names what it
+    changes, so an `axios.put()` of `/contacts/:id` is reported, and an `axios.delete()` of one
+    still is. A `credentials` or `withCredentials` option isn't a token, since a request the
+    server makes has none of the caller's cookies to send.
   - **Left alone:** an action that calls something like `requireAdmin()` or a bare
     `getCurrentUser()`, which `AUTH_PATTERNS` doesn't know, and one named for a login, a sign-up or
     a public form. A helper that checks something else isn't a check, by how its name ends
