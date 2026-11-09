@@ -2561,7 +2561,7 @@ describe('server-action-auth on what goes out and stays out', () => {
       }
     })
 
-    // delete() was a write before any of this, wherever it is: only what shows it isn't one clears it
+    // delete() was a write before any of this, wherever it is: only the caller's token clears it
     it('keeps a delete() through a client the file shows a write', () => {
       for (const [path, body] of [
         ['app/actions/items.ts', 'await axios.delete(url)'],
@@ -2575,7 +2575,40 @@ describe('server-action-auth on what goes out and stays out', () => {
       }
       expect(check(`${AXIOS}\n${action('await requireAdmin()\n  await axios.delete(url)')}`)).toHaveLength(1)
       clears(AXIOS, 'await axios.delete(url, { headers: { Authorization: input.jwt } })')
-      clears(AXIOS, "await axios.delete(`${API}/auth/session`)")
+      clears(AXIOS, 'await axios.delete(`${API}/auth/session`, { headers: { Authorization: input.jwt } })')
+    })
+
+    // A DELETE's URL names what it removes. The words that say a POST reads, signs in or fills in a
+    // public form don't say a DELETE isn't a write, and neither does a credentials option.
+    it('reads a DELETE by the caller\'s token alone', () => {
+      for (const url of [
+        '`${process.env.AUTH_SERVICE_URL}/admin/users/${input.id}`',
+        '`${API}/contacts/${input.id}`',
+        '`${API}/leads/${input.id}`',
+        '`${API}/availability/${input.id}`',
+        '`${API}/oauth/apps/${input.id}`',
+        '`${API}/search/saved/${input.id}`',
+        '`${API}/users/${input.id}/getItems`',
+        '`${POSTHOG_HOST}/api/persons/${input.id}`',
+        "'https://api.openai.com/v1/files/' + input.id",
+        // Without the caller's token, the backend can't tell whose session to end
+        '`${API}/auth/session`',
+      ]) {
+        const findings = check(`${AXIOS}\n${action(`await axios.delete(${url})`)}`)
+        expect(findings, url).toHaveLength(1)
+        expect(findings[0].message, url).toContain('performs mutations')
+        counts('', `await fetch(${url}, { method: 'DELETE' })`, REQUEST)
+        counts('', `await fetch(${url}, { method: 'DELETE', next: { revalidate: 0 }, body: JSON.stringify({ to: 'me@example.com' }) })`, REQUEST)
+      }
+      for (const options of ['{ withCredentials: true }', '{ withCredentials: false }']) {
+        expect(check(`${AXIOS}\n${action(`await axios.delete(url, ${options})`)}`), options).toHaveLength(1)
+      }
+      counts('', `await fetch(url, { method: 'DELETE', credentials: 'include' })`, REQUEST)
+      // One that could be a DELETE is read as one
+      counts('', "await fetch(`${API}/contacts/${input.id}`, { method: input.remove ? 'DELETE' : 'POST', body: input })", REQUEST)
+      clears('', "await fetch(`${API}/contacts/${input.id}`, { method: 'POST', body: input })")
+      clears('', "await fetch(`${API}/contacts/${input.id}`, { method: 'DELETE', headers: { Authorization: input.jwt } })")
+      clears(AXIOS, 'const client = axios.create({ headers: { Authorization: input.jwt } })\n  await client.delete(`/contacts/${input.id}`)')
     })
 
     // What hands a URL to a helper that builds it isn't what the URL is for
@@ -2806,10 +2839,8 @@ describe('server-action-auth on what goes out and stays out', () => {
         ['', `const h = { 'Content-Type': 'text/plain' }\n  h.Authorization = input.jwt\n  ${POST('url', 'headers: h, body: input')}`],
         ['', `const h = {}\n  h['Authorization'] = input.jwt\n  ${POST('url', 'headers: h, body: input')}`],
         ['', POST('url', 'headers: new Headers({ Authorization: input.jwt }), body: input')],
-        ['', POST('url', `credentials: 'include', body: input`)],
         ['', POST('url', 'body: JSON.stringify({ token: input.jwt, item: input.item })')],
         [AXIOS, 'await axios.post(url, input, { headers: { Authorization: input.jwt } })'],
-        [AXIOS, 'await axios.post(url, input, { withCredentials: true })'],
         [AXIOS, 'await axios.delete(url, { headers: { Authorization: input.jwt } })'],
         [AXIOS, 'const client = axios.create({ headers: { Authorization: input.jwt } })\n  await client.post(url, input)'],
         [AXIOS, 'const client = axios.create({ baseURL: url })\n  client.interceptors.request.use(addToken)\n  await client.post(url, input)'],
@@ -2856,6 +2887,12 @@ describe('server-action-auth on what goes out and stays out', () => {
         [AXIOS, 'await axios.patch(url, { ...input }, { headers: { Accept: "text/plain" } })'],
         [AXIOS, `await axios.post(url, input, { headers: { 'Content-Type': 'application/json' } })`],
         [AXIOS, 'const client = axios.create({ headers: { Authorization: process.env.API_KEY } })\n  await client.post(url, input)'],
+        // A request the server makes has none of the caller's cookies to send, whatever it's told
+        ['', POST('url', `credentials: 'include', body: input`)],
+        ['', POST('url', `credentials: 'same-origin', body: input`)],
+        ['', POST(ORDERS, `credentials: 'omit', body: input`)],
+        [AXIOS, 'await axios.post(url, input, { withCredentials: true })'],
+        [AXIOS, 'const client = axios.create({ baseURL: url, withCredentials: true })\n  await client.post(url, input)'],
       ]) {
         counts(setup, body, REQUEST)
       }
@@ -3361,6 +3398,22 @@ describe('server-action-auth on what goes out and stays out', () => {
     it('does not count one that checks the user in a way the patterns don\'t know', () => {
       for (const body of ['await requireAdmin()', 'await requireUser()', 'await assertOwner(input)', 'await ensureAdmin()', 'await checkPermission(input)', 'await requireRole(input)', 'const user = await getCurrentUser()', 'const user = await getUser()', 'const me = await getLoggedInUser()', 'const id = await getUserId()', 'const user = await fetchUser()', 'const user = await db.requireUser()']) {
         expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(0)
+      }
+      for (const body of ['await checkUserPermissions(input)', 'await requireOrgMembership(input)', 'await checkPostOwnership(input)', 'await checkUserOwnerShip(input)', 'await requireRoles(input)', 'await requireUserId()', 'await checkUserAuth()', 'await requireUserOrRedirect()', 'await mustBeLoggedIn()', 'await checkIsAdmin()', 'await checkUser()', 'await ensureUser()', 'await requireTeamMember(input.team)', 'await checkUserAccess(input.id)', 'await requireAdminStrict()', 'await assertOwnerOnly(input)', 'await checkOwnerOrStaff()', 'await requireRecentAdminAuthentication(input)']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(0)
+      }
+      // What a check is handed says which role, client or caller
+      for (const body of [`await assertUser('SUPER_ADMIN')`, 'await requireUser(supabase)', 'await requireAdminUser(user.id)', 'await ensureAccountOwnedByUser(input.account, userId)', 'await ensureUserIsMember(input.team)']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(0)
+      }
+    })
+
+    // A check of something else, by how its name ends, or making sure someone else exists
+    it('does not take a check of something else for one', () => {
+      for (const body of ['checkUserInput(input)', 'await checkUsername(input.name)', 'checkUserAgent(input.ua)', 'await checkUserExists(input.email)', 'await ensureUserExists(input.email)', 'await checkAccessibility(input.url)', 'await checkMemberLimit(input.team)', 'await ensureUserProfile(input)', 'await checkUsers(input)', 'await ensureUsersTable()', 'await ensureUser(input.authorId)', 'await ensureMembership(input.team, input.user)']) {
+        expect(check(action(`${body}\n  ${WRITE}`)), body).toHaveLength(1)
+        // ...and it keeps a finding it had before
+        expect(check(`${API}\n${action(`${body}\n  ${NEXT_TO_A_PUSH}await api.post('/transfers', input)`)}`), `kept: ${body}`).toHaveLength(1)
       }
     })
 

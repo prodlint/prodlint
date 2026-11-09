@@ -336,8 +336,12 @@ const ACCOUNT_MAIL = /\b(?:verif\w*|reset|password|otp|one ?time|welcome|confirm
 const CONFIG_ROOT = /^(?:process|env|\w*[cC]onfig|CONFIG)$/
 const CONSTANT_NAME = /^[A-Z][A-Z0-9_]*$/
 
-// A check of who's calling, or a look-up of them with nothing to look up, that AUTH_PATTERNS doesn't know
-const CHECKS_USER = /^(?:require|assert|ensure|must|check)\w*(?:User|Admin|Owner|Role|Permissions?|Member|Access|LoggedIn|SignedIn)\w*$|^(?:verify|validate)(?:User|Admin|Owner|Role|Permissions?|Access)$|^is(?:LoggedIn|SignedIn|Admin|Owner|Member)$|^has(?:Permission|Role|Access)s?$/
+// A check of who's calling, or a look-up of them with nothing to look up, that AUTH_PATTERNS doesn't
+// know. By how the name ends: checkUserInput() and checkAccessibility() check something else.
+const CHECKS_USER = /^(?:require|assert|ensure|must|check)\w*(?:User|Admin|Owner(?:[sS]hip)?|Roles?|Permissions?|Member(?:[sS]hip)?|Access|LoggedIn|SignedIn)(?:Auth|Authenticated|Authentication|Authorized|Authorization|Rights|Privileges|Id|Only|Strict|Or(?:Throw|Redirect|Fail|Staff|Super))?$|^(?:verify|validate)(?:User|Admin|Owner|Role|Permissions?|Access)$|^is(?:LoggedIn|SignedIn|Admin|Owner|Member)$|^has(?:Permission|Role|Access)s?$/
+// Making sure a user or a membership exists is about whoever it's handed: ensureUser(authorId).
+// Not one it says the caller is, or owns: ensureAccountOwnedByUser(id, userId).
+const OF_A_USER = /^ensure(?!\w*(?:By|Is)[A-Z])\w*(?:User|Member(?:[sS]hip)?)$/
 const LOOKS_UP_USER = /^(?:get|fetch|load|find)(?:Current|LoggedIn|Logged|Authenticated|Authed|Signed|Session|Server|App)?(?:User|Viewer|Me|Member|Owner)(?:Id|Session|FromServer)?$/
 // ...not one that sets up an admin SDK or a client: ensureAdminInitialized(), getAdminApp()
 const SETS_UP = /(?:Init|Initialized|App|Client|Sdk|SDK|Instance|Connection)$/
@@ -431,6 +435,7 @@ interface HttpRequest {
   options: Node | null | undefined
   headers: Node | null
   methods: Node[] // the strings that say which method, if any do
+  deletes?: boolean // a DELETE, or could be one
   hidden: boolean // through a client the file doesn't show
   client?: { config: Node | null; axios: boolean } | null
   receiver?: Node
@@ -641,7 +646,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     if (!WRITE_METHOD.test(method) || callsModelApi(call)) return false
     if (/^delete$/i.test(method) && clientOf(receiver)) {
       const request = requestOf(call)
-      return !request || !isNoWriteRequest(request) // the caller's token, a login proxy...
+      return !request || !isNoWriteRequest(request) // unless the caller's token goes with it
     }
     if (/^(?:set|delete)$/i.test(method) && isRequestPart(receiver)) return false
     if (/^create$/i.test(method) && createsNoRecord(receiver)) return false
@@ -774,7 +779,8 @@ function readCalls(program: Program, imports: Map<string, Import>) {
   const configured = (options: Node | null, url: Node | null | undefined, hidden: boolean, client?: HttpRequest['client'], receiver?: Node): HttpRequest | null => {
     const methods = methodsIn(options)
     if (methods.length === 0) return null
-    return { url: url ?? propertyOf(options, /^url$/), options, body: propertyOf(options, /^(?:body|data|json|form)$/), headers: propertyOf(options, /^headers$/), methods, hidden, client, receiver }
+    const deletes = methods.some(method => shown(method).toUpperCase().trim() === 'DELETE')
+    return { url: url ?? propertyOf(options, /^url$/), options, body: propertyOf(options, /^(?:body|data|json|form)$/), headers: propertyOf(options, /^headers$/), methods, deletes, hidden, client, receiver }
   }
 
   const isStore = (receiver: Node): boolean => rootName(receiver) === 'env' || STORE_NAME.test(lastName(receiver))
@@ -803,9 +809,10 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     if (name === 'request' && client && first) return configured(boundOnce(first), null, false, client, receiver)
     if (client && (HTTP_WRITE_CALL.test(name) || /^delete$/i.test(name))) {
       // axios has the data second, unless there's none to send. The rest have it in their options.
-      const options = /^delete$/i.test(name) || !client.axios ? second : third
+      const deletes = /^delete$/i.test(name)
+      const options = deletes || !client.axios ? second : third
       const read = options ? boundOnce(options) : null
-      return { url: first, body: client.axios ? second : propertyOf(read, /^(?:json|body|form)$/), options: read, headers: propertyOf(read, /^headers$/), methods: [], hidden: false, client, receiver }
+      return { url: first, body: client.axios ? second : propertyOf(read, /^(?:json|body|form)$/), options: read, headers: propertyOf(read, /^headers$/), methods: [], deletes, hidden: false, client, receiver }
     }
     // Upper case is an OpenAPI client's: apiClient.POST(url, input). A store and a cache have a put() of their own.
     if (!HTTP_WRITE_CALL.test(name) || (name === 'put' && (isStore(receiver) || isCacheApi(receiver)))) return null
@@ -858,7 +865,20 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     return MODEL_URL.test(url) || (!request.hidden && (MODEL_WORDS.test(wordsOf(url)) || looksLikeChat(payloadOf(request))))
   }
 
+  // The caller's token, however it gets there. Not credentials: 'include' or withCredentials: a
+  // request the server makes has none of the caller's cookies to send.
+  const carriesToken = (request: HttpRequest): boolean => {
+    const payload = payloadOf(request)
+    return forwardsToken(request.headers) ||
+      forwardsToken(propertyOf(request.client?.config, /^headers$/)) ||
+      (request.receiver?.type === 'Identifier' && bearsToken(request.receiver.name, request.receiver)) ||
+      (payload?.type === 'ObjectExpression' && payload.properties.some(namesCaller))
+  }
+
   const isNoWriteRequest = (request: HttpRequest): boolean => {
+    // A DELETE removes what its URL names, whatever that's called: the words that say a POST reads,
+    // signs in or fills in a public form say nothing of one. Only the caller's token does.
+    if (request.deletes) return carriesToken(request)
     const url = urlOf(request)
     const words = wordsOf(url)
     const payload = payloadOf(request)
@@ -872,11 +892,7 @@ function readCalls(program: Program, imports: Map<string, Import>) {
       readsGraphQL(payload, words) ||
       // fetch() caches what it's told to, and a write isn't that
       propertyOf(request.options, /^next$/)?.type === 'ObjectExpression' || shown(propertyOf(request.options, /^cache$/)) === 'force-cache' ||
-      // The caller's token, however it gets there
-      forwardsToken(request.headers) || !!propertyOf(request.options, /^(?:credentials|withCredentials)$/) ||
-      forwardsToken(propertyOf(request.client?.config, /^headers$/)) ||
-      (request.receiver?.type === 'Identifier' && bearsToken(request.receiver.name, request.receiver)) ||
-      (payload?.type === 'ObjectExpression' && payload.properties.some(namesCaller)) ||
+      carriesToken(request) ||
       // Mail over HTTP, by the same test as other mail
       (!!to && isFixed(to)) ||
       ANALYTICS_WORDS.test(words) ||
@@ -1022,12 +1038,14 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     return effect
   }
 
-  // mustCreateUser() isn't one
+  // mustCreateUser() isn't one, and neither is ensureUser(authorId): handed someone, it's about them
   const checksUser = (node: Node): boolean => {
     if (!isCall(node)) return false
     const name = realName(lastName(node.callee))
     if (SETS_UP.test(name)) return false
-    return (CHECKS_USER.test(name) && !nameWords(name).slice(1).some(word => WRITE_VERB.test(word))) || (LOOKS_UP_USER.test(name) && node.arguments.length === 0)
+    const handed = node.arguments.length > 0
+    if (CHECKS_USER.test(name)) return !nameWords(name).slice(1).some(word => WRITE_VERB.test(word)) && !(handed && OF_A_USER.test(name))
+    return LOOKS_UP_USER.test(name) && !handed
   }
 
   const isModelCall = (node: Node): boolean => {
