@@ -13,7 +13,7 @@ npx prodlint
 ```
 
 ```
-  prodlint v0.10.7
+  prodlint v0.10.8
   Scanned 6 files · 3 critical · 2 warnings · 1 info
 
 app/api/users/route.ts
@@ -100,7 +100,7 @@ Node.js 18 or later.
 
 ```jsonc
 {
-  "version": "0.10.7",
+  "version": "0.10.8",
   "scannedPath": ".",                      // the path argument
   "filesScanned": 6,
   "scanDurationMs": 39,

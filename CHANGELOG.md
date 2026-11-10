@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-11-10
+
 ### Changed
 - **The README's sample output is prodlint's output.** The block at the top was written by hand:
   its two summary lines disagreed, and it showed text the CLI doesn't print. It's now what the
