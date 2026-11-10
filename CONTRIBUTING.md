@@ -14,9 +14,12 @@ npm run build
 ## Running Tests
 
 ```bash
-npm test          # Run all tests
+npm test          # Run all tests (Node 22.12 or later; build first)
 npm run test:watch # Watch mode
+npx vitest run tests/rules/secrets.test.ts   # One file
 ```
+
+The CLI and MCP server tests run the built files in `dist/`, so run `npm run build` before `npm test`.
 
 ## Adding a New Rule
 
@@ -24,7 +27,8 @@ npm run test:watch # Watch mode
 2. Export a `Rule` object matching the interface in `src/types.ts`
 3. Register it in `src/rules/index.ts`
 4. Add tests in `tests/rules/my-rule.test.ts`
-5. Update `README.md` rule table
+5. Add it to the rule table in `README.md` and bump the counts there (`tests/readme.test.ts` fails if a rule is missing)
+6. Add a line to `CHANGELOG.md` under `[Unreleased]`
 
 ### Rule Template
 
@@ -57,13 +61,13 @@ export const myRule: Rule = {
 
 1. Fork the repo and create a feature branch
 2. Make your changes with tests
-3. Run `npm test` and `npm run build`
+3. Run `npm run build`, `npm test` and the self-scan: `node dist/cli.js . --ignore "tests/**"`
 4. Submit a PR with a clear description
 
 ## Code Style
 
 - TypeScript strict mode
-- No runtime dependencies beyond `fast-glob` and `picocolors`
+- Few runtime dependencies: `@babel/parser` and `@babel/types` (syntax trees), `fast-glob`, `picocolors`, and for the MCP server `@modelcontextprotocol/sdk` and `zod`. Adding one needs a reason
 - Deterministic rules only (no LLM calls, no network requests)
 
 ## Contributor License Agreement

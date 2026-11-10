@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { stat } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { scan } from './scanner.js'
 import { getVersion } from './utils/version.js'
 import { runWebScan, normalizeUrl, isPrivateHost, resolvesToPrivateAddress } from './web-scanner/index.js'
@@ -77,11 +77,12 @@ server.registerTool(
     // Validate the path exists and is a directory
     const resolved = resolve(path)
 
-    // Block access outside the current working directory (case-insensitive on Windows)
+    // Block access outside the current working directory. relative() compares the way the
+    // platform does (case-insensitively on Windows) and is right when the server was started
+    // in a filesystem root, where "cwd + separator" matched nothing and every path was refused.
     const cwd = process.cwd()
-    const normalizedResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved
-    const normalizedCwd = process.platform === 'win32' ? cwd.toLowerCase() : cwd
-    if (normalizedResolved !== normalizedCwd && !normalizedResolved.startsWith(normalizedCwd + sep)) {
+    const fromCwd = relative(cwd, resolved)
+    if (fromCwd === '..' || fromCwd.startsWith('..' + sep) || isAbsolute(fromCwd)) {
       return {
         content: [{ type: 'text' as const, text: `Error: Path must be within the current working directory (${cwd})` }],
         isError: true,
@@ -192,6 +193,7 @@ server.registerTool(
         id: z.string(),
         name: z.string(),
         status: z.enum(['pass', 'fail', 'warn', 'info']),
+        maturity: z.enum(['established', 'emerging']).describe('Whether the check is for a settled standard or a draft'),
         points: z.number(),
         maxPoints: z.number(),
         details: z.string().optional(),
@@ -249,6 +251,7 @@ server.registerTool(
           id: c.id,
           name: c.name,
           status: c.status,
+          maturity: c.maturity,
           points: c.points,
           maxPoints: c.maxPoints,
           details: c.details,

@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { scan } from './scanner.js'
 import { reportPretty, reportJson, reportSummary, reportSarif, reportWebPretty } from './reporter.js'
 import { getVersion } from './utils/version.js'
@@ -68,6 +68,13 @@ async function main() {
 
   const targetPath = positionals[0] ?? '.'
 
+  // A path that isn't there used to scan nothing and report 100/100 with exit 0, which a
+  // mistyped path in CI would pass on.
+  if (!statSync(targetPath, { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(`Not a directory: ${targetPath}`)
+    process.exit(2)
+  }
+
   // Resolve min-severity: --profile overrides --min-severity
   let minSeverity: Severity
   if (values.profile) {
@@ -87,6 +94,7 @@ async function main() {
   })
 
   // Filter findings by minimum severity
+  const found = result.findings.length
   const minRank = SEVERITY_RANK[minSeverity] ?? 1
   result.findings = result.findings.filter(f => SEVERITY_RANK[f.severity] >= minRank)
 
@@ -134,15 +142,16 @@ async function main() {
     }
   }
 
-  // Output
+  // Output. The scores count every finding, so say when some aren't listed.
+  const hidden = found - result.findings.length
   if (values.sarif) {
     console.log(reportSarif(result))
   } else if (values.json) {
     console.log(reportJson(result))
   } else if (values.summary) {
-    console.log(reportSummary(result))
+    console.log(reportSummary(result, { hidden }))
   } else {
-    console.log(reportPretty(result, { quiet: values.quiet as boolean }))
+    console.log(reportPretty(result, { quiet: values.quiet as boolean, hidden }))
   }
 
   if (result.summary.critical > 0) {
@@ -191,10 +200,15 @@ function printHelp() {
     --profile <name>          Preset: startup (criticals only), balanced (warnings+), strict (all)
     --baseline <file>         Only show findings not in baseline file
     --baseline-save <file>    Save current findings as baseline snapshot
-    --quiet                   Suppress badge and summary
-    --web                     Get your site's prodlint score (14 AI agent checks)
+    --quiet                   Leave out the README badge suggestion
+    --web <url>               Score a deployed site for AI-agent readiness (14 checks)
     -h, --help                Show this help message
     -v, --version             Show version
+
+  Exit codes:
+    0  no critical findings among the ones shown
+    1  critical findings
+    2  the scan couldn't run (bad path, flag or URL)
 
   Examples:
     npx prodlint                                  Scan current directory

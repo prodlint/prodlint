@@ -76,12 +76,24 @@ runs:
       shell: bash
       run: node "$GITHUB_ACTION_PATH/scripts/action-comment.cjs" "$RUNNER_TEMP/prodlint-result.json" "$RUNNER_TEMP/prodlint-comment.md"
 
+    # The comment is a courtesy. A token that can't write to pull requests (a workflow without
+    # `pull-requests: write`, or any pull request from a fork) used to fail this step, which
+    # failed the check and skipped "Check results". Now the report goes to the job summary.
     - name: Post PR comment
+      id: post-comment
       if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.scan.outputs.scanned == 'true'
+      continue-on-error: true
       uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
       with:
         header: prodlint
         path: ${{ runner.temp }}/prodlint-comment.md
+
+    - name: Put the report in the job summary when it couldn't be posted
+      if: steps.post-comment.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::warning title=prodlint::Couldn't post the pull request comment, so the report is in the job summary. Posting needs 'pull-requests: write' in the workflow's permissions, and a pull request from a fork never has it."
+        cat "$RUNNER_TEMP/prodlint-comment.md" >> "$GITHUB_STEP_SUMMARY"
 
     # Fails on critical findings (unless fail-on-critical is false), on a score below
     # threshold, and when the scan didn't produce a result.

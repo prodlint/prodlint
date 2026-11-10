@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reportSummary, reportSarif, reportJson } from '../src/reporter.js'
+import { reportSummary, reportSarif, reportJson, reportPretty } from '../src/reporter.js'
 import type { ScanResult, Finding } from '../src/types.js'
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
@@ -89,6 +89,67 @@ describe('reportSummary', () => {
     expect(output).toContain('Critical one')
     expect(output).toContain('Warning one')
     expect(output).not.toContain('Info should not show')
+  })
+
+  // Findings come in file order. Three warnings in the first file used to fill the list and
+  // leave every critical finding out of a summary that said FAIL.
+  it('lists critical findings before warnings', () => {
+    const findings = [
+      makeFinding({ severity: 'warning', file: 'a.ts', message: 'Warning A' }),
+      makeFinding({ severity: 'warning', file: 'a.ts', message: 'Warning B' }),
+      makeFinding({ severity: 'warning', file: 'a.ts', message: 'Warning C' }),
+      makeFinding({ severity: 'critical', file: 'z.ts', message: 'Critical first' }),
+      makeFinding({ severity: 'critical', file: 'z.ts', message: 'Critical second' }),
+    ]
+    const output = reportSummary(makeResult({ findings, summary: { critical: 2, warning: 3, info: 0 } }))
+    const order = ['Critical first', 'Critical second', 'Warning A'].map(m => output.indexOf(m))
+    expect(order.every(i => i >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(output).not.toContain('Warning B')
+  })
+
+  it('counts in the singular and the plural', () => {
+    const one = reportSummary(makeResult({ findings: [makeFinding()], summary: { critical: 0, warning: 1, info: 0 } }))
+    expect(one).toContain('1 warning ')
+    const two = reportSummary(makeResult({ findings: [makeFinding(), makeFinding()], summary: { critical: 0, warning: 2, info: 0 } }))
+    expect(two).toContain('2 warnings')
+  })
+
+  it('says when findings were filtered out', () => {
+    const output = reportSummary(makeResult({ overallScore: 80 }), { hidden: 4 })
+    expect(output).toContain('4 not shown')
+    expect(output).not.toContain('no issues')
+  })
+})
+
+describe('reportPretty', () => {
+  it('counts in the singular and the plural', () => {
+    const output = reportPretty(makeResult({
+      filesScanned: 1,
+      findings: [makeFinding()],
+      summary: { critical: 0, warning: 1, info: 0 },
+      categoryScores: [
+        { category: 'security', score: 98, findingCount: 1 },
+        { category: 'reliability', score: 100, findingCount: 0 },
+        { category: 'performance', score: 96, findingCount: 2 },
+        { category: 'ai-quality', score: 100, findingCount: 0 },
+      ],
+    }))
+    expect(output).toContain('Scanned 1 file ')
+    expect(output).toContain('1 warning')
+    expect(output).not.toContain('1 warnings')
+    expect(output).toContain('(1 issue)')
+    expect(output).toContain('(2 issues)')
+    expect(output).toContain('(0 issues)')
+  })
+
+  it("doesn't call a filtered scan clean", () => {
+    // --profile startup on a project with only warnings: nothing to list, scores below 100
+    const filtered = reportPretty(makeResult({ overallScore: 91 }), { hidden: 12 })
+    expect(filtered).not.toContain('No issues found')
+    expect(filtered).toContain('12 findings not shown')
+
+    expect(reportPretty(makeResult())).toContain('No issues found!')
   })
 })
 
