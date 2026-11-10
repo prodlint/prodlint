@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-10
+
 ### Added
 - **`server-action-auth` counts what goes out and stays out as a write.** A POST with no auth
   check was reported only when something unrelated in its file, like an `array.push()`, got the
