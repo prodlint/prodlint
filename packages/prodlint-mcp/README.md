@@ -74,7 +74,7 @@ Scores a deployed site out of 100 on 14 AI-agent readiness checks: robots.txt ru
 |-------|------|---|
 | `url` | string, required | The site to score, with or without `https://` |
 
-Returns `url`, `domain`, `score`, `grade`, `summary` (`passed`, `failed`, `warnings`, `totalChecks`) and `checks`, each with `id`, `name`, `status` (`pass`, `fail`, `warn` or `info`), `points`, `maxPoints` and `details`.
+Returns `url`, `domain`, `score`, `grade`, `summary` (`passed`, `failed`, `warnings`, `totalChecks`) and `checks`, each with `id`, `name`, `status` (`pass`, `fail`, `warn` or `info`), `maturity` (`established` for a settled standard, `emerging` for a draft), `points`, `maxPoints` and `details`.
 
 ## If it doesn't work
 
