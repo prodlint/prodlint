@@ -120,6 +120,14 @@ Per-category scoring with three protections against false-positive damage:
 
 Overall = **weighted** average: security 40%, reliability 30%, performance 15%, ai-quality 15%. Floor at 0.
 
+### README and AGENTS.md
+
+The README's sample output is what prodlint prints for `tests/fixtures/readme-demo`, and its
+rule tables list the registry's rules in order. `tests/readme.test.ts` checks both, so a change
+to a message, a score or the rule list fails there until the README is updated: paste the
+output of `node dist/cli.js tests/fixtures/readme-demo`. The fixture has no server action on
+purpose, to keep it clear of the rule that changes most.
+
 ### Finding Interface (v0.5.0)
 
 `Finding` has an optional `fix?: string` field for actionable remediation hints. All 52 rules include fix suggestions (v0.9.1).
@@ -236,10 +244,13 @@ Every credential is OIDC — there is no `NPM_TOKEN` and no stored registry JWT:
   SHA256-verified before it runs; bump `MCP_PUBLISHER_VERSION`/`MCP_PUBLISHER_SHA256`
   together (get the digest from the release asset's `digest` field).
 
-**Still manual — the website repo only** (prodlint-website):
+**Still manual — the website repo only** (prodlint-website). If that repo's `CLAUDE.md` has a
+"Version bump" section, follow it: the site then reads the version from the `prodlint` package
+it depends on, and the bump is `npm install prodlint@<version>`, `npm run verify`,
+`npm run build`. If it has no such section yet, the version is still typed into four files:
 `app/components/animated-terminal.tsx`, `app/layout.tsx` JSON-LD `softwareVersion`,
 `public/.well-known/agent-card.json` → `"version"`, and the sample output in
-`app/blog/data.ts`. Note: `app/mcp/page.tsx` no longer carries a version string.
+`app/blog/data.ts`.
 
 **Pushing the website repo doesn't deploy it**: Vercel's Hobby plan refuses push-triggered builds
 from a private org repo, so its commit status goes red. Deployment in that repo's `CLAUDE.md`
