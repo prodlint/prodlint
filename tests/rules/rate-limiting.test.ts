@@ -73,6 +73,23 @@ export async function proxy(request: NextRequest) {
     expect(await findings({ ...route, 'proxy.ts': proxy })).toHaveLength(0)
   })
 
+  // Through the scanner: a rate-limiting package covers the package that lists it
+  it("skips the routes of a package with a rate-limiting package, and no other's", async () => {
+    const route = 'export async function POST() {\n  return Response.json({ ok: true })\n}\n'
+    const files = async (rootDependencies: Record<string, string>) => (await scanFiles({
+      'package.json': JSON.stringify({ name: 'app', dependencies: rootDependencies }),
+      'app/api/chat/route.ts': route,
+      'examples/limited/package.json': JSON.stringify({ name: 'limited', dependencies: { '@upstash/ratelimit': '^2.0.0' } }),
+      'examples/limited/app/api/chat/route.ts': route,
+      'examples/plain/package.json': JSON.stringify({ name: 'plain' }),
+      'examples/plain/app/api/chat/route.ts': route,
+    })).findings.filter(f => f.ruleId === 'rate-limiting').map(f => f.file)
+
+    expect(await files({})).toEqual(['app/api/chat/route.ts', 'examples/plain/app/api/chat/route.ts'])
+    // The root's reaches the packages below it
+    expect(await files({ 'express-rate-limit': '^7.0.0' })).toEqual([])
+  })
+
   it('exempts health routes', () => {
     const file = makeFile(
       `export async function GET() { return Response.json({ ok: true }) }`,

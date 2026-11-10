@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **A `package.json` anywhere in the scanned tree changed how every file was judged.** Framework
+  detection merged the dependencies of every nested `package.json`, in a workspace or not. So an
+  example app, a test fixture or an `e2e/` folder that listed an ORM lowered every
+  `sql-injection` finding in the project from critical to warning, and could turn a failing
+  exit code into a passing one. Its Prisma, Supabase, Lodash or Mongoose hid `hallucinated-api`
+  findings everywhere, its Prisma turned `missing-transaction` on for the whole tree, and its
+  rate-limiting package switched `rate-limiting` off for every API route. A file is now judged
+  by the frameworks of its own package: the nearest `package.json` above it, with the packages
+  above that one, its workspace, and the scanned packages it depends on.
+  - **A declared workspace still shares everything**, as before: npm's and yarn's `workspaces`
+    or a `pnpm-workspace.yaml`, now read below the scanned root too.
+  - **A dependency on a package in the scan counts**, so where no workspace is declared, an app
+    that queries through its `db` package is still judged with that package's ORM. It's a
+    dependency when the app's `package.json` lists it (`"@acme/db": "workspace:*"`,
+    `file:../db`), or when the app's files import it by a scoped name (`@acme/db`), as a
+    hoisted workspace allows. An unscoped import isn't followed: `app`, `server` and `utils`
+    are also what folders are called.
+  - **A rate-limiting package covers the package that lists it**, by the same rule. A rate
+    limit in the root `middleware.ts` or `proxy.ts` still covers every package.
+  - **Unchanged:** what `hallucinated-imports` accepts. Any `package.json` in the tree still
+    declares a package for every file.
+  - **Scan results may change** for a repo with a `package.json` outside its workspace, or with
+    several and no workspace: an example, a fixture, a `client/` next to a `server/`. There,
+    `sql-injection` findings in code whose package lists no ORM go back to critical, the
+    `hallucinated-api` and `rate-limiting` findings the other package was hiding come back, and
+    `missing-transaction` stops reporting in packages that don't list Prisma. A single package,
+    or a workspace scanned from its root, scans as it did. A scan that starts below a
+    workspace's root sees no workspace: there, a sibling's ORM counts only through a listed
+    dependency or a scoped import.
+  - **For API users:** `ProjectContext.detectedFrameworks` and `hasRateLimiting` are now the
+    root package's. `ProjectContext.packageScopes` is new, with the exported `PackageScope`
+    type; a context built without it is read as before.
+
 ## [0.10.8] - 2026-11-10
 
 ### Changed

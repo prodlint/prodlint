@@ -1,6 +1,7 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 import { isFrameworkSafeMethod } from '../utils/frameworks.js'
+import { packageOf } from '../utils/package-scope.js'
 
 // DOM token lists (`classList`, `relList`) and nodes (`el.contains(other)`) do have
 // .contains(), and no .includes(). These are their usual shapes: a token list, a React ref,
@@ -41,7 +42,7 @@ export const hallucinatedApiRule: Rule = {
 
   check(file: FileContext, project: ProjectContext): Finding[] {
     const findings: Finding[] = []
-    const frameworks = project.detectedFrameworks
+    const frameworks = packageOf(project, file.relativePath).frameworks
 
     for (let i = 0; i < file.lines.length; i++) {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
@@ -50,7 +51,7 @@ export const hallucinatedApiRule: Rule = {
       for (const { pattern, fix, methodName, isValid } of HALLUCINATED_APIS) {
         const match = pattern.exec(line)
         if (match) {
-          // Skip if this method is legitimate for a detected framework
+          // Skip if this method is legitimate for a framework of the file's package
           if (isFrameworkSafeMethod(methodName, frameworks)) continue
           // ...or for the object it's called on (DOM .contains())
           if (isValid?.(line.slice(0, match.index), line.slice(match.index + match[0].length))) continue

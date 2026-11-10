@@ -11,18 +11,20 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
   const root = resolve(options.path)
 
   const filePaths = await walkFiles(root, options.ignore)
-  const project = await buildProjectContext(root, filePaths)
 
   const findings: Finding[] = []
   const allFiles: FileContext[] = []
 
-  // Phase 1: Per-file rules
+  // Every file is read before the project's context is built: the scanned packages a
+  // package's files import are part of what that package is judged by
   for (const relativePath of filePaths) {
     const file = await readFileContext(root, relativePath)
-    if (!file) continue
+    if (file) allFiles.push(file)
+  }
+  const project = await buildProjectContext(root, filePaths, allFiles)
 
-    allFiles.push(file)
-
+  // Phase 1: Per-file rules
+  for (const file of allFiles) {
     for (const rule of rules) {
       if (
         rule.fileExtensions.length > 0 &&

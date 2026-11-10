@@ -2,6 +2,7 @@ import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 import { walkAST, isTaggedTemplateSql } from '../utils/ast.js'
 import { SQL_SAFE_ORMS } from '../utils/frameworks.js'
+import { packageOf } from '../utils/package-scope.js'
 import type { TaggedTemplateExpression } from '@babel/types'
 
 // Patterns for unsafe SQL construction
@@ -50,8 +51,8 @@ export const sqlInjectionRule: Rule = {
       }
     }
 
-    // Determine if project uses a safe ORM
-    const usesORM = [...project.detectedFrameworks].some(f => SQL_SAFE_ORMS.has(f))
+    // Does the file's package use a safe ORM? An ORM in an example app next to it says nothing
+    const usesORM = [...packageOf(project, file.relativePath).frameworks].some(f => SQL_SAFE_ORMS.has(f))
 
     for (let i = 0; i < file.lines.length; i++) {
       if (isCommentLine(file.lines, i, file.commentMap)) continue
@@ -70,7 +71,7 @@ export const sqlInjectionRule: Rule = {
 
       for (const { pattern, message } of SQL_INJECTION_PATTERNS) {
         if (pattern.test(line)) {
-          // If project uses an ORM that parameterizes by default, downgrade to warning
+          // If the package uses an ORM that parameterizes by default, downgrade to warning
           const severity = usesORM ? 'warning' as const : 'critical' as const
 
           findings.push({
