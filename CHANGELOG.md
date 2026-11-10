@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **The README's sample output is prodlint's output.** The block at the top was written by hand:
+  its two summary lines disagreed, and it showed text the CLI doesn't print. It's now what the
+  CLI prints for a six-file demo app kept in `tests/fixtures/readme-demo`, and a test fails when
+  the two differ. The same test checks the rule tables against the rule registry.
+- **README corrections.** `env-exposure` and `phantom-dependency` were described as different
+  rules, and several other rows said more or less than the rule does. Syntax-tree analysis covers
+  15 rules, not 14. New: exit codes, the shape of `--json`, `permissions` in the workflow
+  example, and MCP setup for VS Code.
+- **`prodlint-mcp`'s README on npm** covers setup for each client and what both tools take and
+  return.
+- **The MCP registry description** mentions the site-score tool as well as the code scan. The
+  registry picks it up at the next release.
+- **`AGENTS.md`** marked `--profile balanced` as the default. The default shows every finding.
+  It also has a section for agents working on this repository.
+- Dropped the `eslint-alternative` npm keyword: prodlint runs next to ESLint, not instead of it.
+
 ## [0.10.7] - 2026-11-10
 
 ### Added
