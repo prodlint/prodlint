@@ -351,15 +351,27 @@ const SETS_UP = /(?:Init|Initialized|App|Client|Sdk|SDK|Instance|Connection)$/
 
 // A query string isn't what a URL is about
 const wordsOf = (text: string) => nameWords(text.split('?')[0]).join(' ').toLowerCase()
-const saysPublic = (text: string): boolean => {
+const saysAuthFlow = (text: string): boolean => {
   const words = wordsOf(text)
-  return AUTH_FLOW_WORDS.test(words) || CAPTCHA_WORDS.test(words) || PUBLIC_FORM_WORDS.test(words)
+  return AUTH_FLOW_WORDS.test(words) || CAPTCHA_WORDS.test(words)
 }
+const saysPublicForm = (text: string): boolean => PUBLIC_FORM_WORDS.test(wordsOf(text))
+const saysPublic = (text: string): boolean => saysAuthFlow(text) || saysPublicForm(text)
 // What only a public action is called, to leave what it keeps alone too: updatePassword() isn't one
 const PUBLIC_BY_DESIGN = /\b(?:log ?in|log ?out|sign ?in|sign ?out|sign ?up|register|forgot)\b/
 const saysPublicByDesign = (text: string): boolean => {
   const words = wordsOf(text)
   return PUBLIC_BY_DESIGN.test(words) || CAPTCHA_WORDS.test(words) || PUBLIC_FORM_WORDS.test(words)
+}
+// What's done to a lead or a message once it's in is the back office's work, not the form's:
+// updateFeedback(), deleteLead(). A verb that's rarely anything else counts wherever it is in a name
+// (bulkDeleteContacts, leadArchive). One that's as often a noun counts only where a name starts:
+// setLeadStatus, not createContactLink. Not create, save, add or upsert: a form does those too.
+const MANAGES = /^(?:update|edit|delete|remove|destroy|archive|unarchive|restore|approve|reject|convert|assign|reassign|unassign|modify|patch|merge|promote|demote|trash|purge|anonymize|rename|reopen|deactivate|reactivate|revoke|wipe|ban|suppress)$/i
+const STARTS_MANAGING = /^(?:set|mark|move|change|toggle|bulk|batch|import|tag|untag|link|unlink|clear|reset|close|publish|unpublish|block|unblock)$/i
+const manages = (name: string): boolean => {
+  const words = nameWords(name)
+  return STARTS_MANAGING.test(words[0] ?? '') || words.some(word => MANAGES.test(word))
 }
 const saysCaller = (name: string) => nameWords(name).some(word => CALLER_WORD.test(word))
 
@@ -1266,32 +1278,46 @@ function readCalls(program: Program, imports: Map<string, Import>) {
     // Actions that say they're public by design, or check the user in a way AUTH_PATTERNS doesn't know.
     // What goes out and stays out doesn't count in these, or keep a finding.
     // An action with only an auth word in its name (updatePassword) still keeps one.
-    leftAlone(open: Node[], skip: Set<Node>): { outward: Node[]; kept: Node[] } {
+    // One that only a form word leaves alone, in its name or the file's path, is still read for what
+    // the file shows it write if its name says back office: updateFeedback()'s PUT with no token.
+    // What a helper is called, and what's only kept, stay as the form word has them.
+    leftAlone(open: Node[], skip: Set<Node>, formPath: boolean): { outward: Node[]; kept: Node[]; shown: Node[] } {
       const { inline, fileLevel } = inlineActions()
       const anyChecks = subtreeContains(program, checksUser, skip)
       const actions = fileLevel ? [...open, ...inline] : inline
       const checks = (action: Node) => anyChecks && [action, ...reach([action], skip)].some(definition => subtreeContains(definition, checksUser, skip))
       const withValues = (list: Node[]) => list.flatMap(action => action.type === 'Identifier' && definitions.has(action.name) ? [action, definitions.get(action.name)!] : [action])
+      const byFormAlone = (action: Node) => {
+        const name = actionName(action)
+        return (formPath || saysPublicForm(name)) && !saysAuthFlow(name) && !checks(action)
+      }
       return {
-        outward: withValues(actions.filter(action => saysPublic(actionName(action)) || checks(action))),
+        outward: withValues(actions.filter(action => formPath || saysPublic(actionName(action)) || checks(action))),
         kept: withValues(actions.filter(action => saysPublicByDesign(actionName(action)) || checks(action))),
+        shown: actions.filter(action => byFormAlone(action) && manages(actionName(action))),
       }
     },
-    // What goes out and stays out, read per action. What the file shows comes before what only a name says.
-    outwardWrite(open: Node[], alone: Node[], skip: Set<Node>): Effect | null {
+    // What goes out and stays out, read per action. What the file shows comes before what only a name
+    // says, and it's all that counts in the actions that are only read for it.
+    outwardWrite(open: Node[], alone: Node[], shownOnly: Node[], skip: Set<Node>): Effect | null {
       if (!subtreeContains(program, node => !!effectOf(node)?.writes, skip)) return null
       const { inline, fileLevel } = inlineActions()
       const actions = (fileLevel ? [...open, ...inline] : inline).filter(action => !alone.includes(action))
-      let found: Effect | null = null
-      for (const definition of [...actions, ...reach(actions, skip)]) {
-        const shows = subtreeContains(definition, node => {
-          const effect = effectOf(node)
-          if (effect?.writes) found = found && !effect.named ? effect : found ?? effect
-          return !!effect?.writes && !effect.named
-        }, skip)
-        if (shows) break
+      const firstIn = (from: Node[], named: boolean): Effect | null => {
+        let found: Effect | null = null
+        for (const definition of [...from, ...reach(from, skip)]) {
+          const shows = subtreeContains(definition, node => {
+            const effect = effectOf(node)
+            if (!effect?.writes || (effect.named && !named)) return false
+            found = found && !effect.named ? effect : found ?? effect
+            return !effect.named
+          }, skip)
+          if (shows) break
+        }
+        return found
       }
-      return found
+      const first = firstIn(actions, true)
+      return first && !first.named ? first : firstIn(shownOnly, false) ?? first
     },
     // Which actions call a model with no limit: 'open' ones could check the user, 'public' ones can't
     modelCalls(open: Node[], guests: Node[]): 'open' | 'public' | null {
@@ -1344,8 +1370,8 @@ export const serverActionAuthRule: Rule = {
     // only then what's kept because it can't be shown to be neither. A route handler is auth-checks'
     // to read, even with the directive.
     const writes = !publicPath && (calls ? calls.hasStatement(skip) || calls.hasWrite(skip) : maybeWrite)
-    const alone = calls?.leftAlone(open, skip) ?? { outward: [], kept: [] }
-    const outward = writes || !calls || publicPath || saysPublic(file.relativePath) || isApiRoute(file.relativePath) ? null : calls.outwardWrite(open, alone.outward, skip)
+    const alone = calls?.leftAlone(open, skip, saysPublicForm(file.relativePath)) ?? { outward: [], kept: [], shown: [] }
+    const outward = writes || !calls || publicPath || saysAuthFlow(file.relativePath) || isApiRoute(file.relativePath) ? null : calls.outwardWrite(open, alone.outward, alone.shown, skip)
     const modelCalls = writes || (outward && !outward.named) || !calls ? null : calls.modelCalls(open, guests)
     const keptSkip = alone.kept.length && calls ? new Set<Node>([...skip, ...alone.kept, ...calls.helpersOf([...covered, ...alone.kept])]) : skip
     const kept = !writes && !outward && !publicPath && maybeWrite && (calls?.hasOutward(keptSkip) ?? false)

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`server-action-auth` took `updateFeedback()` for a public form.** A form word in an action's
+  name (contact, newsletter, waitlist, feedback, leads) leaves it alone, and 0.10.7 applied that
+  to what goes out and stays out whatever the name's verb. So an `updateFeedback(id, …)` that
+  sends a PUT with no token went unreported. An action whose name says it manages what the form
+  took in is now read for what the file shows it write: a request, a file write, mail or a cloud
+  write, with no token from the caller and no check before it. The verbs are `update`, `edit`,
+  `delete`, `remove`, `archive`, `approve`, `assign` and the like anywhere in the name
+  (`bulkDeleteLeads()`, `leadDelete()`), and `set`, `mark`, `move`, `change`, `toggle`, `bulk`,
+  `import` and a few more where the name starts (`setLeadStatus()`, not `createContactLink()`).
+  A form word in the file's path is read the same way, action by action: in
+  `app/leads/actions.ts`, `submit()` is left alone and `remove()` isn't.
+  - **Unchanged:** `createLead()`, `saveContact()` and `addSubscriber()`, since a form does those
+    too. A helper named like a write and a finding that's only kept are also left as the form
+    word has them: on a sample, reading those too reported more actions that do check the user,
+    in ways the rule can't see, than ones that don't. A POST such an action sends to a URL with a
+    form word still reads as the form's, and a file whose path has `contact`, `subscribe`,
+    `newsletter` or `feedback` in it is still left out whole.
+  - **Scan results may change:** a few more findings.
+
 ## [0.10.7] - 2026-11-10
 
 ### Added

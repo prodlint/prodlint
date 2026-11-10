@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { serverActionAuthRule } from '../../src/rules/server-action-auth.js'
+import type { Finding } from '../../src/types.js'
 import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
@@ -3009,6 +3010,134 @@ describe('server-action-auth on what goes out and stays out', () => {
     it('does not count mail sent over HTTP to one fixed address', () => {
       clears('', POST("'https://api.resend.com/emails'", `body: JSON.stringify({ to: 'me@example.com', subject: input })`))
       counts('', POST("'https://api.resend.com/emails'", 'body: JSON.stringify({ to: input.to, subject: input })'), REQUEST)
+    })
+  })
+
+  // What's done to a lead or a message once it's in is the back office's work, not the form's
+  describe('with an action named for managing what a form took in', () => {
+    const PUT = "await fetch(`https://api.example.com/items/${id}`, { method: 'PUT', body: JSON.stringify(input) })"
+    const named = (name: string, body = PUT) => `export async function ${name}(id, input) { ${body} }`
+    const GUARD = "import { requireAdmin } from '@/lib/guards'"
+    const reports = (findings: Finding[], message: RegExp, why: string) => {
+      expect(findings, why).toHaveLength(1)
+      expect(findings[0].message, why).toMatch(message)
+      expect(findings[0].message, why).toContain('anyone can call this action')
+    }
+
+    it('still reads what the file shows it write', () => {
+      for (const name of ['updateFeedback', 'editContact', 'deleteLead', 'removeSubscriber', 'archiveInquiry', 'approveRegistration', 'convertLead', 'assignLead']) {
+        reports(check(named(name)), REQUEST, name)
+        reports(check(`export const ${name} = async (id, input) => { ${PUT} }`), REQUEST, name)
+        reports(check(`const ${name} = async (id, input) => { ${PUT} }\nexport { ${name} }`), REQUEST, name)
+      }
+    })
+
+    it('reads a verb that is rarely anything else wherever it is in the name', () => {
+      for (const name of ['bulkDeleteLeads', 'leadDelete', 'handleContactUpdate', 'softRemoveSubscriber']) {
+        reports(check(named(name)), REQUEST, name)
+      }
+    })
+
+    it('reads a verb that is as often a noun only where the name starts', () => {
+      for (const name of ['setLeadStatus', 'markFeedbackRead', 'moveLeadStage', 'changeLeadStatus', 'toggleSubscriber', 'importContacts', 'tagContact', 'clearWaitlist']) {
+        reports(check(named(name)), REQUEST, name)
+      }
+      for (const name of ['createContactLink', 'saveFeedbackTag', 'addSubscriberBatch', 'sendLeadReset']) {
+        expect(check(named(name)), name).toHaveLength(0)
+      }
+    })
+
+    it('knows each of these verbs', () => {
+      const capital = (word: string) => word[0].toUpperCase() + word.slice(1)
+      for (const verb of ['update', 'edit', 'delete', 'remove', 'destroy', 'archive', 'unarchive', 'restore', 'approve', 'reject', 'convert', 'assign', 'reassign', 'unassign', 'modify', 'patch', 'merge', 'promote', 'demote', 'trash', 'purge', 'anonymize', 'rename', 'reopen', 'deactivate', 'reactivate', 'revoke', 'wipe', 'ban', 'suppress']) {
+        reports(check(named(`${verb}Lead`)), REQUEST, verb)
+        reports(check(named(`lead${capital(verb)}`)), REQUEST, verb)
+      }
+      for (const verb of ['set', 'mark', 'move', 'change', 'toggle', 'bulk', 'batch', 'import', 'tag', 'untag', 'link', 'unlink', 'clear', 'reset', 'close', 'publish', 'unpublish', 'block', 'unblock']) {
+        reports(check(named(`${verb}Lead`)), REQUEST, verb)
+        expect(check(named(`lead${capital(verb)}`)), verb).toHaveLength(0)
+      }
+    })
+
+    it('leaves alone one named for taking the form in', () => {
+      for (const name of ['createLead', 'saveContact', 'addSubscriber', 'upsertLead', 'submitFeedback']) {
+        expect(check(named(name)), name).toHaveLength(0)
+      }
+    })
+
+    it('reads a word whole', () => {
+      // Updates and Edited start like a verb, Credit and bookmark end like one
+      for (const name of ['subscribeToUpdates', 'submitEditedContact', 'saveLeadCredit', 'marketingContact', 'bookmarkLead']) {
+        expect(check(named(name)), name).toHaveLength(0)
+      }
+    })
+
+    it('counts a file write, mail or a cloud write there too', () => {
+      reports(check(`${FS}\n${named('deleteContact', 'await fs.unlink(`./uploads/${id}.pdf`)')}`), FILES, 'unlink')
+      expect(check(`${FS}\n${named('saveContact', 'await fs.writeFile(`./uploads/${id}.pdf`, input)')}`)).toHaveLength(0)
+      const resend = "import { Resend } from 'resend'\nconst resend = new Resend(process.env.RESEND_API_KEY)"
+      reports(check(`${resend}\n${named('updateLead', "await resend.emails.send({ from: 'a@example.com', to: input.to, subject: 'Your order', html: input.html })")}`), MAIL, 'mail')
+      const s3 = "import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3'\nconst s3 = new S3Client({})"
+      reports(check(`${s3}\n${named('removeSubscriber', "await s3.send(new DeleteObjectCommand({ Bucket: 'uploads', Key: id }))")}`), CLOUD, 'command')
+    })
+
+    it('does not count what carries the caller\'s token, or comes after a check', () => {
+      expect(check(named('updateLead', "await fetch(url, { method: 'PUT', headers: { Authorization: input.jwt }, body: input })"))).toHaveLength(0)
+      expect(check(`${GUARD}\n${named('updateLead', `await requireAdmin()\n  ${PUT}`)}`)).toHaveLength(0)
+    })
+
+    it('leaves one with an auth word in its name alone, as before', () => {
+      expect(check(named('verifyContactUpdate'))).toHaveLength(0)
+      expect(check(named('verifyAndRemove'), project, 'app/leads/actions.ts')).toHaveLength(0)
+    })
+
+    it('leaves what a helper is called, and what is only kept, as the form word has them', () => {
+      const helper = "import { deleteOrder } from '@/lib/orders'"
+      expect(check(`${helper}\n${named('deleteLead', 'await deleteOrder(id)')}`)).toHaveLength(0)
+      expect(check(`${helper}\n${named('deleteItem', 'await deleteOrder(id)')}`)).toHaveLength(1)
+      const hidden = `${NEXT_TO_A_PUSH}await api.put('/items/' + id, input)`
+      expect(check(`${API}\n${named('updateLead', hidden)}`)).toHaveLength(0)
+      expect(check(`${API}\n${named('updateItem', hidden)}`)).toHaveLength(1)
+    })
+
+    it('reads it through the file\'s own helpers', () => {
+      const send = `async function send(id, input) { ${PUT} }\n`
+      const takesIn = 'export async function sendFeedback(id, input) { return send(id, input) }'
+      expect(check(`${send}${takesIn}`)).toHaveLength(0)
+      reports(check(`${send}${takesIn}\nexport async function updateFeedback(id, input) { return send(id, input) }`), REQUEST, 'helper')
+    })
+
+    it('puts what the file shows before what only a name says', () => {
+      const other = "import { createOrder } from '@/lib/orders'\nexport async function run(input) { await createOrder(input) }\n"
+      reports(check(`${other}${named('updateLead')}`), REQUEST, 'shown')
+      reports(check(`${other}${named('createLead')}`), /^Server action calls createOrder\(\), which reads as a write,/, 'named')
+    })
+
+    it('reads a path that says a form action by action', () => {
+      for (const path of ['app/leads/actions.ts', 'app/waitlist/actions.ts', 'app/enquiries/actions.ts']) {
+        const at = (code: string) => check(code, project, path)
+        expect(at(named('submit', POST(ORDERS))), path).toHaveLength(0)
+        expect(at(`export default async function (input) { ${POST(ORDERS)} }`), path).toHaveLength(0)
+        for (const name of ['updateStatus', 'remove', 'setOwner']) {
+          reports(at(named(name)), REQUEST, `${path} ${name}`)
+        }
+        reports(at(`${named('submit', POST(ORDERS))}\n${named('remove')}`), REQUEST, path)
+        expect(at(`${GUARD}\n${named('remove', `await requireAdmin()\n  ${PUT}`)}`), path).toHaveLength(0)
+      }
+    })
+
+    it('leaves a path that says signing in to the whole file, as before', () => {
+      expect(check(named('remove'), project, 'app/auth/actions.ts')).toHaveLength(0)
+      expect(check(named('updateLead'), project, 'lib/auth/actions.ts')).toHaveLength(0)
+    })
+
+    it('reads an inline action the same way', () => {
+      const page = (name: string) => `export default function Page() {\n  async function ${name}(id, input) {\n    'use server'\n    ${PUT}\n  }\n  return null\n}\n`
+      const at = (name: string, relativePath: string) => serverActionAuthRule.check(makeFile(page(name), { relativePath }), project)
+      reports(at('deleteLead', 'app/items/page.tsx'), REQUEST, 'by its name')
+      expect(at('sendFeedback', 'app/items/page.tsx')).toHaveLength(0)
+      reports(at('remove', 'app/leads/page.tsx'), REQUEST, 'by its path')
+      expect(at('submit', 'app/leads/page.tsx')).toHaveLength(0)
     })
   })
 
