@@ -28,6 +28,20 @@ function run(args: string, cwd?: string): { stdout: string; status: number } {
   }
 }
 
+describe('the path argument', () => {
+  // It used to scan nothing and report 100/100 with exit code 0
+  it('exits 2 when the path does not exist', () => {
+    const { stdout, status } = run(`${join(tmpdir(), `prodlint-no-such-dir-${Date.now()}`)} --json`)
+    expect(status).toBe(2)
+    expect(stdout).toBe('')
+  })
+
+  it('exits 2 when the path is a file', () => {
+    const { status } = run('package.json')
+    expect(status).toBe(2)
+  })
+})
+
 describe('--summary flag', () => {
   it('outputs PASS for clean project', () => {
     // Create a tiny clean project

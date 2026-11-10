@@ -33,7 +33,16 @@ function groupByFile(findings: Finding[]): Map<string, Finding[]> {
 
 export interface ReportOptions {
   quiet?: boolean
+  /** Findings left out by --min-severity, --profile or --baseline. The scores still count them */
+  hidden?: number
 }
+
+/** "1 warning", "2 warnings" */
+function count(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 } as const
 
 export function reportPretty(result: ScanResult, opts: ReportOptions = {}): string {
   const lines: string[] = []
@@ -43,9 +52,9 @@ export function reportPretty(result: ScanResult, opts: ReportOptions = {}): stri
   lines.push(pc.bold('  prodlint') + pc.dim(` v${result.version}`))
 
   // Summary counts in header
-  const headerParts: string[] = [`Scanned ${result.filesScanned} files`]
+  const headerParts: string[] = [`Scanned ${count(result.filesScanned, 'file')}`]
   if (critical > 0) headerParts.push(`${critical} critical`)
-  if (warning > 0) headerParts.push(`${warning} warnings`)
+  if (warning > 0) headerParts.push(count(warning, 'warning'))
   if (info > 0) headerParts.push(`${info} info`)
   lines.push(pc.dim(`  ${headerParts.join(' · ')}`))
   lines.push('')
@@ -74,7 +83,7 @@ export function reportPretty(result: ScanResult, opts: ReportOptions = {}): stri
   for (const cs of result.categoryScores) {
     const color = scoreColor(cs.score)
     const bar = renderBar(cs.score)
-    lines.push(`  ${cs.category.padEnd(14)} ${color(String(cs.score).padStart(3))} ${bar}  ${pc.dim(`(${cs.findingCount} issues)`)}`)
+    lines.push(`  ${cs.category.padEnd(14)} ${color(String(cs.score).padStart(3))} ${bar}  ${pc.dim(`(${count(cs.findingCount, 'issue')})`)}`)
   }
   lines.push('')
 
@@ -86,12 +95,17 @@ export function reportPretty(result: ScanResult, opts: ReportOptions = {}): stri
   // Summary line
   const summaryParts: string[] = []
   if (critical > 0) summaryParts.push(pc.red(`${critical} critical`))
-  if (warning > 0) summaryParts.push(pc.yellow(`${warning} warnings`))
+  if (warning > 0) summaryParts.push(pc.yellow(count(warning, 'warning')))
   if (info > 0) summaryParts.push(pc.blue(`${info} info`))
+  const hidden = opts.hidden ?? 0
   if (summaryParts.length === 0) {
-    lines.push(pc.green('  No issues found!'))
+    // "No issues found!" under scores below 100 would read as a clean scan
+    lines.push(hidden > 0 ? pc.dim('  Nothing to show at this level') : pc.green('  No issues found!'))
   } else {
     lines.push(`  ${summaryParts.join(pc.dim(' · '))}`)
+  }
+  if (hidden > 0) {
+    lines.push(pc.dim(`  ${count(hidden, 'finding')} not shown (--min-severity, --profile or --baseline); the scores count them`))
   }
   lines.push('')
 
@@ -111,7 +125,7 @@ export function reportJson(result: ScanResult): string {
   return JSON.stringify(result, null, 2)
 }
 
-export function reportSummary(result: ScanResult): string {
+export function reportSummary(result: ScanResult, opts: ReportOptions = {}): string {
   const lines: string[] = []
   const { critical, warning, info } = result.summary
   const hasCritical = critical > 0
@@ -121,8 +135,10 @@ export function reportSummary(result: ScanResult): string {
 
   const countParts: string[] = []
   if (critical > 0) countParts.push(`${critical} critical`)
-  if (warning > 0) countParts.push(`${warning} warning`)
+  if (warning > 0) countParts.push(count(warning, 'warning'))
   if (info > 0) countParts.push(`${info} info`)
+  const hidden = opts.hidden ?? 0
+  if (hidden > 0) countParts.push(`${hidden} not shown`)
 
   lines.push('')
   if (countParts.length > 0) {
@@ -131,10 +147,13 @@ export function reportSummary(result: ScanResult): string {
     lines.push(`  ${verdict} ${pc.dim('—')} no issues ${pc.dim(`(score: ${scorePart})`)}`)
   }
 
-  // Show top 3 critical/warning findings
+  // The three that matter most: criticals before warnings, then in the order they were found
   const topFindings = result.findings
     .filter(f => f.severity === 'critical' || f.severity === 'warning')
+    .map((f, index) => ({ f, index }))
+    .sort((a, b) => SEVERITY_ORDER[a.f.severity] - SEVERITY_ORDER[b.f.severity] || a.index - b.index)
     .slice(0, 3)
+    .map(({ f }) => f)
 
   if (topFindings.length > 0) {
     for (let i = 0; i < topFindings.length; i++) {
@@ -282,11 +301,14 @@ export function reportWebPretty(result: WebScanResult): string {
   const order: Record<string, number> = { fail: 0, warn: 1, info: 2, pass: 3 }
   const sorted = [...result.checks].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
 
+  // Wide enough for the longest name, so the points line up
+  const nameWidth = Math.max(28, ...sorted.map(check => check.name.length))
+
   for (const check of sorted) {
     const color = STATUS_ICONS[check.status] ?? pc.dim
     const symbol = STATUS_SYMBOLS[check.status] ?? '?'
     const pts = `${check.points}/${check.maxPoints}`
-    lines.push(`  ${color(symbol)} ${check.name.padEnd(28)} ${pc.dim(pts.padStart(6))}  ${pc.dim(check.details || '')}`)
+    lines.push(`  ${color(symbol)} ${check.name.padEnd(nameWidth)} ${pc.dim(pts.padStart(6))}  ${pc.dim(check.details || '')}`)
   }
 
   lines.push('')

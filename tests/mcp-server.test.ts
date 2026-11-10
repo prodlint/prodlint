@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, parse } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const MCP_PATH = join(__dirname, '..', 'dist', 'mcp.js')
@@ -264,10 +264,41 @@ describe('MCP server over stdio (dist/mcp.js)', () => {
     expect(textOf(res)).toContain('must be within the current working directory')
   })
 
+  it('refuses a sibling directory whose name starts with its own', async () => {
+    const res = await client.callTool('scan', { path: `${project}-other` })
+    expect(res.result?.isError).toBe(true)
+    expect(textOf(res)).toContain('must be within the current working directory')
+  })
+
   it('reports a missing directory instead of scanning it', async () => {
     const res = await client.callTool('scan', { path: join(project, 'missing') })
     expect(res.result?.isError).toBe(true)
     expect(textOf(res)).toContain('does not exist')
+  })
+
+  // Started in a filesystem root (some clients do), every path used to be refused: the check
+  // looked for "<cwd><separator>" at the start of the path, and a root already ends in one.
+  it('accepts paths when started in a filesystem root', async () => {
+    const rooted = spawn(process.execPath, [MCP_PATH], { cwd: parse(project).root, stdio: 'pipe' })
+    try {
+      const rootClient = new StdioClient(rooted)
+      await rootClient.request('initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'prodlint-test', version: '0.0.0' },
+      })
+      rootClient.notify('notifications/initialized')
+      const res = await rootClient.callTool('scan', { path: project })
+      expect(res.result?.isError).toBeFalsy()
+      expect(textOf(res)).toContain('## Production Readiness:')
+    } finally {
+      if (rooted.exitCode === null && rooted.signalCode === null) {
+        await new Promise(resolve => {
+          rooted.once('exit', resolve)
+          rooted.kill()
+        })
+      }
+    }
   })
 
   it('refuses private and loopback hosts in scan-web', async () => {
