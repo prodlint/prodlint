@@ -90,7 +90,7 @@ Node.js 18 or later.
 |------|---------|
 | `0` | No critical findings among the ones shown |
 | `1` | At least one critical finding |
-| `2` | The scan couldn't run: an unknown `--profile`, a missing baseline file, a bad `--web` URL, or an unexpected error |
+| `2` | The scan couldn't run: a bad flag, file or URL, or an unexpected error |
 
 `--min-severity`, `--profile` and `--baseline` decide which findings are shown, and the exit code follows what's shown. Scores are always worked out from every finding.
 
