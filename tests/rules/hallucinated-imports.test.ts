@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { hallucinatedImportsRule } from '../../src/rules/hallucinated-imports.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 describe('hallucinated-imports rule', () => {
   it('flags import of undeclared package', () => {
@@ -176,5 +176,17 @@ describe('hallucinated-imports rule', () => {
     })
     const findings = hallucinatedImportsRule.check(file, project)
     expect(findings).toHaveLength(0)
+  })
+
+  // Through the scanner. Frameworks follow a file's own package, but what a file may import
+  // is still whatever any package.json in the tree declares
+  it("accepts what a nested package's own package.json declares, workspace or not", async () => {
+    const findings = (await scanFiles({
+      'package.json': JSON.stringify({ name: 'tool' }),
+      'packages/launcher/package.json': JSON.stringify({ name: 'tool-launcher', dependencies: { tool: '^1.0.0', execa: '^9.0.0' } }),
+      'packages/launcher/bin.mjs': "import { run } from 'tool'\nimport { execa } from 'execa'\nimport { nope } from 'not-declared'\n\nrun(execa, nope)\n",
+    })).findings.filter(f => f.ruleId === 'hallucinated-imports')
+
+    expect(findings.map(f => f.message)).toEqual(['Package "not-declared" is imported but not in package.json'])
   })
 })

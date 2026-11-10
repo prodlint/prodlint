@@ -3,9 +3,9 @@ import { readFile, stat, realpath } from 'node:fs/promises'
 import { resolve, extname, basename, sep } from 'node:path'
 import { buildCommentMap, blankOut } from './patterns.js'
 import { parseFile } from './ast.js'
-import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
+import { readPackages, hasRateLimitPackage } from './package-scope.js'
 import { matcherExcludesApi, matcherExcludesPages } from './middleware-matcher.js'
-import type { FileContext, ProjectContext } from '../types.js'
+import type { FileContext, PackageScope, ProjectContext } from '../types.js'
 
 const DEFAULT_IGNORES = [
   '**/node_modules/**',
@@ -123,184 +123,37 @@ export async function readFileContext(
 }
 
 /**
- * Detect workspace patterns from package.json and pnpm-workspace.yaml.
+ * @param files every scanned path
+ * @param sources the scanned files once read: what they import links one package to another
  */
-async function getWorkspacePatterns(root: string, packageJson: Record<string, unknown> | null): Promise<string[]> {
-  const patterns: string[] = []
-
-  // npm/yarn: "workspaces" field in package.json
-  if (packageJson) {
-    const workspaces = packageJson.workspaces
-    if (Array.isArray(workspaces)) {
-      patterns.push(...workspaces)
-    } else if (workspaces && typeof workspaces === 'object' && Array.isArray((workspaces as any).packages)) {
-      patterns.push(...(workspaces as any).packages)
-    }
-  }
-
-  // pnpm: pnpm-workspace.yaml
-  try {
-    const raw = await readFile(resolve(root, 'pnpm-workspace.yaml'), 'utf-8')
-    let inPackages = false
-    for (const line of raw.split(/\r?\n/)) {
-      const trimmed = line.trim()
-      if (/^packages\s*:/.test(trimmed)) {
-        inPackages = true
-        continue
-      }
-      if (inPackages) {
-        if (/^-\s+/.test(trimmed)) {
-          const glob = trimmed.replace(/^-\s+/, '').replace(/^['"]|['"]$/g, '')
-          if (glob) patterns.push(glob)
-        } else if (trimmed && !trimmed.startsWith('#')) {
-          break // new top-level key
-        }
-      }
-    }
-  } catch {
-    // No pnpm-workspace.yaml
-  }
-
-  return patterns
-}
-
-/**
- * Collect workspace package names and their dependencies.
- */
-async function collectWorkspaceDependencies(root: string, patterns: string[]): Promise<Set<string>> {
-  const deps = new Set<string>()
-  const globPatterns = patterns.map(p => `${p}/package.json`)
-
-  try {
-    const pkgFiles = await fg(globPatterns, {
-      cwd: root,
-      absolute: false,
-      ignore: ['**/node_modules/**'],
-    })
-
-    for (const pkgFile of pkgFiles) {
-      try {
-        const raw = await readFile(resolve(root, pkgFile), 'utf-8')
-        const pkg = JSON.parse(raw)
-        // Add workspace package name (importable by other workspace packages)
-        if (pkg.name) deps.add(pkg.name)
-        // Merge dependencies
-        for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
-          if (pkg[key] && typeof pkg[key] === 'object') {
-            for (const dep of Object.keys(pkg[key])) {
-              deps.add(dep)
-            }
-          }
-        }
-      } catch {
-        // Invalid package.json in workspace
-      }
-    }
-  } catch {
-    // Glob failed
-  }
-
-  return deps
-}
-
-/**
- * Collect dependencies from nested package.json files that aren't part of a declared
- * workspace — e.g. a plain `packages/` directory with no `workspaces` field. Those
- * manifests still declare real dependencies, so imports inside them aren't hallucinated.
- */
-async function collectNestedPackageDependencies(root: string): Promise<Set<string>> {
-  const deps = new Set<string>()
-
-  try {
-    const pkgFiles = await fg(['**/package.json'], {
-      cwd: root,
-      absolute: false,
-      ignore: ['**/node_modules/**', 'package.json'],
-    })
-
-    for (const pkgFile of pkgFiles) {
-      try {
-        const raw = await readFile(resolve(root, pkgFile), 'utf-8')
-        const pkg = JSON.parse(raw)
-        if (pkg.name) deps.add(pkg.name)
-        for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
-          if (pkg[key] && typeof pkg[key] === 'object') {
-            for (const dep of Object.keys(pkg[key])) {
-              deps.add(dep)
-            }
-          }
-        }
-      } catch {
-        // Invalid nested package.json
-      }
-    }
-  } catch {
-    // Glob failed
-  }
-
-  return deps
-}
-
 export async function buildProjectContext(
   root: string,
   files: string[],
+  sources: FileContext[] = [],
 ): Promise<ProjectContext> {
   let packageJson: Record<string, unknown> | null = null
-  let declaredDependencies = new Set<string>()
   let tsconfigPaths = new Set<string>()
   let hasAuthMiddleware = false
   let authMiddlewareExcludesApi = false
   let authMiddlewareExcludesPages = false
-  let hasRateLimiting = false
   let rateLimitsInMiddleware = false
-  const detectedFrameworks = new Set<string>()
   let gitignoreContent: string | null = null
   let envInGitignore = false
 
   // Read package.json
   try {
-    const raw = await readFile(resolve(root, 'package.json'), 'utf-8')
-    packageJson = JSON.parse(raw)
-    const deps = {
-      ...(packageJson?.dependencies as Record<string, string> ?? {}),
-      ...(packageJson?.devDependencies as Record<string, string> ?? {}),
-      ...(packageJson?.peerDependencies as Record<string, string> ?? {}),
-    }
-    declaredDependencies = new Set(Object.keys(deps))
+    packageJson = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf-8'))
   } catch {
     // No package.json or invalid JSON
   }
 
-  // Monorepo workspace support: merge workspace deps
-  const workspacePatterns = await getWorkspacePatterns(root, packageJson)
-  if (workspacePatterns.length > 0) {
-    const workspaceDeps = await collectWorkspaceDependencies(root, workspacePatterns)
-    for (const dep of workspaceDeps) {
-      declaredDependencies.add(dep)
-    }
-  }
-
-  // Nested packages that aren't declared workspaces still declare real dependencies.
-  const nestedDeps = await collectNestedPackageDependencies(root)
-  for (const dep of nestedDeps) {
-    declaredDependencies.add(dep)
-  }
-
-  // Detect frameworks from dependencies (after workspace merging)
-  for (const dep of declaredDependencies) {
-    const framework = DEPENDENCY_TO_FRAMEWORK[dep]
-    if (framework) {
-      detectedFrameworks.add(framework)
-    }
-  }
-
-  // Check for centralized rate limiting
-  for (const framework of detectedFrameworks) {
-    if (RATE_LIMIT_FRAMEWORKS.has(framework)) {
-      hasRateLimiting = true
-      break
-    }
-  }
+  // Every package.json in the tree. Any of them can declare what a file imports, but a
+  // file's frameworks are its own package's: an example app's ORM says nothing about the
+  // code next to it. The root's are the project's
+  const { declaredDependencies, frameworks } = await readPackages(root, sources)
+  const detectedFrameworks = frameworks.get('') ?? new Set<string>()
+  // Centralized rate limiting: a package for it, or the middleware below
+  let rateLimitMiddleware = false
 
   // Read tsconfig.json to extract path aliases
   try {
@@ -335,7 +188,7 @@ export async function buildProjectContext(
       authMiddlewareExcludesPages = (!hasAuthMiddleware || authMiddlewareExcludesPages) && matcherExcludesPages(content, name)
       hasAuthMiddleware = true
     }
-    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) hasRateLimiting = true
+    if (MIDDLEWARE_RATE_LIMIT_PATTERNS.some(p => p.test(content))) rateLimitMiddleware = true
     // A matcher that keeps it on /api never runs on an action's POST
     if (MIDDLEWARE_RATE_LIMIT_CALL.test(blankOut(content, true)) && !matcherExcludesPages(content, name)) rateLimitsInMiddleware = true
   }
@@ -351,6 +204,14 @@ export async function buildProjectContext(
     // No .gitignore
   }
 
+  // One scope per set of frameworks: the packages of a workspace share theirs
+  const scopes = new Map<Set<string>, PackageScope>()
+  const packageScopes = new Map<string, PackageScope>()
+  for (const [folder, own] of frameworks) {
+    if (!scopes.has(own)) scopes.set(own, { frameworks: own, hasRateLimiting: rateLimitMiddleware || hasRateLimitPackage(own) })
+    packageScopes.set(folder, scopes.get(own)!)
+  }
+
   return {
     root,
     packageJson,
@@ -359,9 +220,10 @@ export async function buildProjectContext(
     hasAuthMiddleware,
     authMiddlewareExcludesApi,
     authMiddlewareExcludesPages,
-    hasRateLimiting,
+    hasRateLimiting: rateLimitMiddleware || hasRateLimitPackage(detectedFrameworks),
     rateLimitsInMiddleware,
     detectedFrameworks,
+    packageScopes,
     gitignoreContent,
     envInGitignore,
     allFiles: files,

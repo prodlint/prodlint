@@ -23,9 +23,18 @@ export interface FileContext {
   ast?: import('@babel/parser').ParseResult<import('@babel/types').File> | null
 }
 
+/** What the files of one package are judged by */
+export interface PackageScope {
+  /** Frameworks its package.json declares, with those of the packages above it, its workspace and the scanned packages it depends on */
+  frameworks: Set<string>
+  /** A rate-limiting package among those, or a rate limit in the root middleware */
+  hasRateLimiting: boolean
+}
+
 export interface ProjectContext {
   root: string
   packageJson: Record<string, unknown> | null
+  /** Every dependency and package name a package.json in the scanned tree declares */
   declaredDependencies: Set<string>
   tsconfigPaths: Set<string>
   hasAuthMiddleware: boolean
@@ -33,10 +42,17 @@ export interface ProjectContext {
   authMiddlewareExcludesApi?: boolean
   /** The auth middleware's `config.matcher` keeps it on /api, so it doesn't cover the pages server actions are posted to */
   authMiddlewareExcludesPages?: boolean
+  /** The root package's. A rule judging a file asks `packageOf()` for the file's own */
   hasRateLimiting: boolean
   /** middleware.ts or proxy.ts calls a rate limit and its matcher reaches pages, not just a rate-limiting package in the dependencies */
   rateLimitsInMiddleware?: boolean
+  /** The root package's. A rule judging a file asks `packageOf()` for the file's own */
   detectedFrameworks: Set<string>
+  /**
+   * Every package.json's folder in the scanned tree ('' for the root, 'apps/web'), with what
+   * its files are judged by. Read it through `packageOf()`, which finds a file's package
+   */
+  packageScopes?: Map<string, PackageScope>
   gitignoreContent: string | null
   envInGitignore: boolean
   allFiles: string[]

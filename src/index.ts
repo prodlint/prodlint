@@ -12,6 +12,7 @@ export type {
   Finding,
   FileContext,
   ProjectContext,
+  PackageScope,
   ScanResult,
   ScanOptions,
   Severity,

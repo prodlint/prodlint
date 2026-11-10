@@ -209,7 +209,7 @@ Each rule has a page with an example and a fix at `https://prodlint.com/rules/<r
 prodlint avoids common false positives:
 
 - **AST parsing** — Babel-based analysis for 15 rules (imports, catch blocks, redirects, redirects in try/catch, SSRF, path traversal, JWT, HTML injection, hydration, transactions, env leaks, loops, SQL, route handlers, server actions) with regex fallback
-- **Monorepo support** — npm/yarn/pnpm workspace dependencies resolved automatically
+- **Monorepo support** — npm/yarn/pnpm workspace dependencies resolved automatically. A file is judged by the frameworks of its own package, so an example app or a test fixture with its own `package.json` doesn't change the findings in the code next to it
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
 - **Middleware detection** — Clerk, NextAuth, Supabase middleware (`middleware.ts`, or `proxy.ts` on Next.js 16) detected, matcher included — auth findings it covers drop to info
 - **Block comment awareness** — patterns inside `/* */` are ignored

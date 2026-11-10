@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { hallucinatedApiRule } from '../../src/rules/hallucinated-api.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
 const project = makeProject()
 
@@ -105,5 +105,18 @@ describe('hallucinated-api rule', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0].fix).toMatch(/arrays and strings/)
     expect(findings[0].fix).toMatch(/classList/)
+  })
+
+  // Through the scanner: a framework's methods are real in the package that has the framework
+  it("skips a framework's methods only in the package that lists it", async () => {
+    const code = "export const tagged = (items, tag) => items.contains('tags', [tag])\n"
+    const files = (await scanFiles({
+      'package.json': JSON.stringify({ name: 'app' }),
+      'src/tags.ts': code,
+      'examples/notes/package.json': JSON.stringify({ name: 'notes', dependencies: { '@supabase/supabase-js': '^2.0.0' } }),
+      'examples/notes/tags.ts': code,
+    })).findings.filter(f => f.ruleId === 'hallucinated-api').map(f => f.file)
+
+    expect(files).toEqual(['src/tags.ts'])
   })
 })

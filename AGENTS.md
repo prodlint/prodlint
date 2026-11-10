@@ -92,7 +92,7 @@ const key = "sk_test_example_for_docs"
 prodlint detects and adjusts for:
 - **ORMs**: Prisma, Drizzle, Supabase, Knex, Sequelize (prevents false SQL injection flags)
 - **Auth middleware**: Clerk, NextAuth, Supabase in `middleware.ts` or Next.js 16's `proxy.ts` (downgrades auth findings when middleware exists)
-- **Monorepos**: npm, yarn, pnpm workspaces (resolves cross-package dependencies)
+- **Monorepos**: npm, yarn, pnpm workspaces (resolves cross-package dependencies). A file is judged by the frameworks of its own package: the nearest `package.json` above it, the ones above that, its workspace, and the scanned packages it depends on (listed in its `package.json`, or imported by a scoped name like `@acme/db`). An example app or a test fixture with its own `package.json` doesn't change the findings in the code next to it
 - **Path aliases**: `@/`, `~/`, tsconfig paths (not flagged as hallucinated imports)
 - **Route exemptions**: auth, webhook, health, cron routes exempt from auth/rate-limit checks
 
@@ -183,6 +183,7 @@ src/
     ast.ts          → Babel AST parsing and walking
     patterns.ts     → Regex helpers, comment handling, suppression
     frameworks.ts   → ORM/middleware detection and whitelists
+    package-scope.ts → Which package a file is in, and that package's frameworks
   web-scanner/     → Site Score (--web and the scan-web tool)
 tests/
   rules/            → One test file per rule

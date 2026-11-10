@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { missingTransactionRule } from '../../src/rules/missing-transaction.js'
-import { makeFile, makeProject } from '../helpers.js'
+import { makeFile, makeProject, scanFiles } from '../helpers.js'
 
+// Prisma among the frameworks of the file's package, which is the project's own here
 const prismaProject = makeProject({
-  declaredDependencies: new Set(['@prisma/client']),
+  detectedFrameworks: new Set(['prisma']),
 })
 
 describe('missing-transaction rule', () => {
@@ -98,5 +99,24 @@ describe('missing-transaction rule', () => {
     ].join('\n'), { relativePath: 'src/auth.ts', withAst: false })
     const findings = missingTransactionRule.check(file, prismaProject)
     expect(findings).toHaveLength(1)
+  })
+
+  // Through the scanner: Prisma in some other package.json of the tree doesn't turn the rule on
+  it('runs only in a package that has Prisma', async () => {
+    const code = [
+      'export async function signUp(prisma, name) {',
+      '  await prisma.user.create({ data: { name } })',
+      '  await prisma.log.create({ data: { action: "signup" } })',
+      '}',
+      '',
+    ].join('\n')
+    const files = (await scanFiles({
+      'package.json': JSON.stringify({ name: 'app' }),
+      'src/auth.ts': code,
+      'services/accounts/package.json': JSON.stringify({ name: 'accounts', dependencies: { '@prisma/client': '^6.0.0' } }),
+      'services/accounts/auth.ts': code,
+    })).findings.filter(f => f.ruleId === 'missing-transaction').map(f => f.file)
+
+    expect(files).toEqual(['services/accounts/auth.ts'])
   })
 })

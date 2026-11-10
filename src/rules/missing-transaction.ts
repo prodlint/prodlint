@@ -1,6 +1,7 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine, isTestFile, isScriptFile } from '../utils/patterns.js'
 import { walkAST } from '../utils/ast.js'
+import { packageOf } from '../utils/package-scope.js'
 import type { Node, CallExpression, MemberExpression } from '@babel/types'
 
 const PRISMA_WRITE_OPS = /prisma\.\w+\.(?:create|update|delete|upsert|createMany|updateMany|deleteMany)\s*\(/
@@ -23,8 +24,8 @@ export const missingTransactionRule: Rule = {
     if (isTestFile(file.relativePath)) return []
     if (isScriptFile(file.relativePath)) return []
 
-    // Only check if Prisma is detected in the project
-    if (!project.declaredDependencies.has('@prisma/client') && !project.detectedFrameworks.has('prisma')) return []
+    // Only check if Prisma is a dependency of the file's package
+    if (!packageOf(project, file.relativePath).frameworks.has('prisma')) return []
 
     // AST path: group writes by enclosing function scope
     if (file.ast) {

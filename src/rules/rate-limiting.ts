@@ -1,5 +1,6 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isApiRoute } from '../utils/patterns.js'
+import { packageOf } from '../utils/package-scope.js'
 
 // Patterns indicating rate limiting is present
 const RATE_LIMIT_PATTERNS = [
@@ -37,8 +38,8 @@ export const rateLimitingRule: Rule = {
   check(file: FileContext, project: ProjectContext): Finding[] {
     if (!isApiRoute(file.relativePath)) return []
 
-    // If project has centralized rate limiting, skip all per-route checks
-    if (project.hasRateLimiting) return []
+    // If the route's package has centralized rate limiting, skip all per-route checks
+    if (packageOf(project, file.relativePath).hasRateLimiting) return []
 
     // Check if route is exempt
     for (const pattern of EXEMPT_PATTERNS) {
