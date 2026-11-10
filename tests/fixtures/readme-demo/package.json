@@ -1,0 +1,12 @@
+{
+  "name": "vibe-app",
+  "private": true,
+  "description": "The small app the README's sample output comes from. It is wrong on purpose.",
+  "dependencies": {
+    "@prisma/client": "6.19.0",
+    "next": "16.4.3",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "stripe": "18.0.0"
+  }
+}
