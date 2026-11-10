@@ -139,15 +139,31 @@ Overall = **weighted** average: security 40%, reliability 30%, performance 15%, 
 
 ### Exit Codes
 
-- 0: no critical findings
+- 0: no critical findings among the ones shown
 - 1: critical findings exist
-- 2: runtime error
+- 2: the scan couldn't run: the path isn't a directory, an unknown `--profile`, a missing baseline file, a bad `--web` URL, or a runtime error
+
+`--min-severity`, `--profile` and `--baseline` filter what's listed, never the scores. The pretty
+and `--summary` reports say how many findings were left out (`ReportOptions.hidden`), so a
+filtered scan with nothing to list doesn't read as "No issues found!".
+
+### Site Score (`src/web-scanner/`)
+
+`--web` and the MCP `scan-web` tool run the 14 checks in `checks.ts`: 95 points, 62 of them for
+established standards, scaled to 100. prodlint.com runs a copy of that file
+(`app/lib/web-scanner/checks.ts` in the website repo), and the two have to stay the same apart
+from module syntax and the result type's name, or the site and the CLI score one URL
+differently. `tests/web-scanner-checks.test.ts` pins the weights; change them in both repos.
+The README's Site Score sample is a real run of `node dist/cli.js --web example.com`. Nothing
+checks it, since it needs the network, so regenerate it when a check's name, weight or
+message changes.
 
 ### GitHub Action (`action.yml`)
 
 Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`, parses JSON, posts PR comment via `marocchino/sticky-pull-request-comment`, then fails on critical findings (`fail-on-critical`, default `true`), on a score below `threshold`, or when the scan produced no result. Both third-party actions are SHA-pinned.
 
 - **Pass/fail is decided by `scripts/action-check.cjs`**, which also writes the `score`/`critical` outputs. Tests: `tests/action-check.test.ts`.
+- **The comment never decides the check.** The comment step has `continue-on-error`: a token that can't write to pull requests (no `pull-requests: write`, or a PR from a fork) used to fail the job there and skip "Check results". When it can't post, the report goes to the job summary with a warning.
 
 - **The scanner version is pinned, never `@latest`.** `sync-versions.cjs` bumps the pin and `verify-release.cjs` fails on drift, so pinning the action (`@v1`, a tag, a SHA) pins the code that runs in users' CI.
 - **The comment is built by `scripts/action-comment.cjs`**, not inline `node -e "..."` — bash's double-quote processing once silently stripped the escaper's backslash. File paths and messages come from the scanned repo: they're flattened to one line and rendered as inline code (no autolinks, @-mentions or HTML there). Tests: `tests/action-comment.test.ts`.

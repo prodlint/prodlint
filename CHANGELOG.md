@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **A path that isn't a directory is an error.** `prodlint ./typo` scanned nothing, printed
+  100/100 and exited 0, so a mistyped path in CI passed. It now says so and exits 2.
+- **`--summary` lists critical findings first.** It took the first three findings in file
+  order, so three warnings in an early file pushed every critical finding out of a summary
+  that said FAIL.
+- **`--web` and the `scan-web` tool score a site the way prodlint.com does.** The CLI's checks
+  had older weights than the site's, so the two gave one URL different scores: prodlint.com
+  itself came out 86 from the CLI and 92 on the site. They share one set now, 14 checks worth
+  95 points, 62 of them for established standards. **Scores from `--web` will change.** The
+  checks also know the crawler names their operators document today (`OAI-SearchBot`,
+  `Claude-User`, `Claude-SearchBot`, `Applebot-Extended` and more), see WebMCP tools
+  registered on `document.modelContext`, and don't count an llms.txt's headings as content.
+  Each check in a `scan-web` result says whether it's for an `established` standard or an
+  `emerging` one.
+- **The GitHub Action no longer fails because it couldn't comment.** With a token that can't
+  write to pull requests (a workflow without `pull-requests: write`, or any pull request from
+  a fork) the comment step failed the job, and the real pass or fail was never worked out. The
+  report now goes to the job summary with a warning, and the check result stands.
+- **The MCP server works when it's started in a filesystem root.** Its `scan` tool refused
+  every path there.
+- **A filtered scan with nothing to list no longer says "No issues found!".** When
+  `--min-severity`, `--profile` or `--baseline` hides findings, the report says how many
+  aren't shown. The scores always counted them.
+- Counts read "1 warning" and "(1 issue)", not "1 warnings" and "(1 issues)". The site-score
+  rows line up when a check's name is long. `--help` lists the exit codes.
+
 ## [0.10.7] - 2026-11-10
 
 ### Added

@@ -280,26 +280,29 @@ npx prodlint --web example.com --json     # JSON output
   prodlint site score
   example.com · 14 checks
 
-  Score: 42 C  ████████░░░░░░░░░░░░
+  Score: 8 F  ██░░░░░░░░░░░░░░░░░░
 
-  ✗ AI-Disclosure Header          0/10  No AI-Disclosure header found.
-  ✗ Content-Usage Directives      0/10  No Content-Usage directives found.
-  ✗ TDMRep                        0/10  No TDMRep found.
-  ✗ A2A AgentCard                  0/5  No agent-card.json found.
-  ✗ ai.txt                         0/5  No ai.txt found at site root.
-  ! llms.txt                       2/5  llms.txt found but missing key sections.
-  ✓ robots.txt                   10/10  robots.txt found with 15 rules.
-  ✓ Sitemap                      10/10  Valid sitemap with 42 URLs.
-  ✓ Structured Data              10/10  Found JSON-LD structured data.
-  ✓ OpenGraph                    10/10  Complete OpenGraph tags found.
-  ✓ Page Speed                    5/5   Loaded in 0.8s.
-  ✓ AI Bot Directives             5/5   AI-specific bot rules found.
-  ✓ WebMCP Tools                   0/5  No WebMCP tools detected.
+  ✗ robots.txt                            0/7  No robots.txt found.
+  ✗ AI robots.txt Directives             0/15  No robots.txt found. AI bots have no guidance.
+  ✗ Content-Usage (IETF aipref)           0/5  No Content-Usage directives found.
+  ✗ llms.txt                              0/6  No llms.txt found.
+  ✗ ai.txt                                0/3  No ai.txt found at site root.
+  ✗ TDMRep (W3C)                          0/4  No TDMRep configuration found.
+  ✗ AI-Disclosure Header                  0/2  No AI-Disclosure header found.
+  ✗ A2A AgentCard                         0/5  No A2A AgentCard found.
+  ✗ WebMCP Tools                          0/5  No WebMCP tools detected.
+  ✗ HTTP Message Signatures (RFC 9421)    0/3  No HTTP signature support detected.
+  ✗ Structured Data                      0/12  No structured data found.
+  ✗ OpenGraph & Meta                     0/10  No OpenGraph tags or meta description.
+  ✗ sitemap.xml                          0/10  No sitemap.xml found.
+  ✓ Page Load Time                        8/8  0.1s.
 
-  7 passed · 5 failed · 1 warnings
+  1 passed · 13 failed
 
   Full results: https://prodlint.com/score?url=example.com
 ```
+
+That's a real run: example.com is one bare page, so the only check it passes is answering quickly. Six of the checks are for settled things (robots.txt, rules for AI crawlers, structured data, Open Graph tags, a sitemap, response time) and carry 62 of the 95 points. The other eight are for drafts and proposals that may still change. A partial result earns half a check's points, rounded down, and the total is scaled to 100.
 
 Or check your score interactively at [prodlint.com/score](https://prodlint.com/score).
 

@@ -55,4 +55,18 @@ describe('action check', () => {
     expect(ACTION).not.toMatch(/\|\|\s*true/)
     expect(ACTION).toContain('scripts/action-check.cjs" check')
   })
+
+  // A token that can't write to pull requests (no `pull-requests: write`, or a fork's PR) makes
+  // the comment step fail. That used to fail the check and skip "Check results".
+  it("doesn't let a comment that can't be posted decide the check", () => {
+    const post = /- name: Post PR comment\n((?: {6}.*\n)+)/.exec(ACTION)?.[1] ?? ''
+    expect(post).toContain('id: post-comment')
+    expect(post).toContain('continue-on-error: true')
+    expect(ACTION).toContain("if: steps.post-comment.outcome == 'failure'")
+    expect(ACTION).toContain('>> "$GITHUB_STEP_SUMMARY"')
+    // "Check results" still runs last, with no condition of its own
+    const check = /- name: Check results\n((?: {6}.*\n)+)/.exec(ACTION)?.[1] ?? ''
+    expect(check).not.toMatch(/^ {6}if:/m)
+    expect(ACTION.indexOf('- name: Check results')).toBeGreaterThan(ACTION.indexOf('- name: Post PR comment'))
+  })
 })
