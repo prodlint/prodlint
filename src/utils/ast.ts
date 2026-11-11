@@ -90,19 +90,23 @@ export function walkAST(
   }
 }
 
+// Prisma's raw queries. As a tag, each sends what the template interpolates as parameters
+const PRISMA_RAW_TAG = /^\$(?:queryRaw|executeRaw)$/
+
 /**
  * Check if a node is a tagged template expression with a known safe SQL tag.
  */
 export function isTaggedTemplateSql(node: TaggedTemplateExpression): boolean {
   const tag = node.tag
 
-  // sql`...`
-  if (tag.type === 'Identifier' && tag.name === 'sql') return true
+  // sql`...`, or $queryRaw`...` taken off its client
+  if (tag.type === 'Identifier' && (tag.name === 'sql' || PRISMA_RAW_TAG.test(tag.name))) return true
 
-  // Prisma.sql`...`, db.sql`...`, db.query`...`
+  // Prisma.sql`...`, db.sql`...`, db.query`...`, and prisma.$queryRaw`...` or tx.$executeRaw`...`
+  // on any receiver. A type argument, prisma.$queryRaw<Row[]>`...`, is on the node, not on the tag
   if (tag.type === 'MemberExpression') {
     const prop = tag.property
-    if (prop.type === 'Identifier' && (prop.name === 'sql' || prop.name === 'query' || prop.name === 'raw')) {
+    if (prop.type === 'Identifier' && (prop.name === 'sql' || prop.name === 'query' || prop.name === 'raw' || PRISMA_RAW_TAG.test(prop.name))) {
       return true
     }
   }
