@@ -26,7 +26,7 @@ function writeIfChanged(relPath, before, after) {
 
   const out = isCrlf ? normalize(after).replace(/\n/g, '\r\n') : after;
   fs.writeFileSync(path.join(root, relPath), out);
-  written.push(relPath);
+  if (!written.includes(relPath)) written.push(relPath);
 }
 
 // server.json — both the top-level version and the npm package entry.
@@ -64,6 +64,12 @@ const textTargets = [
     file: 'README.md',
     label: 'README sample output',
     pattern: /^\s*prodlint v\d+\.\d+\.\d+$/m,
+  },
+  {
+    // The object --json prints starts with the version, and so does the README's example of it.
+    file: 'README.md',
+    label: 'README --json example',
+    pattern: /^\s*"version": "\d+\.\d+\.\d+",$/m,
   },
   {
     file: 'tests/reporter.test.ts',

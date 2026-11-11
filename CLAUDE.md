@@ -201,12 +201,20 @@ file rather than piping it: a filter that exits early kills it mid-run.
 the bump if `CHANGELOG.md` has nothing under `[Unreleased]`. Then it fires the `version`
 lifecycle hook, which runs `scripts/sync-versions.cjs` to propagate the new version into
 `server.json` (both fields), `packages/prodlint-mcp/package.json` (its `version` and its `^`
-range on `prodlint`), the `README.md` sample output, the `tests/reporter.test.ts` fixture,
-and the scanner pin in `action.yml`, and to move the `[Unreleased]` entries under the new
-version's heading in `CHANGELOG.md` (don't move them by hand) — then stages them into the
-version commit. The script **fails loudly** if a text anchor no longer matches exactly once,
-rather than silently skipping a file. `tests/release-notes.test.ts` runs these scripts on a
-copy of the repo, so a moved anchor fails its own PR instead of a release.
+range on `prodlint`), the `README.md` sample output and `--json` example, the
+`tests/reporter.test.ts` fixture, and the scanner pin in `action.yml`, and to move the
+`[Unreleased]` entries under the new version's heading in `CHANGELOG.md` (don't move them by
+hand) — then stages them into the version commit. The script **fails loudly** if a text anchor
+no longer matches exactly once, rather than silently skipping a file.
+`tests/release-notes.test.ts` runs these scripts on a copy of the repo, so a moved anchor fails
+its own PR instead of a release.
+
+`verify-release.cjs` also counts how often `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and the
+launcher's README state the current version, and fails on a mention the sync script doesn't
+bump. npm freezes a version's README, so a number written by hand is right until the next bump
+and then wrong until the release after. A new mention needs an anchor in `sync-versions.cjs`
+and its count in `verify-release.cjs`; 0.10.8's `--json` example was bumped by hand for want of
+one.
 
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
