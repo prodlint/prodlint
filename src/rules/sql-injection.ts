@@ -1,6 +1,8 @@
 import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
 import { isCommentLine } from '../utils/patterns.js'
 import { walkAST, isTaggedTemplateSql, unwrapExpression } from '../utils/ast.js'
+import { bindNames } from '../utils/scopes.js'
+import type { Binding } from '../utils/scopes.js'
 import { SQL_SAFE_ORMS } from '../utils/frameworks.js'
 import type { Node } from '@babel/types'
 
@@ -185,8 +187,56 @@ function rawCall(callee: Node): string | null {
   return name === 'raw' && callee.object.type === 'Identifier' && callee.object.name === 'Prisma' ? 'Prisma.raw' : null
 }
 
+/** A raw call: which one, and whether the query is all it's handed, with no values after it */
+interface RawCall {
+  method: string
+  alone: boolean
+}
+
+/**
+ * A string built for a raw call, reported where it starts. `pieces` are what a name appends to
+ * it with `+=`: SQL of the same query, read after the string's own
+ */
+function addQuery(queries: Queries, call: RawCall, built: { node: Node; how: How }, pieces: Node[] = []): void {
+  if (!built.node.loc) return
+  const critical = !TAG_CALLED.test(call.method) && takesValues(startOf(built.node)) && call.alone &&
+    !takesNamesOnly(sqlOf(built.node) + pieces.map(sqlOf).join(''))
+  addBuilt(queries, built.node.loc.start.line, built.node.loc.end.line, { method: call.method, how: built.how, critical })
+}
+
+/**
+ * What a name carries into a raw call: every string the file sets it to, in whatever order,
+ * since the order statements run in isn't read. Each is a query of its own, judged as if it
+ * were written in the call. Appended to with `+=`, a query is built by concatenation unless
+ * every piece is a literal, and it's still one query: reported where it starts, not piece by piece
+ */
+function readName(queries: Queries, call: RawCall, binding: Binding): void {
+  const pieces = binding.values.filter(value => value.append)
+  const grown = pieces.some(piece => !isConstantString(piece.node))
+  // Whether the file shows a string the name starts as: a parameter or a call's result isn't one
+  let shown = false
+  for (const { node, append } of binding.values) {
+    if (append) continue
+    const built = builtStrings(node)
+    const constant = isConstantString(node)
+    if (constant && grown) built.push({ node, how: 'concatenation' })
+    // A constant has nothing built into it, in the call or by its name
+    else if (constant && node.loc) addLines(queries.safe, node.loc.start.line, node.loc.end.line)
+    for (const string of built) addQuery(queries, call, string, pieces.map(piece => piece.node))
+    shown ||= constant || built.length > 0
+  }
+  // The pieces are lines of that query, which is reported where it starts or has nothing built
+  // into it. One that starts out of sight is left to the patterns, pieces and all
+  if (!shown) return
+  for (const { node } of pieces) {
+    if (node.loc) addLines(queries.builtLines, node.loc.start.line, node.loc.end.line)
+  }
+}
+
 function readTree(ast: NonNullable<FileContext['ast']>): Queries {
   const queries: Queries = { safe: new Set(), built: new Map(), builtLines: new Set() }
+  // The calls handed a name, read once the tree is walked
+  const named = new Map<Node, RawCall>()
   walkAST(ast.program, (node) => {
     if (node.type === 'TaggedTemplateExpression') {
       if (isTaggedTemplateSql(node) && node.loc) {
@@ -195,24 +245,37 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
     } else if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
       const method = rawCall(node.callee)
       if (!method || node.arguments.length === 0) return
+      const call: RawCall = { method, alone: node.arguments.length === 1 }
       const query = node.arguments[0]
+      const name = unwrapExpression(query)
+      if (name.type === 'Identifier') named.set(name, call)
       // A constant has nothing built into it, whatever a `+` in its SQL looks like to the patterns
       if (isConstantString(query) && query.loc) addLines(queries.safe, query.loc.start.line, query.loc.end.line)
-      for (const built of builtStrings(query)) {
-        if (!built.node.loc) continue
-        const critical = !TAG_CALLED.test(method) && takesValues(startOf(built.node)) && node.arguments.length === 1 &&
-          !takesNamesOnly(sqlOf(built.node))
-        addBuilt(queries, built.node.loc.start.line, built.node.loc.end.line, { method, how: built.how, critical })
-      }
+      for (const built of builtStrings(query)) addQuery(queries, call, built)
     }
   })
+  // A query built into a variable and handed over by name: followed to what the file sets the
+  // name to. Scopes are only read for a file that has such a call
+  if (named.size > 0) {
+    const calls = new Map<Binding, RawCall[]>()
+    for (const [name, binding] of bindNames(ast.program, new Set(named.keys()))) {
+      calls.set(binding, [...(calls.get(binding) ?? []), named.get(name)!])
+    }
+    for (const [binding, handedTo] of calls) {
+      // One call that passes values says the query has places for them, as in
+      // params.length ? run(sql, ...params) : run(sql)
+      const alone = handedTo.every(call => call.alone)
+      for (const { method } of handedTo) readName(queries, { method, alone }, binding)
+    }
+  }
   return queries
 }
 
 // Without a syntax tree, Prisma's raw queries as the text has them: the method, a type argument
 // if it has one, then a template or a call. A regex literal with a quote in it, as in
 // .replace(/'/g, "''"), isn't understood, and a query with one is left to the patterns above, as
-// is an argument that's a `?:` or a constant. A quoted name isn't told from a value here. The
+// is an argument that's a `?:` or a constant. So is a query handed over by name: there are no
+// scopes to say which declaration a name is. A quoted name isn't told from a value here. The
 // other tags stay with TAGGED_TEMPLATE_PREFIX, a line at a time
 const TEXT_RAW = /(\$(?:queryRaw|executeRaw)(?:Unsafe)?|\bPrisma\.(?:raw|sql))\b/g
 const TEXT_TAG = /^(?:\$(?:queryRaw|executeRaw)|Prisma\.sql)$/

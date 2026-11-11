@@ -295,12 +295,13 @@ describe('sql-injection rule', () => {
         expect(check(code, prismaProject).map(f => `${f.line} ${f.severity}`)).toEqual(['1 warning'])
       })
 
-      it('leaves a query built elsewhere to the patterns', () => {
+      it('follows a name to the query it holds, given a syntax tree to read its scope from', () => {
         const code = [
           'const query = `SELECT * FROM users WHERE id = ${id}`',
           'const rows = await prisma.$queryRawUnsafe(query)',
         ].join('\n')
-        expect(check(code, prismaProject).map(f => `${f.line} ${f.severity}`)).toEqual(['1 warning'])
+        // Without one the string stays with the patterns, and the ORM downgrade
+        expect(check(code, prismaProject).map(f => `${f.line} ${f.severity}`)).toEqual([withAst ? '1 critical' : '1 warning'])
       })
 
       // Prisma 3 and later throw on a string, Prisma 2 ran it: wrong either way, an injection on neither now
@@ -463,6 +464,428 @@ describe('sql-injection rule', () => {
         expect(found('const rows = await prisma.$queryRawUnsafe(`SELECT 1 FROM "${table}"' + joins + '`)')).toEqual(['1 warning'])
         expect(found('const rows = await prisma.$queryRawUnsafe(`SELECT 1 FROM "${table}"' + joins + ' WHERE id = ${id}`)')).toEqual(['1 critical'])
         expect(performance.now() - started).toBeLessThan(2000)
+      })
+    })
+
+    // const query = `...${id}`; prisma.$queryRawUnsafe(query): the string is read where the file
+    // sets the name, and judged as if it were written in the call
+    describe('a query handed over by name', () => {
+      const check = (code: string, p = prismaProject) => sqlInjectionRule.check(makeFile(code), p)
+      const lines = (code: string, p = prismaProject) => check(code, p).map(f => `${f.line} ${f.severity}`)
+      /** "line severity" of each finding, with and without Prisma in package.json: it has to be the same */
+      const found = (code: string) => {
+        expect(lines(code, project)).toEqual(lines(code))
+        return lines(code)
+      }
+      /** What the patterns say of a string nothing follows: a warning where Prisma is listed, critical where it isn't */
+      const leftToPatterns = (code: string, line: number) => {
+        expect(lines(code)).toEqual([`${line} warning`])
+        expect(lines(code, project)).toEqual([`${line} critical`])
+      }
+
+      it('reports the string where it is, with the message of the call', () => {
+        // As Prisma's documentation writes its example of what not to do
+        const code = [
+          "const query = `SELECT id, name FROM \"User\" WHERE name = '${input}'`",
+          'const result = await prisma.$queryRawUnsafe(query)',
+        ].join('\n')
+        const findings = check(code)
+        expect(findings).toHaveLength(1)
+        expect(findings[0]).toMatchObject({ line: 1, severity: 'critical' })
+        expect(findings[0].message).toBe('$queryRawUnsafe() query built with template literal interpolation — use the $queryRaw tagged template or pass values as parameters')
+        expect(findings[0].fix).toContain('prisma.$queryRaw`')
+        expect(found(code)).toEqual(['1 critical'])
+      })
+
+      it('reads a query the patterns miss: in lower case, over several lines', () => {
+        const code = [
+          'async function find(email: string) {',
+          '  const sql = `',
+          '    select * from users',
+          "    where email = '${email}'",
+          '  `',
+          '  return prisma.$queryRawUnsafe(sql)',
+          '}',
+        ].join('\n')
+        expect(found(code)).toEqual(['2 critical'])
+      })
+
+      it('reports a query that spans lines once, where it starts', () => {
+        // On its own, the UPDATE line reads as a concatenation
+        const code = [
+          'const sql = `',
+          '  UPDATE users SET credits = credits + 1',
+          "  WHERE email = '${email}'",
+          '`',
+          'await prisma.$executeRawUnsafe(sql)',
+        ].join('\n')
+        expect(found(code)).toEqual(['1 critical'])
+      })
+
+      it('reports a concatenation', () => {
+        const code = [
+          "const sql = 'DELETE FROM users WHERE id = ' + id",
+          'await tx.$executeRawUnsafe(sql)',
+        ].join('\n')
+        expect(found(code)).toEqual(['1 critical'])
+        expect(check(code)[0].message).toContain('$executeRawUnsafe() query built with string concatenation')
+      })
+
+      it.each([
+        ['values are passed after the name', 'const sql = `SELECT * FROM "${table}" WHERE id = $1`', 'const rows = await prisma.$queryRawUnsafe(sql, id)'],
+        ['the values are spread', 'const sql = `SELECT * FROM users WHERE ${where}`', 'const rows = await prisma.$queryRawUnsafe(sql, ...params)'],
+        ['the statement takes no values', 'const sql = `TRUNCATE TABLE "${table}" CASCADE`', 'await prisma.$executeRawUnsafe(sql)'],
+        ['the string starts with a value', 'const sql = `${baseQuery} LIMIT ${limit}`', 'const rows = await prisma.$queryRawUnsafe(sql)'],
+      ])('makes it a warning when %s', (_why, declaration, call) => {
+        expect(found(`${declaration}\n${call}`)).toEqual(['1 warning'])
+      })
+
+      it('tells a quoted name from a value, as in the call', () => {
+        const call = '\nconst rows = await prisma.$queryRawUnsafe(sql)'
+        expect(found('const sql = `SELECT * FROM "${table}"`' + call)).toEqual(['1 warning'])
+        expect(found('const sql = `SELECT * FROM \\`${table}\\` WHERE \\`${column}\\` IS NULL`' + call)).toEqual(['1 warning'])
+        expect(found('const sql = `SELECT * FROM "${table}" WHERE id = ${id}`' + call)).toEqual(['1 critical'])
+        expect(found('const sql = `SELECT * FROM users WHERE email = "${email}"`' + call)).toEqual(['1 critical'])
+      })
+
+      it('judges a tag called with a name, and Prisma.raw(), as the call does', () => {
+        const tag = [
+          'const sql = `SELECT * FROM users WHERE id = ${id}`',
+          'const rows = await prisma.$queryRaw(sql)',
+        ].join('\n')
+        expect(found(tag)).toEqual(['1 warning'])
+        expect(check(tag)[0].message).toContain('$queryRaw() called with a string built with template literal interpolation')
+        const raw = [
+          'const order = `"${column}" ${direction}`',
+          'const rows = await prisma.$queryRaw`SELECT * FROM users ORDER BY ${Prisma.raw(order)}`',
+        ].join('\n')
+        expect(found(raw)).toEqual(['1 warning'])
+        expect(check(raw)[0].message).toContain('Prisma.raw() string built with template literal interpolation')
+        // A whole statement that takes values
+        expect(found('const sql = `SELECT * FROM users WHERE id = ${id}`\nconst rows = await prisma.$queryRaw(Prisma.raw(sql))')).toEqual(['1 critical'])
+      })
+
+      it('reads the name through a cast, a ! and parentheses', () => {
+        const declaration = 'const sql = `SELECT * FROM users WHERE id = ${id}`\n'
+        expect(found(declaration + 'const rows = await prisma.$queryRawUnsafe<User[]>((sql) as string)')).toEqual(['1 critical'])
+        expect(found(declaration + 'const rows = await prisma.$queryRawUnsafe(sql!)')).toEqual(['1 critical'])
+      })
+
+      it('reads both branches of a ?: the name is set to', () => {
+        const code = [
+          'const sql = all',
+          '  ? `SELECT * FROM videos WHERE id < ${lastSeenId}`',
+          "  : `SELECT * FROM videos WHERE kind = '${kind}'`",
+          'const rows = await prisma.$queryRawUnsafe(sql)',
+        ].join('\n')
+        expect(found(code)).toEqual(['2 critical', '3 critical'])
+      })
+
+      describe('which declaration a name is', () => {
+        it('finds a constant of the module from inside a function', () => {
+          const code = [
+            'const QUERY = `SELECT * FROM ${TABLE} WHERE active = true`',
+            'export async function all() {',
+            '  return prisma.$queryRawUnsafe(QUERY)',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 critical'])
+        })
+
+        it('finds a variable of the function around a callback', () => {
+          const code = [
+            'export async function removeAll(ids: string[]) {',
+            "  const sql = `DELETE FROM users WHERE id IN (${ids.join(',')})`",
+            '  return prisma.$transaction(async (tx) => {',
+            '    await tx.$executeRawUnsafe(sql)',
+            '  })',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['2 critical'])
+        })
+
+        it('finds a name used above the line that declares it', () => {
+          const code = [
+            'export async function run() {',
+            '  return prisma.$queryRawUnsafe(sql)',
+            '}',
+            'const sql = `SELECT * FROM users WHERE id = ${id}`',
+          ].join('\n')
+          expect(found(code)).toEqual(['4 critical'])
+        })
+
+        it('finds a var declared in a block of its function', () => {
+          const code = [
+            'async function run(id) {',
+            '  if (id) {',
+            '    var sql = `SELECT * FROM users WHERE id = ${id}`',
+            '  }',
+            '  return prisma.$queryRawUnsafe(sql)',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical'])
+        })
+
+        it("keeps two functions' variables of one name apart", () => {
+          const code = [
+            'async function byId(id: string) {',
+            '  const sql = `SELECT * FROM users WHERE id = ${id}`',
+            '  return prisma.$queryRawUnsafe(sql)',
+            '}',
+            'async function byTable(table: string, id: string) {',
+            '  const sql = `SELECT * FROM "${table}" WHERE id = $1`',
+            '  return prisma.$queryRawUnsafe(sql, id)',
+            '}',
+            'async function bump(id: string) {',
+            "  const sql = 'UPDATE posts SET views = views + 1 WHERE id = $1'",
+            '  return prisma.$executeRawUnsafe(sql, id)',
+            '}',
+          ].join('\n')
+          // The values the second call passes say nothing of the first one's query
+          expect(found(code)).toEqual(['2 critical', '6 warning'])
+        })
+
+        it('keeps a block apart from the block around it', () => {
+          const code = [
+            'const sql = `SELECT * FROM "${table}" WHERE id = ${id}`',
+            'if (dryRun) {',
+            "  const sql = 'SELECT 1'",
+            '  await prisma.$queryRawUnsafe(sql)',
+            '}',
+          ].join('\n')
+          leftToPatterns(code, 1)
+        })
+
+        // Each declares `sql` again where the call is: what the module's `sql` holds isn't what's run
+        it.each([
+          ['a parameter', 'export async function run(sql: string) {\n  return prisma.$queryRawUnsafe(sql)\n}'],
+          ["an arrow function's parameter", 'export const run = (sql: string) => prisma.$queryRawUnsafe(sql)'],
+          ['a destructured parameter', 'export async function run({ sql }: Job) {\n  return prisma.$queryRawUnsafe(sql)\n}'],
+          ["a method's parameter", 'export class Repo {\n  run(sql: string) {\n    return this.prisma.$queryRawUnsafe(sql)\n  }\n}'],
+          ["a constructor's parameter property", 'export class Job {\n  constructor(private sql: string) {\n    prisma.$queryRawUnsafe(sql)\n  }\n}'],
+          ["a loop's variable", 'for (const sql of statements) {\n  await prisma.$executeRawUnsafe(sql)\n}'],
+          ['a destructured value', 'async function run() {\n  const { sql, values } = build()\n  return prisma.$queryRawUnsafe(sql, ...values)\n}'],
+          ["a catch clause's parameter", 'try {\n  work()\n} catch (sql) {\n  await prisma.$executeRawUnsafe(sql)\n}'],
+          ['a function of that name', 'function outer() {\n  function sql() {}\n  return prisma.$queryRawUnsafe(sql)\n}'],
+          ['a function expression of that name', 'const run = function sql() {\n  return prisma.$queryRawUnsafe(sql)\n}'],
+        ])('does not take the module\'s string for %s', (_what, code) => {
+          leftToPatterns('const sql = `SELECT * FROM users WHERE id = ${id}`\n' + code, 1)
+        })
+
+        it('leaves a name the file imports or never declares', () => {
+          const text = 'const text = `SELECT * FROM users WHERE id = ${id}`\n'
+          leftToPatterns(text + "import { sql } from './queries'\nconst rows = await prisma.$queryRawUnsafe(sql)", 1)
+          leftToPatterns(text + 'const rows = await prisma.$queryRawUnsafe(sql)', 1)
+        })
+      })
+
+      describe('a name set more than once', () => {
+        it('reads every string it is set to, each on its own', () => {
+          const code = [
+            'let sql: string',
+            'if (all) {',
+            '  sql = `SELECT * FROM videos WHERE id < ${lastSeenId}`',
+            '} else {',
+            '  sql = `TRUNCATE TABLE ${kind}`',
+            '}',
+            'await prisma.$executeRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical', '5 warning'])
+        })
+
+        it('reads a name used for one query after another', () => {
+          const code = [
+            "let sql = `insert into notes (title) values ('${title}')`",
+            'await prisma.$executeRawUnsafe(sql)',
+            "sql = 'select last_insert_id() + 0 as id'",
+            'const [row] = await prisma.$queryRawUnsafe(sql)',
+            'sql = `select * from notes where id = ${row.id}`',
+            'return prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 critical', '5 critical'])
+        })
+
+        it('reads what a callback sets', () => {
+          const code = [
+            "let sql = 'SELECT 1'",
+            'filters.forEach((filter) => {',
+            "  sql = `SELECT * FROM items WHERE kind = '${filter.kind}'`",
+            '})',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical'])
+        })
+
+        it('does not read the order statements run in', () => {
+          // The string set below the call counts too: in a loop it would be the next query
+          const code = [
+            "let sql = 'SELECT 1'",
+            'await prisma.$queryRawUnsafe(sql)',
+            'sql = `SELECT * FROM users WHERE id = ${id}`',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical'])
+        })
+
+        it('passes its values if one of the calls it is handed to does', () => {
+          // The query has places for them: the other call is for when there are none to fill
+          const code = [
+            "const sql = `SELECT * FROM \"${table}\" WHERE ${filters.join(' AND ')}`",
+            'const rows = params.length > 0',
+            '  ? await prisma.$queryRawUnsafe(sql, ...params)',
+            '  : await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 warning'])
+          // Whichever call comes first
+          const swapped = code.replace('(sql, ...params)', '(sql)').replace(': await prisma.$queryRawUnsafe(sql)', ': await prisma.$queryRawUnsafe(sql, ...params)')
+          expect(swapped).not.toBe(code)
+          expect(found(swapped)).toEqual(['1 warning'])
+          // No call passes any: they can only be in the text
+          expect(found(code.replace('(sql, ...params)', '(sql)'))).toEqual(['1 critical'])
+        })
+
+        it('names the call of the first one in its message, or of the critical one', () => {
+          const tag = 'const rows = await prisma.$queryRaw(sql)'
+          const unsafe = 'const more = await prisma.$queryRawUnsafe(sql)'
+          const declaration = 'const sql = `SELECT * FROM users WHERE id = ${id}`'
+          // A tag called with a string is never critical: with both, the unsafe call's finding stands
+          for (const code of [[declaration, tag, unsafe], [declaration, unsafe, tag]]) {
+            const findings = check(code.join('\n'))
+            expect(findings).toHaveLength(1)
+            expect(findings[0].severity).toBe('critical')
+            expect(findings[0].message).toContain('$queryRawUnsafe() query built with')
+          }
+          expect(check([declaration, tag, 'const more = await prisma.$executeRaw(sql)'].join('\n'))[0].message).toContain('$queryRaw() called with a string')
+        })
+      })
+
+      describe('a query appended to', () => {
+        it('reports it once, where it starts, as a concatenation', () => {
+          const code = [
+            'let sql = `SELECT id FROM posts WHERE 1=1`',
+            "if (author) sql += ` AND author = '${author}'`",
+            'if (sort) sql += ` ORDER BY ${sort}`',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 critical'])
+          expect(check(code)[0].message).toContain('$queryRawUnsafe() query built with string concatenation')
+        })
+
+        it('does not report its pieces again', () => {
+          // The patterns would take the piece on line 3 for a query of its own
+          const code = [
+            'let sql = `SELECT id FROM a WHERE kind = ${kind}`',
+            "sql += ' UNION '",
+            'sql += `SELECT id FROM b WHERE kind = ${kind}`',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 critical'])
+          expect(check(code)[0].message).toContain('template literal interpolation')
+          // Nor a later line of a piece, which reads as a concatenation on its own
+          const spread = [
+            'let sql = `SELECT id FROM a WHERE kind = ${kind}`',
+            'sql += `',
+            '  UNION SELECT id FROM b WHERE rank = rank + 1`',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(spread)).toEqual(['1 critical'])
+        })
+
+        it('is a warning when the call passes its values', () => {
+          const code = [
+            'let sql = `DELETE FROM "${table}" WHERE tenant = $1`',
+            'for (const column of columns) sql += ` AND ${column} = $${++n}`',
+            'await prisma.$executeRawUnsafe(sql, ...params)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 warning'])
+        })
+
+        it('passes a query with only literals appended', () => {
+          const code = [
+            "let sql = 'SELECT * FROM orders WHERE placed_at >= ?'",
+            "if (status) sql += ' AND status = ?'",
+            // On its own, this piece reads as a concatenation
+            "sql += ' AND id IN (SELECT id FROM vip WHERE rank = rank + 1)'",
+            'const rows = await prisma.$queryRawUnsafe(sql, ...params)',
+          ].join('\n')
+          expect(found(code)).toEqual([])
+        })
+
+        it('appends a name or a call as it does a template', () => {
+          const code = [
+            "let sql = 'SELECT * FROM orders'",
+            'sql += filter + order',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 critical'])
+          expect(found(code.replace('filter + order', 'where(filters)'))).toEqual(['1 critical'])
+        })
+
+        it('reads what its pieces take in along with its own', () => {
+          const call = '\nconst rows = await prisma.$queryRawUnsafe(sql)'
+          // A quoted name where the query starts, a value in a piece
+          expect(found('let sql = `SELECT * FROM "${table}" WHERE 1=1`\n' + "if (name) sql += ` AND name = '${name}'`" + call)).toEqual(['1 critical'])
+          // Nothing but a quoted name, in a piece
+          expect(found("let sql = 'SELECT * FROM '\n" + 'sql += `"${table}"`' + call)).toEqual(['1 warning'])
+          expect(found('let sql = `SELECT * FROM "${table}"`\n' + "sql += ' ORDER BY id'" + call)).toEqual(['1 warning'])
+          // A piece that isn't a string the file shows is a value, as far as this goes
+          expect(found('let sql = `SELECT * FROM "${table}"`\n' + 'sql += where' + call)).toEqual(['1 critical'])
+          // A quote that a piece closes: the table's name is between double quotes
+          expect(found("let sql = 'SELECT * FROM \"'\n" + "sql += table\nsql += '\"'" + call)).toEqual(['1 warning'])
+        })
+
+        it('cannot say what a query that starts empty is: a warning', () => {
+          // Which piece comes first isn't read, so neither is the statement
+          const code = [
+            "let sql = ''",
+            "sql += 'SELECT * FROM users'",
+            'sql += ` WHERE id = ${id}`',
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['1 warning'])
+        })
+
+        it('reads sql = sql + … as a string of its own, which starts with a value', () => {
+          const code = [
+            "let sql = 'SELECT * FROM users WHERE 1=1'",
+            "if (name) sql = sql + ` AND name = '${name}'`",
+            'const rows = await prisma.$queryRawUnsafe(sql)',
+          ].join('\n')
+          expect(found(code)).toEqual(['2 warning'])
+        })
+
+        it('leaves a query that starts out of sight to the patterns', () => {
+          // A parameter, then a call's result: the file doesn't show the string the pieces go on
+          const piece = 'sql += `SELECT id FROM b WHERE kind = ${kind}`'
+          leftToPatterns(`async function run(sql: string, kind: string) {\n  ${piece}\n  return prisma.$queryRawUnsafe(sql)\n}`, 2)
+          leftToPatterns(`let sql = base()\n${piece}\nconst rows = await prisma.$queryRawUnsafe(sql)`, 2)
+        })
+      })
+
+      it('passes a constant, whatever a + in its SQL looks like', () => {
+        const constant = "const sql = 'UPDATE posts SET views = views + 1 WHERE id = $1'\n"
+        expect(found(constant + 'await prisma.$executeRawUnsafe(sql, id)')).toEqual([])
+        // On every line of it
+        const spread = [
+          'const sql = `',
+          '  UPDATE posts SET views = views + 1',
+          '  WHERE id = $1',
+          '`',
+          'await prisma.$executeRawUnsafe(sql, id)',
+        ].join('\n')
+        expect(found(spread)).toEqual([])
+        // Handed to nothing of Prisma's, it's the patterns' as before
+        leftToPatterns(constant + 'await db.run(sql, id)', 1)
+      })
+
+      it.each([
+        ["a call's result", 'const sql = buildQuery(filters)\nconst rows = await prisma.$queryRawUnsafe(sql)\nfunction buildQuery(f) { return `SELECT * FROM t WHERE a = ${f.a}` }', 3],
+        ['what a method returns of a string', 'const sql = `SELECT * FROM t WHERE a = ${a}`.trim()\nconst rows = await prisma.$queryRawUnsafe(sql)', 1],
+        ['another name', 'const base = `SELECT * FROM t WHERE a = ${a}`\nconst sql = base\nconst rows = await prisma.$queryRawUnsafe(sql)', 1],
+        ['a property', 'const queries = { all: `SELECT * FROM t WHERE a = ${a}` }\nconst rows = await prisma.$queryRawUnsafe(queries.all)', 1],
+        ['an element of a list', 'const statements = [`DELETE FROM t WHERE a = ${a}`]\nfor (const statement of statements) await prisma.$executeRawUnsafe(statement)', 1],
+        ['a string handed to another client', 'const sql = `SELECT * FROM t WHERE a = ${a}`\nconst rows = await db.query(sql)', 1],
+      ])('does not follow %s', (_what, code, line) => {
+        leftToPatterns(code, line)
       })
     })
 
