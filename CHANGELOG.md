@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`hallucinated-api` reported real methods as made up.** It matched `.contains(` and
+  `.flatten(` in the text of a line, so it flagged a DOM node's `.contains(node)` on any receiver
+  it had no name for, IndexedDB's `objectStoreNames.contains()`, Cypress's
+  `cy.get('h1').contains('About')`, zod's `parsed.error.flatten()`, a spread `...flatten(x)`
+  that calls a function, and a class's own `.contains()`, such as a Bloom filter's. It now reads
+  each call from the syntax tree, and leaves a call alone when the file shows the method is
+  real there:
+  - **by what it's made on**: a DOM node (an event's target, a ref, `querySelector()`, a value
+    declared or cast as `HTMLElement`, a name like `menuEl` or `outerNode`), a DOM token or
+    string list, a test runner's chain, a lodash or underscore chain, a zod error, a class
+    instance, `this`, or a value of a type the project or a library declares;
+  - **by its shape**: two arguments (Supabase's `.contains('tags', [tag])`, `_.contains(list, x)`),
+    an object, a regex or an element handed to `.contains()`, or anything but a depth handed to
+    `.flatten()` (`StyleSheet.flatten(style)`, sharp's `.flatten({ background })`);
+  - **by the file**: a method the file adds to arrays or strings itself (`String.prototype.contains
+    = …`), a `contains()` it defines when nothing says what the call is made on, and a call the
+    code checks for first (`a.contains?.(b)`, `'contains' in a ? a.contains(b) : …`).
+  - **Still reported:** an array or a string given `.contains()` or `.flatten()`, and a receiver
+    nothing in the file says anything about. A value the file shows is an array or a string is
+    reported whatever it's handed (`str.contains('a', 1)`).
+  - **Newly reported:** a second call on a line whose first was real
+    (`el.classList.contains('open') && name.contains('x')`), which the line-by-line check never
+    looked at, and a deprecated `.substr()`, `.trimLeft()`, `.trimRight()` or
+    `.hasOwnProperty()` on a line that starts with the `*/` of a comment, which it took for part of
+    the comment. Text in strings, comments and regexes no longer counts as a call.
+  - A file Babel can't parse is still checked line by line, now also leaving alone a spread,
+    a Cypress or `expect()` chain, a zod error and a `.flatten()` handed something.
+  - **Scan results may change:** fewer `hallucinated-api` warnings for front-end code (DOM and
+    IndexedDB), Cypress specs, apps that validate with zod, Supabase queries, React Native, and
+    code using lodash or underscore; a few more where a line holds two of these calls, or in
+    vendored bundles whose code follows a license comment on the same line.
+
 ## [0.10.8] - 2026-11-10
 
 ### Changed
