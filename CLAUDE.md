@@ -176,6 +176,7 @@ Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`
 
 - **The scanner version is pinned, never `@latest`.** `sync-versions.cjs` bumps the pin and `verify-release.cjs` fails on drift, so pinning the action (`@v1`, a tag, a SHA) pins the code that runs in users' CI.
 - **The comment is built by `scripts/action-comment.cjs`**, not inline `node -e "..."` — bash's double-quote processing once silently stripped the escaper's backslash. File paths and messages come from the scanned repo: they're flattened to one line and rendered as inline code (no autolinks, @-mentions or HTML there). Tests: `tests/action-comment.test.ts`.
+- **CI doesn't run the Action**, so a change to `action.yml` is first exercised by whoever uses it. To try one, add a temporary workflow to a pull request that uses the Action once with `pull-requests: write` and once without, and check the repo out into a subfolder (`with: path: repo`). In this repo's own root, `npx -y prodlint@<the version in package.json>` resolves to the package it's standing in, whose bin isn't built, and the scan exits 127. 0.10.8's comment step was checked that way at `@v1`.
 
 ### Adding a New Rule
 
