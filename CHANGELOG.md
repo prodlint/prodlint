@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`hallucinated-imports` reported a project's own folders as missing packages when its
+  tsconfig sets `baseUrl`.** With `"baseUrl": "."`, TypeScript finds `import { Settings } from
+  'src/settings'` in `./src/settings.ts` and `import Plugin from 'main'` in `./main.ts` before
+  it looks in node_modules. The rule knew a tsconfig's `paths` but not its `baseUrl`, so it
+  said `Package "src" is imported but not in package.json`, a critical finding that fails the
+  scan. An import is now checked against what is in the `baseUrl` folder:
+  - **A path** (`src/settings`, `components/Button`, `styles/global.css`) isn't a package when
+    its first segment is a folder there. What it names inside that folder isn't checked: it
+    can be generated, or a file the scan doesn't read.
+  - **A single name** (`main`, `hooks`, `data.json`) isn't a package when it's a file there,
+    with or without its extension, or a folder with an index. A folder without one isn't a
+    module, and TypeScript goes on to node_modules for it, so `import config from 'config'`
+    next to a `config/` folder is still reported.
+  - **Anything else is reported as before.** `import x from 'lodahs'` is a missing package in
+    a project that sets `baseUrl` too.
+- **`hallucinated-imports` read only the root `tsconfig.json`.** In a monorepo scanned from its
+  root, `apps/web/tsconfig.json` counted for nothing, and that app's `components/…` and
+  `@lib/…` imports were reported. Each file is now judged by the `tsconfig.json` nearest above
+  it: its `baseUrl` and its `paths`, or those of the config it `extends` by a relative path. A
+  folder with a `jsconfig.json` and no `tsconfig.json` goes by that. The root config's `paths`
+  still clear an import in every file, as they did.
+- **A tsconfig with block comments, trailing commas or a URL wasn't read at all.** The scanner
+  stripped `//` comments and parsed the rest as JSON. The file `tsc --init` writes has block
+  comments, `"$schema": "https://json.schemastore.org/tsconfig"` was cut at its `//`, and a
+  trailing comma isn't JSON, so such a project had no `paths` as far as the rule knew, and
+  every aliased import in it was reported. A tsconfig is now read the way TypeScript reads it.
+  - **Not read:** a config a package provides (`"extends": "@tsconfig/node20/tsconfig.json"`),
+    `references`, and a `paths` key of `*`.
+  - **Scan results may change:** fewer `hallucinated-imports` findings and a higher
+    reliability score for a project with a `baseUrl`, with a tsconfig below its root, or with
+    a tsconfig the scanner couldn't parse. Nothing new is reported.
+  - **For API users:** `ProjectContext.tsconfigs` is new, with the exported `TsconfigScope`
+    type; a context built without it is judged as before. `tsconfigPaths` is still the root
+    config's `paths`.
+
 ## [0.10.8] - 2026-11-10
 
 ### Changed

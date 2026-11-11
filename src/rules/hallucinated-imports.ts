@@ -1,6 +1,7 @@
-import type { Rule, Finding, FileContext, ProjectContext } from '../types.js'
+import type { Rule, Finding, FileContext, ProjectContext, TsconfigScope } from '../types.js'
 import { isCommentLine, NODE_BUILTINS, isTestFile, isScriptFile } from '../utils/patterns.js'
 import { getImportSources } from '../utils/ast.js'
+import { tsconfigOf, isBaseUrlImport } from '../utils/tsconfig.js'
 
 // Packages that are commonly available without being in package.json
 const IMPLICIT_PACKAGES = new Set([
@@ -43,6 +44,15 @@ function isPathAlias(importPath: string, tsconfigPaths: Set<string>): boolean {
   return false
 }
 
+/**
+ * An import the file's own tsconfig.json resolves inside the project: by its `paths`, or
+ * under its `baseUrl`, where `src/settings` is src/settings.ts and `main` is main.ts
+ */
+function isOwnModule(importPath: string, tsconfig: TsconfigScope | undefined): boolean {
+  if (!tsconfig) return false
+  return isPathAlias(importPath, tsconfig.paths) || isBaseUrlImport(importPath, tsconfig)
+}
+
 export const hallucinatedImportsRule: Rule = {
   id: 'hallucinated-imports',
   name: 'Hallucinated Imports',
@@ -57,6 +67,7 @@ export const hallucinatedImportsRule: Rule = {
     const findings: Finding[] = []
     const seen = new Set<string>()
     const isNonProd = isTestFile(file.relativePath) || isScriptFile(file.relativePath)
+    const tsconfig = tsconfigOf(project, file.relativePath)
 
     // AST-first path: precise import extraction (no template literal false positives)
     if (file.ast) {
@@ -72,6 +83,7 @@ export const hallucinatedImportsRule: Rule = {
           seen.add(pkgName)
 
           if (isPathAlias(importPath, project.tsconfigPaths)) continue
+          if (isOwnModule(importPath, tsconfig)) continue
           if (isNodeBuiltin(pkgName)) continue
           if (IMPLICIT_PACKAGES.has(importPath) || IMPLICIT_PACKAGES.has(pkgName)) continue
           if (project.declaredDependencies.has(pkgName)) continue
@@ -111,6 +123,7 @@ export const hallucinatedImportsRule: Rule = {
         seen.add(pkgName)
 
         if (isPathAlias(importPath, project.tsconfigPaths)) continue
+        if (isOwnModule(importPath, tsconfig)) continue
         if (isNodeBuiltin(pkgName)) continue
         if (IMPLICIT_PACKAGES.has(importPath) || IMPLICIT_PACKAGES.has(pkgName)) continue
         if (project.declaredDependencies.has(pkgName)) continue

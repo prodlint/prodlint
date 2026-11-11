@@ -2,6 +2,7 @@ import fg from 'fast-glob'
 import { readFile, stat, realpath } from 'node:fs/promises'
 import { resolve, extname, basename, sep } from 'node:path'
 import { buildCommentMap, blankOut } from './patterns.js'
+import { readTsconfigs } from './tsconfig.js'
 import { parseFile } from './ast.js'
 import { DEPENDENCY_TO_FRAMEWORK, RATE_LIMIT_FRAMEWORKS } from './frameworks.js'
 import { matcherExcludesApi, matcherExcludesPages } from './middleware-matcher.js'
@@ -248,6 +249,7 @@ export async function buildProjectContext(
   let packageJson: Record<string, unknown> | null = null
   let declaredDependencies = new Set<string>()
   let tsconfigPaths = new Set<string>()
+  let tsconfigs: ProjectContext['tsconfigs']
   let hasAuthMiddleware = false
   let authMiddlewareExcludesApi = false
   let authMiddlewareExcludesPages = false
@@ -304,19 +306,10 @@ export async function buildProjectContext(
 
   // Read tsconfig.json to extract path aliases
   try {
-    const raw = await readFile(resolve(root, 'tsconfig.json'), 'utf-8')
-    // Strip single-line comments (tsconfig allows them)
-    const stripped = raw.replace(/\/\/.*$/gm, '')
-    const tsconfig = JSON.parse(stripped)
-    const paths = tsconfig?.compilerOptions?.paths as Record<string, string[]> | undefined
-    if (paths) {
-      for (const alias of Object.keys(paths)) {
-        // @components/* → @components
-        // @/* → @/
-        const prefix = alias.replace(/\/?\*$/, '')
-        if (prefix) tsconfigPaths.add(prefix)
-      }
-    }
+    // The root's and every nested one: a file is judged by the config nearest above it. The
+    // root's `paths` stay good for every file, as they were
+    tsconfigs = await readTsconfigs(root, files)
+    tsconfigPaths = tsconfigs.get('')?.paths ?? tsconfigPaths
   } catch {
     // No tsconfig.json
   }
@@ -356,6 +349,7 @@ export async function buildProjectContext(
     packageJson,
     declaredDependencies,
     tsconfigPaths,
+    tsconfigs,
     hasAuthMiddleware,
     authMiddlewareExcludesApi,
     authMiddlewareExcludesPages,

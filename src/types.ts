@@ -28,6 +28,13 @@ export interface ProjectContext {
   packageJson: Record<string, unknown> | null
   declaredDependencies: Set<string>
   tsconfigPaths: Set<string>
+  /**
+   * Each folder of the scanned tree that has a tsconfig.json ('' for the root, 'apps/web'),
+   * or a jsconfig.json and no tsconfig.json, with what its files' imports are judged by.
+   * Read it through `tsconfigOf()`, which finds a file's config. `tsconfigPaths` is the root
+   * config's `paths`, which apply to every file
+   */
+  tsconfigs?: Map<string, TsconfigScope>
   hasAuthMiddleware: boolean
   /** The auth middleware's `config.matcher` keeps it off /api, so it doesn't cover API routes */
   authMiddlewareExcludesApi?: boolean
@@ -40,6 +47,18 @@ export interface ProjectContext {
   gitignoreContent: string | null
   envInGitignore: boolean
   allFiles: string[]
+}
+
+/** What the nearest tsconfig.json above a file says about the file's imports */
+export interface TsconfigScope {
+  /** The prefixes of its `paths`: `@components` for `@components/*` */
+  paths: Set<string>
+  /** The folder its `baseUrl` names, from the scanned root: '' for the root, 'apps/web/src'. null without one */
+  baseUrl: string | null
+  /** The folders directly under `baseUrl`: an import that starts with one is a path into it, not a package */
+  baseUrlFolders: Set<string>
+  /** What an import of one segment can name under `baseUrl`: a file, with or without its extension, or a folder with an index */
+  baseUrlModules: Set<string>
 }
 
 export interface Rule {

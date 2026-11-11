@@ -213,7 +213,7 @@ prodlint avoids common false positives:
 - **Framework awareness** — Prisma, Drizzle, Supabase, Knex, and Sequelize whitelists prevent false SQL injection flags
 - **Middleware detection** — Clerk, NextAuth, Supabase middleware (`middleware.ts`, or `proxy.ts` on Next.js 16) detected, matcher included — auth findings it covers drop to info
 - **Block comment awareness** — patterns inside `/* */` are ignored
-- **Path alias support** — `@/`, `~/`, and tsconfig paths aren't flagged as hallucinated imports
+- **Path alias support** — `@/`, `~/`, tsconfig `paths` and imports under a tsconfig `baseUrl` (`src/settings`) aren't flagged as hallucinated imports; each file goes by the `tsconfig.json` or `jsconfig.json` nearest above it
 - **Route exemptions** — auth, webhook, health, and cron routes are skipped where a check wouldn't make sense
 - **Test and script awareness** — most rules skip test files, and a missing package in a test or script is a warning, not critical
 - **Fix suggestions** — every finding comes with a `fix` hint
