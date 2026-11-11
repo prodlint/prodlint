@@ -8,6 +8,10 @@ export const FRAMEWORK_SAFE_METHODS: Record<string, string[]> = {
   drizzle: ['arrayContains', 'arrayContainedIn', 'arrayOverlaps'],
   lodash: ['flatten', 'flattenDeep', 'contains', 'includes', 'has'],
   mongoose: ['contains'],
+  // Obsidian adds contains() to every array and string a plugin sees: its type file,
+  // obsidian.d.ts, declares it on Array<T> and String. It adds none of the other methods
+  // hallucinated-api reports, so .flatten() and .substr() are still wrong in a plugin
+  obsidian: ['contains'],
 }
 
 /**
@@ -50,6 +54,8 @@ export const DEPENDENCY_TO_FRAMEWORK: Record<string, string> = {
   '@upstash/ratelimit': 'upstash-ratelimit',
   'express-rate-limit': 'express-rate-limit',
   'rate-limiter-flexible': 'rate-limiter-flexible',
+  // Obsidian's API, which a plugin is built against
+  'obsidian': 'obsidian',
 }
 
 /**

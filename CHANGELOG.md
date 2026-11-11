@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`hallucinated-api` told Obsidian plugins to replace `.contains()` with `.includes()`.**
+  Obsidian adds `contains()` to arrays and strings, and its type file, `obsidian.d.ts`, declares
+  it on `Array<T>` and `String`. So `tags.contains(tag)` and `path.contains('/')` work in a
+  plugin, and the hint was noise. A project whose `package.json` lists `obsidian` is no longer
+  told about `.contains()`, the way one that lists Lodash or Prisma isn't.
+  - **Still reported there:** `.flatten()`, `.substr()`, `.trimLeft()`, `.trimRight()` and the
+    rule's other methods. Obsidian adds none of them.
+  - **Not covered:** a plugin with no `package.json`, or with one that doesn't list `obsidian`,
+    which is mostly plugins written in plain JavaScript. `.contains()` is reported there as
+    before.
+  - **Scan results may change:** fewer `hallucinated-api` warnings in Obsidian plugins.
+
 ## [0.10.8] - 2026-11-10
 
 ### Changed
