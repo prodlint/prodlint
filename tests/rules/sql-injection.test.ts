@@ -889,6 +889,428 @@ describe('sql-injection rule', () => {
       })
     })
 
+    // const TABLE = 'users'; prisma.$queryRawUnsafe(`SELECT * FROM ${TABLE} ...`): a name that
+    // holds a constant is read as its text, not as something the query takes in
+    describe('a constant of the file', () => {
+      // A query only the tree gets right, after each test's code: if the rule gave up on the tree
+      // and read the text instead, it's reported, and the test fails
+      const CANARY = "\nconst CANARY = 'canary'\nawait prisma.$executeRawUnsafe(`DELETE FROM ${CANARY}`)"
+      const check = (code: string, p = prismaProject) => {
+        const file = makeFile(code + CANARY)
+        expect(file.ast, 'the test code has to parse: names are read from the tree').not.toBeNull()
+        return sqlInjectionRule.check(file, p)
+      }
+      const lines = (code: string, p = prismaProject) => check(code, p).map(f => `${f.line} ${f.severity}`)
+      /** "line severity" of each finding, with and without Prisma in package.json: it has to be the same */
+      const found = (code: string) => {
+        expect(lines(code, project)).toEqual(lines(code))
+        return lines(code)
+      }
+      const run = (query: string) => `const rows = await prisma.$queryRawUnsafe(${query})`
+      const users = '`SELECT * FROM ${NAME} WHERE active = true`'
+
+      it('passes a query whose every ${} holds one', () => {
+        // The patterns would report this line: it's a template with a SELECT and a ${}
+        const code = [
+          "const TABLE = 'users'",
+          'const PAGE = 50',
+          run('`SELECT * FROM ${TABLE} WHERE active = true LIMIT ${PAGE}`'),
+        ].join('\n')
+        expect(found(code)).toEqual([])
+      })
+
+      it('passes it written with a +, and built into a name', () => {
+        const table = "const TABLE = 'users'\n"
+        expect(found(table + run("'SELECT * FROM ' + TABLE + ' WHERE active = true'"))).toEqual([])
+        expect(found(table + 'const sql = `SELECT * FROM ${TABLE} WHERE active = true`\n' + run('sql'))).toEqual([])
+        expect(found(table + "const sql = 'SELECT * FROM ' + TABLE\n" + run('sql'))).toEqual([])
+      })
+
+      it('passes every line of it', () => {
+        // On its own, the UPDATE line reads as a concatenation
+        const code = [
+          "const TABLE = 'posts'",
+          'await prisma.$executeRawUnsafe(`',
+          '  UPDATE ${TABLE} SET views = views + 1',
+          '  WHERE pinned = true',
+          '`)',
+        ].join('\n')
+        expect(found(code)).toEqual([])
+      })
+
+      it('passes the lines that declare a constant a query takes in, as it passes the query', () => {
+        // On its own, the line of `recent` reads as a query built with a ${}
+        const code = [
+          'const DAYS = 30',
+          'const recent = `SELECT user_id FROM logins WHERE age < ${DAYS}`',
+          'await prisma.$executeRawUnsafe(`DELETE FROM sessions WHERE user_id NOT IN (${recent})`)',
+        ].join('\n')
+        expect(found(code)).toEqual([])
+        // On every line of it: the third one reads as a concatenation
+        const spread = [
+          'const DAYS = 30',
+          'const recent = `',
+          '  SELECT user_id, visits + 1 AS next FROM logins',
+          '  WHERE age < ${DAYS}',
+          '`',
+          "await prisma.$executeRawUnsafe(`DELETE FROM sessions WHERE user_id NOT IN (${recent}) AND id = '${id}'`)",
+        ].join('\n')
+        expect(found(spread)).toEqual(['6 critical'])
+        // A name that takes something in isn't one: its line is the patterns' to read
+        const built = [
+          'const inner = `SELECT id FROM "${table}"`',
+          'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE id IN (${inner})`)',
+        ].join('\n')
+        expect(lines(built)).toEqual(['1 warning', '2 critical'])
+        expect(lines(built, project)).toEqual(['1 critical', '2 critical'])
+        // Nor one that nothing of Prisma's takes in: both lines are the patterns', as before
+        const elsewhere = code.replace('prisma.$executeRawUnsafe', 'db.run')
+        expect(lines(elsewhere)).toEqual(['2 warning', '3 warning'])
+        expect(lines(elsewhere, project)).toEqual(['2 critical', '3 critical'])
+      })
+
+      it('passes it handed to the tags called as functions, and to Prisma.raw()', () => {
+        const table = "const TABLE = 'users'\n"
+        expect(found(table + 'const rows = await prisma.$queryRaw(`SELECT * FROM ${TABLE} WHERE active = true`)')).toEqual([])
+        expect(found(table + 'const rows = await prisma.$queryRaw`SELECT * FROM ${Prisma.raw(`"${TABLE}"`)} WHERE id = ${id}`')).toEqual([])
+      })
+
+      it.each([
+        ['a string', "const NAME = 'users'"],
+        ['a number', 'const NAME = 50'],
+        ['a template with no ${}', 'const NAME = `users`'],
+        ['a literal through a cast', "const NAME = 'users' as const"],
+        ['a template of constants', "const SCHEMA = 'public'\nconst NAME = `${SCHEMA}.users`"],
+        ['a + of constants', "const SCHEMA = 'public'\nconst NAME = SCHEMA + '.users'"],
+        ['another constant', "const USERS = 'users'\nconst NAME = USERS"],
+        ['a ?: between two constants', "const NAME = archived ? 'users_archive' : 'users'"],
+        ['a constant, and exported', "export const NAME = 'users'"],
+      ])('reads a const set to %s as a constant', (_what, declaration) => {
+        expect(found(declaration + '\n' + run(users))).toEqual([])
+      })
+
+      it.each([
+        ['a let', "let NAME = 'users'", ''],
+        ['a var', "var NAME = 'users'", ''],
+        ['an import', "import { NAME } from './tables'", ''],
+        ['a name the file does not declare', '// NAME is a global', ''],
+        ['a const set to what a call returns', 'const NAME = tableFor(kind)', ''],
+        ['a const set to a parameter', 'export async function all(table: string) {\n  const NAME = table', '}'],
+        ['a const set to a template that takes something in', 'const NAME = `users_${tenant}`', ''],
+        ['a const set to a ?: with a branch that is no constant', "const NAME = archived ? archive : 'users'", ''],
+        ['a const set to a number worked out', 'const NAME = 5 * 10', ''],
+        ['a const taken out of an object, with a default', "const { NAME = 'users' } = options", ''],
+        ['a parameter with a default', "export async function all(NAME = 'users') {", '}'],
+      ])('does not take %s for a constant', (_what, before, after) => {
+        expect(found(`${before}\n${run(users)}\n${after}`)).toEqual([`${before.split('\n').length + 1} critical`])
+      })
+
+      it.each([
+        ['a property of an object', "const TABLES = { users: 'users' } as const", 'TABLES.users'],
+        ['a member of an enum', "enum Table { Users = 'users' }", 'Table.Users'],
+        ['what a call returns, of a constant too', "const TABLE = 'users'", 'quote(TABLE)'],
+        ['a number worked out', 'const PAGE = 50', 'PAGE * 2'],
+      ])('takes in %s, whatever it holds', (_what, declaration, held) => {
+        expect(found(declaration + '\n' + run('`SELECT * FROM users LIMIT ${' + held + '}`'))).toEqual(['2 critical'])
+      })
+
+      it('takes in a name that holds a built string as one thing: what the string holds is not read', () => {
+        // Read through, the query would take in a quoted name alone
+        const from = 'const from = `FROM "${table}"`\n'
+        expect(found(from + run("'SELECT * ' + from"))).toEqual(['2 critical'])
+        expect(found(from + run('`SELECT * ${from}`'))).toEqual(['2 critical'])
+      })
+
+      it('looks the name up where the query stands', () => {
+        // A parameter hides the module's constant
+        const hidden = [
+          "const table = 'users'",
+          'export async function all(table: string) {',
+          '  return prisma.$queryRawUnsafe(`SELECT * FROM ${table} WHERE active = true`)',
+          '}',
+        ].join('\n')
+        expect(found(hidden)).toEqual(['3 critical'])
+        // And a block's constant hides the parameter, in that block
+        const block = [
+          'export async function all(table: string) {',
+          '  if (!table) {',
+          "    const table = 'users'",
+          '    return prisma.$queryRawUnsafe(`SELECT * FROM ${table} WHERE active = true`)',
+          '  }',
+          '  return prisma.$queryRawUnsafe(`SELECT * FROM ${table} WHERE active = true`)',
+          '}',
+        ].join('\n')
+        expect(found(block)).toEqual(['6 critical'])
+      })
+
+      it('does not go round names that lead back to each other', () => {
+        const code = [
+          'const A = `${B} `',
+          'const B = `${A} `',
+          run('`SELECT * FROM ${A} WHERE active = true`'),
+        ].join('\n')
+        expect(found(code)).toEqual(['3 critical'])
+      })
+
+      it('reads a ?: between two constants as a constant, where it stands too', () => {
+        expect(found(run("`SELECT * FROM users ORDER BY name ${descending ? 'DESC' : 'ASC'}`"))).toEqual([])
+        expect(found(run("'SELECT * FROM users' + (active ? ' WHERE active = true' : '')"))).toEqual([])
+        expect(found(run("`SELECT * FROM users ORDER BY ${byName ? 'name' : byDate ? 'created_at' : 'id'}`"))).toEqual([])
+        // One branch takes something in: so does the ?:
+        expect(found(run("`SELECT * FROM users ${name ? `WHERE name = '${name}'` : ''}`"))).toEqual(['1 critical'])
+        expect(found(run("`SELECT * FROM users ORDER BY ${byName ? 'name' : column}`"))).toEqual(['1 critical'])
+        // And it's one thing taken in, as it was: what its branches hold isn't read, in a + either
+        expect(found(run("'SELECT * FROM ' + (archived ? `\"${table}\"` : '\"users\"')"))).toEqual(['1 critical'])
+      })
+
+      it('has nothing to read in a call with no query, or handed a number worked out', () => {
+        expect(found('await prisma.$executeRawUnsafe()')).toEqual([])
+        expect(found(run('page * size'))).toEqual([])
+      })
+
+      it('does not skip the line of a call for the constant it is handed by name', () => {
+        // The second statement of the line is the patterns' to read, as on any line
+        const code = "const SQL = 'SELECT 1'\nconst rows = await prisma.$queryRawUnsafe(SQL); const text = `SELECT * FROM users WHERE id = ${id}`"
+        expect(lines(code)).toEqual(['2 warning'])
+        expect(lines(code, project)).toEqual(['2 critical'])
+      })
+
+      it('passes a constant branch of an argument, and reports the other', () => {
+        const code = [
+          "const TABLE = 'videos'",
+          'const rows = await prisma.$queryRawUnsafe(',
+          '  all',
+          '    ? `SELECT * FROM ${TABLE} WHERE hidden = false`',
+          "    : `SELECT * FROM ${TABLE} WHERE kind = '${kind}'`",
+          ')',
+        ].join('\n')
+        expect(found(code)).toEqual(['5 critical'])
+        // The same for a name set to one
+        const named = [
+          "const TABLE = 'videos'",
+          'const sql = all',
+          '  ? `SELECT * FROM ${TABLE} WHERE hidden = false`',
+          "  : `SELECT * FROM ${TABLE} WHERE kind = '${kind}'`",
+          run('sql'),
+        ].join('\n')
+        expect(found(named)).toEqual(['4 critical'])
+      })
+
+      // for (const table of ['sessions', 'tokens']): the fixed list a table's name is checked against
+      describe('the variable of a for…of loop', () => {
+        const loop = (head: string, query = '`DELETE FROM ${table} WHERE stale = true`') =>
+          `for (${head}) {\n  await prisma.$executeRawUnsafe(${query})\n}`
+        const listed = "const TABLES = ['sessions', 'tokens']\n"
+
+        it('is a constant over a list of constants written in the loop', () => {
+          expect(found(loop("const table of ['sessions', 'tokens']"))).toEqual([])
+          expect(found(loop("const table of ['sessions', 'tokens'] as const"))).toEqual([])
+          expect(found(loop('const days of [7, 30]', '`DELETE FROM sessions WHERE age > ${days}`'))).toEqual([])
+        })
+
+        it('is a constant over a list a const holds', () => {
+          expect(found(listed + loop('const table of TABLES'))).toEqual([])
+          expect(found("const TABLES = ['sessions', 'tokens'] as const\n" + loop('const table of TABLES'))).toEqual([])
+          // A list of names, each a constant
+          expect(found("const SESSIONS = 'sessions'\nconst TABLES = [SESSIONS, `${SESSIONS}_archive`]\n" + loop('const table of TABLES'))).toEqual([])
+        })
+
+        it('is taken in over a list with nothing in it, which has no text to read', () => {
+          expect(found(loop('const table of []'))).toEqual(['2 critical'])
+          expect(found('const TABLES: string[] = []\n' + loop('const table of TABLES'))).toEqual(['3 critical'])
+        })
+
+        it('is one in a query built into a name, and next to other constants', () => {
+          const code = [
+            "const SCHEMA = 'app'",
+            "for (const table of ['sessions', 'tokens']) {",
+            '  const sql = `DELETE FROM ${SCHEMA}.${table} WHERE stale = true`',
+            '  await prisma.$executeRawUnsafe(sql)',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual([])
+        })
+
+        it.each([
+          ['is empty where it is declared', 'const TABLES: string[] = []\nfor (const row of rows) TABLES.push(row.name)', ''],
+          ['is added to', "const TABLES = ['sessions']\nif (extra) TABLES.push(extra)", ''],
+          ['is set by index', "const TABLES = ['sessions']\nTABLES[0] = extra", ''],
+          ['is handed to a call', "const TABLES = ['sessions']\nextend(TABLES)", ''],
+          ['is given another name', "const TABLES = ['sessions']\nconst more = TABLES\nmore.push(extra)", ''],
+          ['is put into an object', "const TABLES = ['sessions']\nconst config = { TABLES }", ''],
+          ['is put into an object under another key', "const TABLES = ['sessions']\nconst config = { list: TABLES }", ''],
+          ['is a key of something', "const TABLES = ['sessions']\nconst label = labels[TABLES]", ''],
+          ['is a key worked out', "const TABLES = ['sessions']\nconst index = { [TABLES]: true }", ''],
+          ['is taken out of an object', 'const { TABLES } = config', ''],
+          ['is exported', "export const TABLES = ['sessions']", ''],
+          ['is exported below', "const TABLES = ['sessions']\nexport { TABLES }", ''],
+          ['holds a name that is no constant', "const TABLES = ['sessions', extra]", ''],
+          ['holds a spread', "const TABLES = ['sessions', ...more]", ''],
+          ['has a hole', "const TABLES = ['sessions', , 'tokens']", ''],
+          ['is held by a let', "let TABLES = ['sessions']", ''],
+          ['is what a call returns', "const TABLES = ['sessions'].concat(more)", ''],
+          ['is another name', "const BASE = ['sessions']\nconst TABLES = BASE", ''],
+          ['is a parameter', 'export async function clean(TABLES: string[]) {', '}'],
+        ])('is taken in when the list %s', (_why, before, after) => {
+          expect(found(`${before}\n${loop('const table of TABLES')}\n${after}`)).toEqual([`${before.split('\n').length + 2} critical`])
+        })
+
+        it.each([
+          ['its length', 'console.log(TABLES.length)'],
+          ['a search of it', 'const known = (name: string) => TABLES.includes(name)'],
+          ['a copy of it', 'const quoted = TABLES.map(name => `"${name}"`)'],
+          ['a read past a ?.', 'const first = TABLES?.find(Boolean)'],
+          ['another loop over it', 'for (const table of TABLES) console.log(table)'],
+          ['a type made of it', 'type Table = (typeof TABLES)[number]'],
+          ['a property of that name', 'const count = stats.TABLES'],
+          ['a key of that name', 'const stats = { TABLES: 2 }'],
+          ['an export of something else', "export const OTHER = ['other']"],
+        ])('still is one when the file has %s', (_what, line) => {
+          expect(found(listed + line + '\n' + loop('const table of TABLES'))).toEqual([])
+        })
+
+        it('goes by the name: a push() to anything called that says no', () => {
+          const code = [
+            listed + loop('const table of TABLES'),
+            'function collect(TABLES: string[], extra: string) {',
+            '  TABLES.push(extra)',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical'])
+        })
+
+        it.each([
+          ['a let', 'let table of TABLES'],
+          ['a var', 'var table of TABLES'],
+          ['taken out of each element', 'const [table] of TABLES'],
+          ['the key of a for…in', 'const table in TABLES'],
+        ])('is taken in when it is %s', (_what, head) => {
+          expect(found(listed + loop(head))).toEqual(['3 critical'])
+        })
+
+        it('is taken in when it was declared before the loop', () => {
+          expect(found(listed + 'let table: string\n' + loop('table of TABLES'))).toEqual(['4 critical'])
+        })
+
+        it('is not what a const with no value is, for the file having a loop', () => {
+          const code = [
+            'const { table } = options',
+            "for (const other of ['sessions', 'tokens']) console.log(other)",
+            'await prisma.$executeRawUnsafe(`DELETE FROM ${table} WHERE stale = true`)',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 critical'])
+        })
+
+        it('is not the name a callback or a block declares again', () => {
+          const code = [
+            "for (const table of ['sessions', 'tokens']) {",
+            '  await each(async (table: string) => prisma.$executeRawUnsafe(`DELETE FROM ${table} WHERE stale = true`))',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['2 critical'])
+        })
+      })
+
+      it('reads a name that can be many texts in its first few', () => {
+        // Each name is either of the one before: twice as many texts a name, 2^27 in the end,
+        // and as many readings of N0 if each name were read again each time it's met
+        const names = ["const N0 = flag ? 'a' : 'b'"]
+        for (let i = 1; i <= 26; i++) names.push(`const N${i} = flag ? N${i - 1} : N${i - 1}`)
+        const started = performance.now()
+        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N26} WHERE id = ${id}`'))).toEqual(['28 critical'])
+        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N26} WHERE active = true`'))).toEqual([])
+        expect(performance.now() - started).toBeLessThan(2000)
+      })
+
+      describe('read as its text', () => {
+        it('shows the statement of a query that starts with one', () => {
+          const base = "const BASE = 'SELECT * FROM users'\n"
+          // A string that starts with a ${} was a warning: its statement couldn't be seen
+          expect(found(base + run('`${BASE} WHERE id = ${id}`'))).toEqual(['2 critical'])
+          expect(found(base + run("BASE + ' WHERE id = ' + id"))).toEqual(['2 critical'])
+          expect(found(base + 'const sql = `${BASE} WHERE id = ${id}`\n' + run('sql'))).toEqual(['2 critical'])
+          // As for any statement that takes values: a warning when they're passed
+          expect(found(base + 'const rows = await prisma.$queryRawUnsafe(`${BASE} WHERE ${filter}`, id)')).toEqual(['2 warning'])
+          // One that takes none
+          expect(found("const BASE = 'TRUNCATE TABLE'\n" + 'await prisma.$executeRawUnsafe(`${BASE} ${table}`)')).toEqual(['2 warning'])
+          // And a start that's out of sight is still one: a warning, as it was
+          expect(found("import { BASE } from './queries'\n" + run('`${BASE} WHERE id = ${id}`'))).toEqual(['2 warning'])
+        })
+
+        it('reads the statement across the pieces of a +', () => {
+          // The first piece alone says nothing: the statement is in the second
+          expect(found(run("'(' + 'SELECT id FROM users WHERE id = ' + id + ')'"))).toEqual(['1 critical'])
+          // But not past what's taken in: a statement that follows it isn't how the query starts
+          expect(found(run("prefix + 'SELECT * FROM users WHERE id = ' + id"))).toEqual(['1 warning'])
+          expect(found(run('`${prefix} SELECT * FROM users WHERE id = ${id}`'))).toEqual(['1 warning'])
+        })
+
+        it('reads the statement past a comment, whatever the comment takes in', () => {
+          expect(found(run('`/* for ${tenant} */ SELECT * FROM users WHERE id = ${id}`'))).toEqual(['1 critical'])
+          expect(found(run('`-- for ${tenant}\nSELECT * FROM users WHERE id = ${id}`'))).toEqual(['1 critical'])
+          // One that never closes holds the rest, as it did
+          expect(found(run('`/* for ${tenant} SELECT * FROM users WHERE id = ${id}`'))).toEqual(['1 warning'])
+        })
+
+        it('tells a quoted name from a value with the constant in its place', () => {
+          const page = 'const PAGE = 50\n'
+          // LIMIT ${PAGE} read as a value next to the name
+          expect(found(page + run('`SELECT * FROM "${table}" LIMIT ${PAGE}`'))).toEqual(['2 warning'])
+          expect(found(page + run("'SELECT * FROM \"' + table + '\" LIMIT ' + PAGE"))).toEqual(['2 warning'])
+          expect(found(page + run('`SELECT * FROM "${table}" WHERE id = ${id} LIMIT ${PAGE}`'))).toEqual(['2 critical'])
+          // A number written in a + is text too
+          expect(found(run("'SELECT * FROM \"' + table + '\" LIMIT ' + 50"))).toEqual(['1 warning'])
+          // The quotes in a constant are the query's: a string it holds, a name it opens
+          expect(found("const ACTIVE = `status = 'active'`\n" + run('`SELECT * FROM "${table}" WHERE ${ACTIVE}`'))).toEqual(['2 warning'])
+          expect(found("const SCHEMA = '\"public\".\"'\n" + run('`SELECT count(*) FROM ${SCHEMA}${table}"`'))).toEqual(['2 warning'])
+          // And a value between the quotes one opens is still a value
+          expect(found("const WHERE = `WHERE name = '`\n" + run('`SELECT * FROM "users" ${WHERE}${name}\'`'))).toEqual(['2 critical'])
+          expect(found("const WHERE = 'WHERE email = '\n" + run('`SELECT * FROM "users" ${WHERE}"${email}"`'))).toEqual(['2 critical'])
+        })
+
+        it('is critical if one of the texts a ?: makes it is', () => {
+          // EXPLAIN isn't a statement values go into; without it, the SELECT is
+          expect(found(run("`${plan ? 'EXPLAIN ' : ''}SELECT * FROM users WHERE id = ${id}`"))).toEqual(['1 critical'])
+          expect(found(run("`${plan ? '' : 'EXPLAIN '}SELECT * FROM users WHERE id = ${id}`"))).toEqual(['1 critical'])
+          expect(found(run("`${plan ? 'EXPLAIN ' : 'EXPLAIN ANALYZE '}SELECT * FROM users WHERE id = ${id}`"))).toEqual(['1 warning'])
+          // Quoted in one text, bare in the other
+          expect(found(run("`SELECT * FROM ${quoted ? '\"' : ''}${table}${quoted ? '\"' : ''}`"))).toEqual(['1 critical'])
+          expect(found("const tail = quoted ? '\"' : ''\n" + run('`SELECT * FROM "${table}${tail}`'))).toEqual(['2 critical'])
+          // The same in a +
+          expect(found(run("(plan ? 'EXPLAIN ' : '') + 'SELECT * FROM users WHERE id = ' + id"))).toEqual(['1 critical'])
+          expect(found(run("(plan ? '' : 'EXPLAIN ') + 'SELECT * FROM users WHERE id = ' + id"))).toEqual(['1 critical'])
+        })
+
+        it('reads a ?: written twice, or a name used twice, the same way both times', () => {
+          // One quote or the other around the name, never one of each
+          expect(found(run("`SELECT * FROM ${mysql ? '`' : '\"'}${table}${mysql ? '`' : '\"'}`"))).toEqual(['1 warning'])
+          expect(found("const quote = mysql ? '`' : '\"'\n" + run('`SELECT * FROM ${quote}${table}${quote}`'))).toEqual(['2 warning'])
+          expect(found("const quote = mysql ? '`' : '\"'\n" + run("'SELECT * FROM ' + quote + table + quote"))).toEqual(['2 warning'])
+          // With a list between them that's longer than the two
+          const code = [
+            "const quote = mysql ? '`' : '\"'",
+            "for (const schema of ['a', 'b', 'c']) {",
+            '  await prisma.$queryRawUnsafe(`SELECT * FROM ${schema}.${quote}${table}${quote}`)',
+            '}',
+          ].join('\n')
+          expect(found(code)).toEqual(['3 warning'])
+        })
+
+        it('reads what is appended to a query, and a query that starts as a name', () => {
+          const base = "const BASE = 'SELECT * FROM users'\n"
+          // A constant appended is no more built into it than a literal
+          expect(found(base + "const ORDER = ' ORDER BY id'\nlet sql = BASE\nsql += ORDER\n" + run('sql'))).toEqual([])
+          // A value appended: one query, reported where it starts, with the statement the name holds
+          expect(found(base + 'let sql = BASE\nsql += ` WHERE id = ${id}`\n' + run('sql'))).toEqual(['2 critical'])
+          expect(check(base + 'let sql = BASE\nsql += ` WHERE id = ${id}`\n' + run('sql'))[0].message).toContain('built with string concatenation')
+          // The statement can be all the query starts as
+          expect(found("let sql = 'DELETE'\nsql += ` FROM users WHERE id = ${id}`\n" + run('sql'))).toEqual(['1 critical'])
+          // And the quotes of a constant that's appended: the table's name is between them
+          expect(found("const QUOTE = '\"'\nlet sql = 'SELECT * FROM '\nsql += QUOTE\nsql += table\nsql += QUOTE\n" + run('sql'))).toEqual(['2 warning'])
+        })
+      })
+    })
+
     describe('what the regex fallback has to get right', () => {
       const found = (code: string, relativePath = 'test.ts') => {
         const file = makeFile(code, { relativePath })
@@ -986,6 +1408,12 @@ describe('sql-injection rule', () => {
 
       it('does not tell a quoted name from a value: a statement that takes values stays critical', () => {
         expect(text('const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}"`)')).toEqual(['1 critical'])
+      })
+
+      it('does not read what a name holds: without a tree there are no scopes', () => {
+        const code = "const TABLE = 'users'\nconst rows = await prisma.$queryRawUnsafe(`SELECT * FROM ${TABLE} WHERE active = true`)"
+        expect(text(code)).toEqual(['2 critical'])
+        expect(sqlInjectionRule.check(makeFile(code), project)).toEqual([])
       })
 
       it('leaves a query it cannot read to the patterns', () => {

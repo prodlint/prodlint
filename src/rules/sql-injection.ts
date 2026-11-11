@@ -37,7 +37,8 @@ const TAKES_VALUES = new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH', 'M
 /**
  * Whether a query starts with a statement that takes values, past spaces, parentheses and
  * comments. A loop, not a regex: a regex that skips comments can match a run of them, or a line
- * of dashes, in so many ways that it backtracks for minutes
+ * of dashes, in so many ways that it backtracks for minutes. Where the query takes something
+ * in (TAKEN_IN) before its first word, there's no statement to read
  */
 function takesValues(sql: string): boolean {
   let i = 0
@@ -92,53 +93,85 @@ function addBuilt(queries: Queries, from: number, to: number, query: BuiltQuery)
   addLines(queries.builtLines, from, to)
 }
 
-/** Whether no value goes into a string: a literal, or a `+` of literals */
-function isConstantString(node: Node): boolean {
-  node = unwrapExpression(node)
-  if (node.type === 'BinaryExpression') {
-    return node.operator === '+' && isConstantString(node.left) && isConstantString(node.right)
-  }
-  return node.type === 'StringLiteral' || node.type === 'NumericLiteral' ||
-    (node.type === 'TemplateLiteral' && node.expressions.length === 0)
+// What a query takes in, in the texts textsOf() gives of it
+const TAKEN_IN = '\0'
+// How many texts a name is read as, when a list or a `?:` makes it one of several
+const MAX_TEXTS = 8
+
+/** What a file's names hold, read once a query takes one in */
+interface Names {
+  /** The declaration a name refers to where it stands, if the file has it */
+  bindingOf(name: Node): Binding | undefined
+  /** Every text the constant a name holds can be, or null for a name that doesn't hold one */
+  constantOf(name: Node): string[] | null
+  /** What the names read as constants so far are declared with */
+  constants: Node[]
+}
+
+/** Whether a string takes in nothing, in any text it can be: a literal, or constants all through */
+const isConstant = (texts: string[]): boolean => !texts.some(text => text.includes(TAKEN_IN))
+
+/**
+ * The texts two halves make. A half that can be several, a `?:` or a list's name, goes through
+ * them in step with the other: the first of each, then the second of each. So a `?:` written
+ * twice, or a name used twice, reads the same way both times
+ */
+function joined(left: string[], right: string[]): string[] {
+  const count = Math.max(left.length, right.length)
+  return Array.from({ length: count }, (_, i) => left[i % left.length] + right[i % right.length])
 }
 
 /**
- * The strings an argument builds from values: a template that interpolates or a `+` that isn't
- * all literals, in either branch if the argument is a `?:`
+ * Every text a string can be, with a NUL for each thing it takes in. A constant takes in
+ * nothing and is read as its text: a literal, a name that holds one (Names.constantOf), a `+`
+ * or a template of constants, and a `?:` between two, which can be either. Anything else in a
+ * `${}` or a `+` is taken in, whatever it holds: a parameter, an import, a property, what a
+ * call returns
  */
-function builtStrings(node: Node): { node: Node; how: How }[] {
+function textsOf(node: Node, names: Names): string[] {
   node = unwrapExpression(node)
-  if (node.type === 'ConditionalExpression') return [...builtStrings(node.consequent), ...builtStrings(node.alternate)]
-  if (node.type === 'TemplateLiteral' && node.expressions.length > 0) return [{ node, how: 'interpolation' }]
-  if (node.type === 'BinaryExpression' && node.operator === '+' && !isConstantString(node)) return [{ node, how: 'concatenation' }]
-  return []
+  if (node.type === 'StringLiteral' || node.type === 'NumericLiteral') return [String(node.value)]
+  if (node.type === 'Identifier') return names.constantOf(node) ?? [TAKEN_IN]
+  if (node.type === 'BinaryExpression' && node.operator === '+') return joined(textsOf(node.left, names), textsOf(node.right, names))
+  if (node.type === 'ConditionalExpression') {
+    const either = [...textsOf(node.consequent, names), ...textsOf(node.alternate, names)]
+    return isConstant(either) ? either : [TAKEN_IN]
+  }
+  if (node.type === 'TemplateLiteral') {
+    const written = node.quasis.map(quasi => quasi.value.cooked ?? quasi.value.raw)
+    // What a `${}` holds is one thing taken in, unless all of it is a constant
+    const held = node.expressions.map((expression) => {
+      const texts = textsOf(expression, names)
+      return isConstant(texts) ? texts : [TAKEN_IN]
+    })
+    // In step, as joined() has them. Each text is put together once, however many `${}` it has
+    const count = held.reduce((most, texts) => Math.max(most, texts.length), 1)
+    return Array.from({ length: count }, (_, i) =>
+      written.map((text, at) => at < held.length ? text + held[at][i % held[at].length] : text).join(''))
+  }
+  return [TAKEN_IN]
 }
 
-/** The text a built string starts with, or '' if it starts with a value */
-function startOf(node: Node): string {
+/** Every string an argument can be: either branch of a `?:`, and of the `?:`s in those */
+function branches(node: Node): Node[] {
   node = unwrapExpression(node)
-  if (node.type === 'BinaryExpression') return startOf(node.left)
-  if (node.type === 'StringLiteral') return node.value
-  if (node.type === 'TemplateLiteral') return node.quasis[0].value.cooked ?? node.quasis[0].value.raw
-  return ''
+  return node.type === 'ConditionalExpression' ? [...branches(node.consequent), ...branches(node.alternate)] : [node]
 }
 
-// What a query takes in, in the text sqlOf() gives of it
-const TAKEN_IN = '\0'
+/**
+ * How a string that takes something in is built: a template that interpolates, or a `+`. Null
+ * for what isn't a string the file shows there: a name, what a call returns
+ */
+function howBuilt(node: Node): How | null {
+  if (node.type === 'TemplateLiteral') return 'interpolation'
+  return node.type === 'BinaryExpression' && node.operator === '+' ? 'concatenation' : null
+}
+
 const QUOTED_NAME = /^[\w$\0]+$/
 // Where a table's name goes
 const TABLE_KEYWORD = /\b(?:FROM|JOIN|INTO|UPDATE)\s*$/i
 // A FROM that a value follows: EXTRACT(YEAR FROM x), TRIM(BOTH y FROM x), a IS DISTINCT FROM x
 const VALUE_FROM = /\b(?:EXTRACT|TRIM)\s*\([^)]*\bFROM\s*$|\bDISTINCT\s+FROM\s*$/i
-
-/** The SQL a built string shows, with a NUL for each thing it takes in */
-function sqlOf(node: Node): string {
-  node = unwrapExpression(node)
-  if (node.type === 'BinaryExpression' && node.operator === '+') return sqlOf(node.left) + sqlOf(node.right)
-  if (node.type === 'StringLiteral') return node.value
-  if (node.type === 'TemplateLiteral') return node.quasis.map(quasi => quasi.value.cooked ?? quasi.value.raw).join(TAKEN_IN)
-  return TAKEN_IN
-}
 
 /**
  * Whether a double-quoted name is where only a name can be: after a keyword that takes a table,
@@ -193,14 +226,23 @@ interface RawCall {
   alone: boolean
 }
 
+/** A string a raw call is handed: how it's built, and every text it can be (textsOf) */
+interface Built {
+  node: Node
+  how: How
+  texts: string[]
+}
+
 /**
- * A string built for a raw call, reported where it starts. `pieces` are what a name appends to
- * it with `+=`: SQL of the same query, read after the string's own
+ * A string built for a raw call, reported where it starts. `pieces` are the texts of what a
+ * name appends to it with `+=`: SQL of the same query, read after the string's own. A query
+ * that can be several texts is critical if one of them is
  */
-function addQuery(queries: Queries, call: RawCall, built: { node: Node; how: How }, pieces: Node[] = []): void {
+function addQuery(queries: Queries, call: RawCall, built: Built, pieces: string[][] = []): void {
   if (!built.node.loc) return
-  const critical = !TAG_CALLED.test(call.method) && takesValues(startOf(built.node)) && call.alone &&
-    !takesNamesOnly(sqlOf(built.node) + pieces.map(sqlOf).join(''))
+  const whole = pieces.reduce(joined, built.texts)
+  // The statement is the string's own: which piece comes first isn't read
+  const critical = !TAG_CALLED.test(call.method) && call.alone && built.texts.some(takesValues) && !whole.every(takesNamesOnly)
   addBuilt(queries, built.node.loc.start.line, built.node.loc.end.line, { method: call.method, how: built.how, critical })
 }
 
@@ -208,35 +250,137 @@ function addQuery(queries: Queries, call: RawCall, built: { node: Node; how: How
  * What a name carries into a raw call: every string the file sets it to, in whatever order,
  * since the order statements run in isn't read. Each is a query of its own, judged as if it
  * were written in the call. Appended to with `+=`, a query is built by concatenation unless
- * every piece is a literal, and it's still one query: reported where it starts, not piece by piece
+ * every piece is a constant, and it's still one query: reported where it starts, not piece by piece
  */
-function readName(queries: Queries, call: RawCall, binding: Binding): void {
-  const pieces = binding.values.filter(value => value.append)
-  const grown = pieces.some(piece => !isConstantString(piece.node))
+function readName(queries: Queries, call: RawCall, binding: Binding, names: Names): void {
+  const pieces = binding.values.filter(value => value.append).map(value => value.node)
+  const appended = pieces.map(piece => textsOf(piece, names))
+  const grown = !appended.every(isConstant)
   // Whether the file shows a string the name starts as: a parameter or a call's result isn't one
   let shown = false
   for (const { node, append } of binding.values) {
     if (append) continue
-    const built = builtStrings(node)
-    const constant = isConstantString(node)
-    if (constant && grown) built.push({ node, how: 'concatenation' })
-    // A constant has nothing built into it, in the call or by its name
-    else if (constant && node.loc) addLines(queries.safe, node.loc.start.line, node.loc.end.line)
-    for (const string of built) addQuery(queries, call, string, pieces.map(piece => piece.node))
-    shown ||= constant || built.length > 0
+    for (const string of branches(node)) {
+      const texts = textsOf(string, names)
+      const constant = isConstant(texts)
+      const how = constant ? (grown ? 'concatenation' : null) : howBuilt(string)
+      if (how) addQuery(queries, call, { node: string, how, texts }, appended)
+      // A constant has nothing built into it, in the call or by its name
+      else if (constant && string.loc) addLines(queries.safe, string.loc.start.line, string.loc.end.line)
+      shown ||= constant || how !== null
+    }
   }
   // The pieces are lines of that query, which is reported where it starts or has nothing built
   // into it. One that starts out of sight is left to the patterns, pieces and all
   if (!shown) return
-  for (const { node } of pieces) {
-    if (node.loc) addLines(queries.builtLines, node.loc.start.line, node.loc.end.line)
+  for (const piece of pieces) {
+    if (piece.loc) addLines(queries.builtLines, piece.loc.start.line, piece.loc.end.line)
   }
+}
+
+// What reads a list and leaves it as it is
+const LIST_READ = /^(?:length|includes|indexOf|join|map|forEach|filter|some|every|find|slice)$/
+
+/**
+ * Whether nothing in the file can add to an array a `const` holds: the file names it only to
+ * declare it, to loop over it or to read it, and doesn't export it. By the name alone, whichever
+ * declaration each mention is of, so a push() to anything called that says no. A property or a
+ * key of that name (`out.tables`, `{ tables: [] }`) isn't a mention of it
+ */
+function onlyRead(program: Node, name: string): boolean {
+  let read = true
+  walkAST(program, (node, parent) => {
+    if (node.type === 'ExportNamedDeclaration') {
+      const declares = node.declaration?.type === 'VariableDeclaration' ? node.declaration.declarations : []
+      if (declares.some(({ id }) => id.type === 'Identifier' && id.name === name)) read = false
+    }
+    if (node.type !== 'Identifier' || node.name !== name || !parent) return
+    if (parent.type === 'VariableDeclarator' && parent.id === node) return
+    // A loop over it, and a type made of it: (typeof tables)[number]
+    if (parent.type === 'ForOfStatement' || parent.type === 'TSTypeQuery') return
+    if ((parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && !parent.computed) {
+      // The property itself, or the list something reads
+      if (parent.property === node || (parent.property.type === 'Identifier' && LIST_READ.test(parent.property.name))) return
+    }
+    // A key, which `{ tables }` has too, next to the value: that one is a mention
+    if (parent.type === 'ObjectProperty' && parent.key === node && !parent.computed) return
+    read = false
+  })
+  return read
+}
+
+/**
+ * What the names of a file hold. A constant is a name declared with `const` whose value is one
+ * (textsOf), and the `const` of a `for…of` loop over a list of them: an array written in the
+ * loop, or held by a `const` that nothing can add to. Scopes are read at the first name asked
+ * for, so not for a file whose queries take in none, and the file's loops at the first `const`
+ * that has no value of its own
+ */
+function readNames(program: Node): Names {
+  let bound: Map<Node, Binding> | undefined
+  let loops: Map<Binding | undefined, Node> | undefined
+  const memo = new Map<Binding, string[] | null>()
+  const read = new Map<string, boolean>()
+
+  /** What the `for…of` loop that declares a variable goes over, if a loop does */
+  const listOf = (variable: Binding): Node | undefined => {
+    if (!loops) {
+      const found = loops = new Map()
+      walkAST(program, (node) => {
+        if (node.type === 'ForOfStatement' && node.left.type === 'VariableDeclaration') found.set(names.bindingOf(node.left.declarations[0].id), node.right)
+      })
+    }
+    return loops.get(variable)
+  }
+
+  /** Every text a loop's variable can be: the elements of the list it goes over */
+  const elementsOf = (list: Node | undefined): string[] | null => {
+    if (!list) return null
+    list = unwrapExpression(list)
+    if (list.type === 'Identifier') {
+      const array = names.bindingOf(list)
+      const held = array?.constant ? array.values[0] : undefined
+      if (!read.has(list.name)) read.set(list.name, onlyRead(program, list.name))
+      if (!held || !read.get(list.name)) return null
+      list = unwrapExpression(held.node)
+    }
+    // A list with nothing in it has no text to read
+    if (list.type !== 'ArrayExpression' || list.elements.length === 0) return null
+    // A hole, like a spread or a name that holds no constant, is something taken in: the list
+    // isn't one the file shows whole
+    return list.elements.flatMap(element => element ? textsOf(element, names) : [TAKEN_IN])
+  }
+
+  const names: Names = {
+    constants: [],
+    bindingOf(name) {
+      bound ??= bindNames(program)
+      return bound.get(name)
+    },
+    constantOf(name) {
+      const binding = names.bindingOf(name)
+      if (!binding?.constant) return null
+      const known = memo.get(binding)
+      if (known !== undefined) return known
+      // Until it's read: a name whose value leads back to it holds no constant
+      memo.set(binding, null)
+      // A `const` with no value of its own is a loop's, or taken out of something
+      const value = binding.values[0]
+      let texts = value ? textsOf(value.node, names) : elementsOf(listOf(binding))
+      // A long list, or a `?:` between names that are each a `?:`, is read in its first few texts
+      texts = texts && isConstant(texts) ? texts.slice(0, MAX_TEXTS) : null
+      if (texts && value) names.constants.push(value.node)
+      memo.set(binding, texts)
+      return texts
+    },
+  }
+  return names
 }
 
 function readTree(ast: NonNullable<FileContext['ast']>): Queries {
   const queries: Queries = { safe: new Set(), built: new Map(), builtLines: new Set() }
-  // The calls handed a name, read once the tree is walked
-  const named = new Map<Node, RawCall>()
+  // The raw calls, read once the tree is walked, with what each is handed
+  const calls: { call: RawCall; query: Node }[] = []
   walkAST(ast.program, (node) => {
     if (node.type === 'TaggedTemplateExpression') {
       if (isTaggedTemplateSql(node) && node.loc) {
@@ -244,29 +388,41 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
       }
     } else if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
       const method = rawCall(node.callee)
-      if (!method || node.arguments.length === 0) return
-      const call: RawCall = { method, alone: node.arguments.length === 1 }
-      const query = node.arguments[0]
-      const name = unwrapExpression(query)
-      if (name.type === 'Identifier') named.set(name, call)
-      // A constant has nothing built into it, whatever a `+` in its SQL looks like to the patterns
-      if (isConstantString(query) && query.loc) addLines(queries.safe, query.loc.start.line, query.loc.end.line)
-      for (const built of builtStrings(query)) addQuery(queries, call, built)
+      if (method && node.arguments.length > 0) calls.push({ call: { method, alone: node.arguments.length === 1 }, query: node.arguments[0] })
     }
   })
+
+  const names = readNames(ast.program)
+  for (const { call, query } of calls) {
+    for (const string of branches(query)) {
+      const texts = textsOf(string, names)
+      if (isConstant(texts)) {
+        // A constant has nothing built into it, whatever a `+` or a `${}` in its SQL looks
+        // like to the patterns. One handed over by name is read below, where it's set
+        if (string.type !== 'Identifier' && string.loc) addLines(queries.safe, string.loc.start.line, string.loc.end.line)
+        continue
+      }
+      const how = howBuilt(string)
+      if (how) addQuery(queries, call, { node: string, how, texts })
+    }
+  }
   // A query built into a variable and handed over by name: followed to what the file sets the
-  // name to. Scopes are only read for a file that has such a call
-  if (named.size > 0) {
-    const calls = new Map<Binding, RawCall[]>()
-    for (const [name, binding] of bindNames(ast.program, new Set(named.keys()))) {
-      calls.set(binding, [...(calls.get(binding) ?? []), named.get(name)!])
-    }
-    for (const [binding, handedTo] of calls) {
-      // One call that passes values says the query has places for them, as in
-      // params.length ? run(sql, ...params) : run(sql)
-      const alone = handedTo.every(call => call.alone)
-      for (const { method } of handedTo) readName(queries, { method, alone }, binding)
-    }
+  // name to
+  const named = new Map<Binding, RawCall[]>()
+  for (const { call, query } of calls) {
+    const name = unwrapExpression(query)
+    const binding = name.type === 'Identifier' ? names.bindingOf(name) : undefined
+    if (binding) named.set(binding, [...(named.get(binding) ?? []), call])
+  }
+  for (const [binding, handedTo] of named) {
+    // One call that passes values says the query has places for them, as in
+    // params.length ? run(sql, ...params) : run(sql)
+    const alone = handedTo.every(call => call.alone)
+    for (const { method } of handedTo) readName(queries, { method, alone }, binding, names)
+  }
+  // A constant that a query takes in has nothing built into it either, where it's declared
+  for (const value of names.constants) {
+    if (value.loc) addLines(queries.safe, value.loc.start.line, value.loc.end.line)
   }
   return queries
 }
@@ -275,8 +431,9 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
 // if it has one, then a template or a call. A regex literal with a quote in it, as in
 // .replace(/'/g, "''"), isn't understood, and a query with one is left to the patterns above, as
 // is an argument that's a `?:` or a constant. So is a query handed over by name: there are no
-// scopes to say which declaration a name is. A quoted name isn't told from a value here. The
-// other tags stay with TAGGED_TEMPLATE_PREFIX, a line at a time
+// scopes to say which declaration a name is, nor what it holds, so a constant in a `${}` is
+// something taken in here. A quoted name isn't told from a value either. The other tags stay
+// with TAGGED_TEMPLATE_PREFIX, a line at a time
 const TEXT_RAW = /(\$(?:queryRaw|executeRaw)(?:Unsafe)?|\bPrisma\.(?:raw|sql))\b/g
 const TEXT_TAG = /^(?:\$(?:queryRaw|executeRaw)|Prisma\.sql)$/
 const TEXT_NAME = /[\w$.]+/y

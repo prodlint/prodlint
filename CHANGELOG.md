@@ -86,10 +86,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - A constant handed over by name is no longer reported for a `+` in its SQL.
   - **Not followed:** a parameter, an import, a loop's variable, a destructured value, a
     property (`this.sql`, `queries.byId`), what a call returns (`buildQuery()`,
-    `parts.join(' ')`, `` `...`.trim() ``) and a name set to another name. Nor is a query
-    whose start the file doesn't show, such as a parameter with pieces appended, or anything
-    in a file Babel can't parse: without a syntax tree there are no scopes to read. These
-    stay with the line patterns, as before.
+    `parts.join(' ')`, `` `...`.trim() ``) and a name set to another name, unless that
+    one holds a constant (the next entry). Nor is a query whose start the file doesn't
+    show, such as a parameter with pieces appended, or anything in a file Babel can't
+    parse: without a syntax tree there are no scopes to read. These stay with the line
+    patterns, as before.
   - **Scan results may change for a project that hands Prisma's raw calls a query by name.**
     More findings: on the sample, 447 of those 555 strings weren't reported, 269 of them
     because their SQL isn't in capitals and 155 because it spans lines. And more critical
@@ -101,6 +102,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     that takes them, goes from critical to a warning. A `--baseline` saved before this sees
     a query that spans lines as new where its finding moved to the line the string starts
     on.
+- **`sql-injection` read a constant in a query as something the query takes in.**
+  `` const TABLE = 'users' `` and then
+  `` prisma.$queryRawUnsafe(`SELECT * FROM ${TABLE} WHERE active = true`) `` was a critical
+  finding: every `${}` and every operand of a `+` counted as taken in, whatever it held. A
+  name that holds a constant is now read as its text, in a string built in one of Prisma's
+  raw calls or handed to one by name.
+  - **What a constant is**: a string or a number written out; a name declared with `const`
+    whose value is a constant, looked up as JavaScript does, so a parameter called `table`
+    isn't the module's `table`; a template or a `+` of constants (`` `${SCHEMA}.users` ``);
+    a `?:` between two constants, which is either text (`${descending ? 'DESC' : 'ASC'}`);
+    and the `const` of a `for…of` loop over a list of constants,
+    `for (const table of ['sessions', 'tokens'])`.
+  - **A query that takes in nothing but constants isn't reported**, in the call or by name,
+    and the line patterns don't run on its lines. Of a `?:` argument with one such branch,
+    the other branch is reported. Nor do the patterns run on the lines that declare a
+    constant one of these queries takes in: `` const recent = `SELECT ... ${DAYS}` `` was
+    reported where it's declared, as a query built with a `${}`.
+  - **Next to something the query does take in, a constant is read as its text.** So the
+    statement of `` `${BASE} WHERE id = ${id}` `` can be seen: with
+    `const BASE = 'SELECT * FROM users'` it's critical, where a string that starts with a
+    `${}` was a warning. And `` `SELECT * FROM "${table}" LIMIT ${PAGE}` `` takes in only a
+    quoted name, so it's a warning, where `${PAGE}` counted as a value next to the name. The
+    statement is read across the pieces of a `+` too, and past a comment whatever the
+    comment holds, up to the first thing taken in:
+    `'(' + 'SELECT id FROM users WHERE id = ' + id + ')'` and
+    `` `/* for ${tenant} */ SELECT * FROM users WHERE id = ${id}` `` are critical, where
+    each was a warning. A query that a `?:` makes one of two texts is critical if either
+    is.
+  - **A list held by a `const` counts only if the file can't add to it**: it isn't empty
+    where it's declared, the file names it only to loop over it, to read it (`.length`,
+    `.includes()`, `.map()` and the like) or to make a type of it, and it isn't exported. So
+    `const tables = []`, `tables.push(row.name)` and a loop over `tables` is reported as
+    before. The check goes by the name alone: a `push()` to anything called `tables` says
+    no.
+  - **Not read, and reported as before:** a `let` or a `var`, even one set once; an import,
+    whatever its case, since its text is in another file; a property (`TABLES.users`,
+    `config.schema`) and a member of an enum; what a call returns (`columns.join(', ')`,
+    `Number(id)`); a parameter, with a default or of a `.map()` callback; a list taken
+    apart by its loop (`for (const [table, column] of pairs)`); and anything in a file
+    Babel can't parse, where there are no scopes to read.
+  - **Scan results may change for a project that builds the queries it hands Prisma's raw
+    calls from constants.** Fewer findings: on a sample of 2,500 public files that use those
+    calls, 176 of 1,920 findings go, 62 of them critical, and a scan that exited 1 for such
+    queries alone exits 0. Each of the 176 was read: all its query takes in is constants, a
+    table from a fixed list, a lock's id, a timeout, the hard-coded id of a test. And 13
+    warnings become critical, so a scan that exited 0 can exit 1: queries that start with a
+    constant holding their statement and take in something else, in 11 of them a value in
+    the query's text. What `package.json` lists changes none of it.
 
 ## [0.10.8] - 2026-11-10
 

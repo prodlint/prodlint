@@ -14,14 +14,78 @@ function held(code: string, fileName = 'test.ts'): (string[] | null)[] {
   walkAST(ast.program, (node) => {
     if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'use') names.push(node.arguments[0])
   })
-  const bound = bindNames(ast.program, new Set(names))
+  const bound = bindNames(ast.program)
   return names.map((name) => {
     const binding = bound.get(name)
     return binding ? binding.values.map(v => (v.append ? '+= ' : '') + code.slice(v.node.start!, v.node.end!)) : null
   })
 }
 
+/** Whether each `use(name)` in the code is handed a name a `const` declares, or null for one the file doesn't declare */
+function constants(code: string): (boolean | null)[] {
+  const ast = parseFile(code, 'test.ts')
+  if (!ast) throw new Error('the test code does not parse')
+  const names: Node[] = []
+  walkAST(ast.program, (node) => {
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'use') names.push(node.arguments[0])
+  })
+  const bound = bindNames(ast.program)
+  return names.map(name => bound.get(name)?.constant ?? null)
+}
+
 describe('bindNames', () => {
+  it('says which names a const declares', () => {
+    expect(constants("const a = 'x'\nlet b = 'x'\nvar c = 'x'\nuse(a); use(b); use(c)")).toEqual([true, false, false])
+    expect(constants("const a = 'x', b = f()\nuse(a); use(b); use(missing)")).toEqual([true, true, null])
+  })
+
+  it.each([
+    ["a loop's", 'for (const x of xs) use(x)'],
+    ["a for…in loop's", 'for (const x in xs) use(x)'],
+    ["a for loop's", 'for (const x = 0; ;) use(x)'],
+    ['one taken out of an object', 'const { x } = y\nuse(x)'],
+    ['one taken out of a list, with a default', 'const [x = 1] = y\nuse(x)'],
+  ])('counts %s const, which has no value the file shows or just the one', (_what, code) => {
+    expect(constants(code)).toEqual([true])
+  })
+
+  it.each([
+    ["a loop's let", 'for (let x of xs) use(x)'],
+    ['a parameter', 'function f(x) { use(x) }'],
+    ['an import', "import x from 'x'\nuse(x)"],
+    ['a function', 'function x() {}\nuse(x)'],
+    ['a class', 'class x {}\nuse(x)'],
+    ['an enum', 'enum x { A }\nuse(x)'],
+    ['a const enum', 'const enum x { A }\nuse(x)'],
+    ["a catch clause's parameter", 'try { f() } catch (x) { use(x) }'],
+  ])('does not count %s as declared with const', (_what, code) => {
+    expect(constants(code)).toEqual([false])
+  })
+
+  it('says it of the declaration a name refers to where it stands', () => {
+    const outer = "const x = 'outer'\n"
+    expect(constants(outer + 'function f(x) { use(x) }\nuse(x)')).toEqual([false, true])
+    expect(constants("let x = 'outer'\n" + "function f() { const x = 'inner'; use(x) }\nuse(x)")).toEqual([true, false])
+    // A var declared again is the same name, and a var still
+    expect(constants("function f() { var x = 'a'; var x = 'b'; use(x) }")).toEqual([false])
+  })
+
+  it('looks up every name of the tree, wherever it is read', () => {
+    const code = "const a = 'x'\nfunction f(a) { return `${a}` }\nconst q = `${a}` + (b ? a : [a])"
+    const ast = parseFile(code, 'test.ts')!
+    const read: Node[] = []
+    walkAST(ast.program, (node, parent) => {
+      if (node.type === 'Identifier' && node.name === 'a' && parent?.type !== 'VariableDeclarator' && parent?.type !== 'FunctionDeclaration') read.push(node)
+    })
+    const bound = bindNames(ast.program)
+    // The parameter in the function, the module's const below it: in a ${}, a ?: and a list
+    expect(read.map(name => bound.get(name)?.constant)).toEqual([false, true, true, true])
+    expect(read.map(name => bound.get(name)?.values.map(v => code.slice(v.node.start!, v.node.end!)))).toEqual([[], ["'x'"], ["'x'"], ["'x'"]])
+    // The same declaration each time, and none for a name the file doesn't declare
+    expect(new Set(read.slice(1).map(name => bound.get(name))).size).toBe(1)
+    expect([...bound.keys()].some(node => node.type === 'Identifier' && node.name === 'b')).toBe(false)
+  })
+
   it('reads what a const, a let and a var are declared with', () => {
     expect(held("const a = 'x'\nlet b = 1 + 2\nvar c = f()\nuse(a); use(b); use(c)")).toEqual([["'x'"], ['1 + 2'], ['f()']])
   })

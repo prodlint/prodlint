@@ -8,6 +8,11 @@ export interface Binding {
    * loop's variable and a destructured value have no value of their own
    */
   values: { node: Node; append: boolean }[]
+  /**
+   * Declared with `const`: nothing sets it again, so what it's declared with is all it holds.
+   * A loop's `const` and a destructured one are declared so too, with no value here
+   */
+  constant: boolean
 }
 
 interface Scope {
@@ -53,16 +58,18 @@ function walkScoped(node: Node, scope: Scope, enter: (node: Node, scope: Scope) 
 }
 
 /**
- * Which declaration each of `names` refers to where it stands, with everything the file sets
- * that declaration to. `names` are Identifier nodes of the tree; one the file doesn't declare
- * (a global, a typo) isn't in the result.
+ * Which declaration each name of the tree refers to where it stands, with everything the file
+ * sets that declaration to: every Identifier node, by the declaration of its name. A name the
+ * file doesn't declare (a global, a typo) isn't in the result. A property and a label are
+ * Identifier nodes too, and are looked up like any other: ask the result about a name only
+ * where it's read as a value, or declared.
  *
  * A name is looked up as JavaScript does: in its block, then each block and function around it,
  * then the module, so two functions' `query` are two names, and a parameter hides a module's
  * `const` of the same name. The order statements run in isn't read: a value counts wherever in
  * the name's scope it's set.
  */
-export function bindNames(program: Node, names: ReadonlySet<Node>): Map<Node, Binding> {
+export function bindNames(program: Node): Map<Node, Binding> {
   const scopes = new Map<Node, Scope>()
   const open = (node: Node, parent: Scope | null, hoists: boolean): Scope => {
     const scope: Scope = { names: new Map(), parent, hoists }
@@ -71,8 +78,8 @@ export function bindNames(program: Node, names: ReadonlySet<Node>): Map<Node, Bi
   }
   // Declared twice (`var`, or a `var` named as a parameter is), it's still one name. What
   // it's set to is read on the second walk, so declaring it again here loses nothing
-  const declare = (scope: Scope, pattern: Node | null | undefined): void => {
-    for (const name of declared(pattern)) scope.names.set(name, { values: [] })
+  const declare = (scope: Scope, pattern: Node | null | undefined, constant = false): void => {
+    for (const name of declared(pattern)) scope.names.set(name, { values: [], constant })
   }
   const root = open(program, null, true)
 
@@ -82,7 +89,7 @@ export function bindNames(program: Node, names: ReadonlySet<Node>): Map<Node, Bi
     if (node.type === 'VariableDeclaration') {
       let target = scope
       if (node.kind === 'var') while (!target.hoists && target.parent) target = target.parent
-      for (const declarator of node.declarations) declare(target, declarator.id)
+      for (const declarator of node.declarations) declare(target, declarator.id, node.kind === 'const')
     } else if (node.type === 'ImportDeclaration') {
       for (const specifier of node.specifiers) declare(scope, specifier.local)
     } else if (node.type === 'ClassDeclaration' || node.type === 'TSEnumDeclaration' || node.type === 'TSModuleDeclaration' || node.type === 'TSImportEqualsDeclaration') {
@@ -117,7 +124,7 @@ export function bindNames(program: Node, names: ReadonlySet<Node>): Map<Node, Bi
     return null
   }
 
-  // Then what each name is set to, and which declaration the names asked for refer to
+  // Then what each name is set to, and which declaration each name refers to
   const found = new Map<Node, Binding>()
   walkScoped(program, root, (node, scope) => {
     const inner = scopes.get(node) ?? scope
@@ -125,7 +132,7 @@ export function bindNames(program: Node, names: ReadonlySet<Node>): Map<Node, Bi
       if (node.id.type === 'Identifier' && node.init) lookup(inner, node.id.name)?.values.push({ node: node.init, append: false })
     } else if (node.type === 'AssignmentExpression') {
       if (node.left.type === 'Identifier') lookup(inner, node.left.name)?.values.push({ node: node.right, append: node.operator === '+=' })
-    } else if (node.type === 'Identifier' && names.has(node)) {
+    } else if (node.type === 'Identifier') {
       const binding = lookup(inner, node.name)
       if (binding) found.set(node, binding)
     }
