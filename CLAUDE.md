@@ -88,7 +88,7 @@ Project-level rules: `codebase-consistency`, `dead-exports`, `phantom-dependency
 
 **`src/utils/frameworks.ts`** — framework detection + whitelists:
 - `DEPENDENCY_TO_FRAMEWORK` — maps npm packages to framework identifiers
-- `FRAMEWORK_SAFE_METHODS` — methods safe per framework (e.g., Prisma `.contains()`)
+- `FRAMEWORK_SAFE_METHODS` — methods safe per framework (e.g., Prisma `.contains()`). Obsidian's is `contains` alone: it adds that to every array and string a plugin sees (`obsidian.d.ts` declares it on `Array<T>` and `String`) and none of the other methods `hallucinated-api` reports, so read the type file before adding one. A plugin is a package that lists `obsidian`. One with no `package.json`, or with one that doesn't list it, isn't covered: plugins written in plain JavaScript, 64 of the 635 repositories of a sample found by code search
 - `isFrameworkSafeMethod(method, frameworks)` — whitelist check
 - `SQL_SAFE_ORMS`, `RATE_LIMIT_FRAMEWORKS` — categorized framework sets
 
