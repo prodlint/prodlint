@@ -1,0 +1,87 @@
+# TEMPORARY: removed before this pull request merges.
+#
+# Runs the released Action on this pull request, to see the comment step that changed in
+# 0.10.8 work in a real workflow: once with a token that may comment on the pull request and
+# once with one that may not. The repo's own CI doesn't use the Action, so nothing else does.
+name: Action smoke test
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions: {}
+
+jobs:
+  may-comment:
+    name: token may comment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run the Action, critical findings allowed
+        id: lenient
+        uses: prodlint/prodlint@v1
+        with:
+          path: tests/fixtures/readme-demo
+          fail-on-critical: 'false'
+
+      - name: It passed and reported the fixture's score
+        if: always()
+        env:
+          OUTCOME: ${{ steps.lenient.outcome }}
+          SCORE: ${{ steps.lenient.outputs.score }}
+          CRITICAL: ${{ steps.lenient.outputs.critical }}
+        run: |
+          echo "outcome=$OUTCOME score=$SCORE critical=$CRITICAL"
+          test "$OUTCOME" = "success"
+          test "$SCORE" = "90"
+          test "$CRITICAL" = "3"
+
+  may-not-comment:
+    name: token may not comment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Before 0.10.8 this step failed in "Post PR comment" and never reached "Check results".
+      - name: Run the Action, critical findings allowed
+        id: lenient
+        uses: prodlint/prodlint@v1
+        with:
+          path: tests/fixtures/readme-demo
+          fail-on-critical: 'false'
+
+      - name: It passed although it couldn't comment
+        if: always()
+        env:
+          OUTCOME: ${{ steps.lenient.outcome }}
+          SCORE: ${{ steps.lenient.outputs.score }}
+          CRITICAL: ${{ steps.lenient.outputs.critical }}
+        run: |
+          echo "outcome=$OUTCOME score=$SCORE critical=$CRITICAL"
+          test "$OUTCOME" = "success"
+          test "$SCORE" = "90"
+          test "$CRITICAL" = "3"
+
+      # The same run as most workflows have it: the fixture's three critical findings fail it.
+      - name: Run the Action with its defaults
+        id: strict
+        continue-on-error: true
+        uses: prodlint/prodlint@v1
+        with:
+          path: tests/fixtures/readme-demo
+
+      - name: It failed on the critical findings
+        if: always()
+        env:
+          OUTCOME: ${{ steps.strict.outcome }}
+          SCORE: ${{ steps.strict.outputs.score }}
+          CRITICAL: ${{ steps.strict.outputs.critical }}
+        run: |
+          echo "outcome=$OUTCOME score=$SCORE critical=$CRITICAL"
+          test "$OUTCOME" = "failure"
