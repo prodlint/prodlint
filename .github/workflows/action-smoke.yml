@@ -3,6 +3,10 @@
 # Runs the released Action on this pull request, to see the comment step that changed in
 # 0.10.8 work in a real workflow: once with a token that may comment on the pull request and
 # once with one that may not. The repo's own CI doesn't use the Action, so nothing else does.
+#
+# The checkout goes into repo/, not the workspace root. In this repo's own root,
+# `npx -y prodlint@<the version in package.json>` resolves to the package it's standing in,
+# whose bin isn't built, and exits 127. Any other repo downloads the scanner from npm.
 name: Action smoke test
 
 on:
@@ -20,12 +24,14 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
 
       - name: Run the Action, critical findings allowed
         id: lenient
         uses: prodlint/prodlint@v1
         with:
-          path: tests/fixtures/readme-demo
+          path: repo/tests/fixtures/readme-demo
           fail-on-critical: 'false'
 
       - name: It passed and reported the fixture's score
@@ -47,13 +53,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
 
       # Before 0.10.8 this step failed in "Post PR comment" and never reached "Check results".
       - name: Run the Action, critical findings allowed
         id: lenient
         uses: prodlint/prodlint@v1
         with:
-          path: tests/fixtures/readme-demo
+          path: repo/tests/fixtures/readme-demo
           fail-on-critical: 'false'
 
       - name: It passed although it couldn't comment
@@ -74,7 +82,7 @@ jobs:
         continue-on-error: true
         uses: prodlint/prodlint@v1
         with:
-          path: tests/fixtures/readme-demo
+          path: repo/tests/fixtures/readme-demo
 
       - name: It failed on the critical findings
         if: always()
