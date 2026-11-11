@@ -56,6 +56,22 @@ check('prodlint-mcp mcpName vs server.json name', mcpPkg.mcpName, server.name);
 const actionYml = fs.readFileSync(path.join(root, 'action.yml'), 'utf8');
 check('action.yml scanner pin', actionYml.match(/\bnpx -y prodlint@(\d+\.\d+\.\d+)\b/)?.[1], pkg.version);
 
+// The README states the version twice: in the sample output, which tests/readme.test.ts holds
+// to what the CLI prints, and in the --json example. npm freezes a version's README, so a
+// stale number there stays wrong until the next release.
+const doc = (f) => fs.readFileSync(path.join(root, f), 'utf8');
+check('README.md --json example', doc('README.md').match(/^\s*"version": "(\d+\.\d+\.\d+)",$/m)?.[1], pkg.version);
+
+// The docs people read may state the version only where sync-versions.cjs bumps it. Anywhere
+// else it's right today and stale after the next bump, with nothing to say so. A new mention
+// needs an anchor there, and its count here.
+const BUMPED_IN_DOCS = { 'README.md': 2, 'AGENTS.md': 0, 'CONTRIBUTING.md': 0, 'packages/prodlint-mcp/README.md': 0 };
+// The number by itself: not inside a longer one (10.1.2.3 for 1.2.3), but "1.2.3." ends a sentence.
+const stated = new RegExp(`(?<!\\d)(?<!\\d\\.)${pkg.version.replace(/\./g, '\\.')}(?!\\d)(?!\\.\\d)`, 'g');
+for (const [file, bumped] of Object.entries(BUMPED_IN_DOCS)) {
+  check(`${file} mentions of ${pkg.version}`, (doc(file).match(stated) ?? []).length, bumped);
+}
+
 // release.yml's last job publishes this section as the GitHub Release. Checked here, a version
 // without one stops before npm instead of failing after it.
 const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');

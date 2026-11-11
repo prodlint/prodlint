@@ -83,7 +83,10 @@ describe('cutting a release', () => {
     'package.json',
     'server.json',
     'packages/prodlint-mcp/package.json',
+    'packages/prodlint-mcp/README.md',
     'README.md',
+    'AGENTS.md',
+    'CONTRIBUTING.md',
     'tests/reporter.test.ts',
     'action.yml',
     'CHANGELOG.md',
@@ -138,6 +141,50 @@ describe('cutting a release', () => {
       expect(readFileSync(join(dir, 'CHANGELOG.md'), 'utf8').replace(/\r\n/g, '\n'))
         .toMatch(/^## \[Unreleased\]\n\n## \[99\.0\.0\] - \d{4}-\d{2}-\d{2}\n\n### Fixed\n\n- A test entry\n/m)
       expect(node(dir, 'release-notes.cjs', 'Unreleased').status).toBe(1)
+    })
+  })
+
+  it('bumps both places the README states the version', () => {
+    inCopy(dir => {
+      editChangelog(dir, withEntry)
+      expect(node(dir, 'sync-versions.cjs').status).toBe(0)
+
+      const readme = readFileSync(join(dir, 'README.md'), 'utf8')
+      expect(readme).toMatch(/^ *prodlint v99\.0\.0$/m)
+      expect(readme).toMatch(/^ *"version": "99\.0\.0",$/m)
+      // and nothing is left of the version it had
+      const { version: was } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+      expect(readme).not.toContain(was)
+    })
+  })
+
+  it('stops when a version string it should bump has gone', () => {
+    inCopy(dir => {
+      editChangelog(dir, withEntry)
+      const readme = join(dir, 'README.md')
+      writeFileSync(readme, readFileSync(readme, 'utf8').replace(/^ *"version": "\d+\.\d+\.\d+",\r?\n/m, ''))
+
+      const sync = node(dir, 'sync-versions.cjs')
+      expect(sync.status).toBe(1)
+      expect(sync.stderr).toContain('README --json example')
+    })
+  })
+
+  it('stops a release whose docs state the version where nothing bumps it', () => {
+    inCopy(dir => {
+      editChangelog(dir, withEntry)
+      expect(node(dir, 'sync-versions.cjs').status).toBe(0)
+      const agents = join(dir, 'AGENTS.md')
+      const add = (text: string) => writeFileSync(agents, readFileSync(agents, 'utf8') + text)
+
+      // A longer number that only contains the version isn't a mention of it
+      add(`\nSeen on 1${VERSION}, ${VERSION}.1 and 10.${VERSION}.\n`)
+      expect(node(dir, 'verify-release.cjs', `v${VERSION}`).status).toBe(0)
+
+      add(`\nTested with prodlint ${VERSION}.\n`)
+      const verify = node(dir, 'verify-release.cjs', `v${VERSION}`)
+      expect(verify.status).toBe(1)
+      expect(verify.stderr).toContain('AGENTS.md')
     })
   })
 

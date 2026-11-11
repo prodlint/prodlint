@@ -176,6 +176,7 @@ Composite action: installs Node 22, runs `npx -y prodlint@<this release> --json`
 
 - **The scanner version is pinned, never `@latest`.** `sync-versions.cjs` bumps the pin and `verify-release.cjs` fails on drift, so pinning the action (`@v1`, a tag, a SHA) pins the code that runs in users' CI.
 - **The comment is built by `scripts/action-comment.cjs`**, not inline `node -e "..."` — bash's double-quote processing once silently stripped the escaper's backslash. File paths and messages come from the scanned repo: they're flattened to one line and rendered as inline code (no autolinks, @-mentions or HTML there). Tests: `tests/action-comment.test.ts`.
+- **CI doesn't run the Action**, so a change to `action.yml` is first exercised by whoever uses it. To try one, add a temporary workflow to a pull request that uses the Action once with `pull-requests: write` and once without, and check the repo out into a subfolder (`with: path: repo`). In this repo's own root, `npx -y prodlint@<the version in package.json>` resolves to the package it's standing in, whose bin isn't built, and the scan exits 127. 0.10.8's comment step was checked that way at `@v1`.
 
 ### Adding a New Rule
 
@@ -201,12 +202,20 @@ file rather than piping it: a filter that exits early kills it mid-run.
 the bump if `CHANGELOG.md` has nothing under `[Unreleased]`. Then it fires the `version`
 lifecycle hook, which runs `scripts/sync-versions.cjs` to propagate the new version into
 `server.json` (both fields), `packages/prodlint-mcp/package.json` (its `version` and its `^`
-range on `prodlint`), the `README.md` sample output, the `tests/reporter.test.ts` fixture,
-and the scanner pin in `action.yml`, and to move the `[Unreleased]` entries under the new
-version's heading in `CHANGELOG.md` (don't move them by hand) — then stages them into the
-version commit. The script **fails loudly** if a text anchor no longer matches exactly once,
-rather than silently skipping a file. `tests/release-notes.test.ts` runs these scripts on a
-copy of the repo, so a moved anchor fails its own PR instead of a release.
+range on `prodlint`), the `README.md` sample output and `--json` example, the
+`tests/reporter.test.ts` fixture, and the scanner pin in `action.yml`, and to move the
+`[Unreleased]` entries under the new version's heading in `CHANGELOG.md` (don't move them by
+hand) — then stages them into the version commit. The script **fails loudly** if a text anchor
+no longer matches exactly once, rather than silently skipping a file.
+`tests/release-notes.test.ts` runs these scripts on a copy of the repo, so a moved anchor fails
+its own PR instead of a release.
+
+`verify-release.cjs` also counts how often `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and the
+launcher's README state the current version, and fails on a mention the sync script doesn't
+bump. npm freezes a version's README, so a number written by hand is right until the next bump
+and then wrong until the release after. A new mention needs an anchor in `sync-versions.cjs`
+and its count in `verify-release.cjs`; 0.10.8's `--json` example was bumped by hand for want of
+one.
 
 Pushing the `vX.Y.Z` tag runs `.github/workflows/release.yml`, which verifies metadata,
 builds, tests, self-scans, publishes **both** `prodlint` and the `prodlint-mcp` launcher
