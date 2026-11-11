@@ -95,6 +95,7 @@ prodlint detects and adjusts for:
 - **Monorepos**: npm, yarn, pnpm workspaces (resolves cross-package dependencies)
 - **Path aliases**: `@/`, `~/`, tsconfig paths (not flagged as hallucinated imports)
 - **Route exemptions**: auth, webhook, health, cron routes exempt from auth/rate-limit checks
+- **tsconfig `baseUrl`**: an import TypeScript finds under it (`src/settings`, `main`), by the `tsconfig.json` or `jsconfig.json` nearest above each file, comments and `extends` included (not flagged as hallucinated imports)
 
 ## CI Integration
 
@@ -181,6 +182,7 @@ src/
     <rule-id>.ts    → Individual rule files
   utils/
     ast.ts          → Babel AST parsing and walking
+    tsconfig.ts     → tsconfig.json and jsconfig.json: baseUrl, paths, extends
     patterns.ts     → Regex helpers, comment handling, suppression
     frameworks.ts   → ORM/middleware detection and whitelists
   web-scanner/     → Site Score (--web and the scan-web tool)

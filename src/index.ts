@@ -11,6 +11,7 @@ export type {
   Rule,
   Finding,
   FileContext,
+  TsconfigScope,
   ProjectContext,
   ScanResult,
   ScanOptions,
