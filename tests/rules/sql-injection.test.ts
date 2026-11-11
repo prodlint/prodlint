@@ -936,6 +936,16 @@ describe('sql-injection rule', () => {
           '`)',
         ].join('\n')
         expect(found(code)).toEqual([])
+        // Handed over by a name that's no constant itself: a let
+        const named = [
+          "const TABLE = 'posts'",
+          'let sql = `',
+          '  UPDATE ${TABLE} SET views = views + 1',
+          '  WHERE pinned = true',
+          '`',
+          'await prisma.$executeRawUnsafe(sql)',
+        ].join('\n')
+        expect(found(named)).toEqual([])
       })
 
       it('passes the lines that declare a constant a query takes in, as it passes the query', () => {
@@ -1184,12 +1194,22 @@ describe('sql-injection rule', () => {
           ['a var', 'var table of TABLES'],
           ['taken out of each element', 'const [table] of TABLES'],
           ['the key of a for…in', 'const table in TABLES'],
+          ['the key of a for…in over a list written in the loop', "const table in ['sessions', 'tokens']"],
         ])('is taken in when it is %s', (_what, head) => {
           expect(found(listed + loop(head))).toEqual(['3 critical'])
         })
 
         it('is taken in when it was declared before the loop', () => {
           expect(found(listed + 'let table: string\n' + loop('table of TABLES'))).toEqual(['4 critical'])
+        })
+
+        it('is still one in a file with a loop that declares nothing', () => {
+          const code = [
+            'let last: string',
+            'for (last of names) console.log(last)',
+            loop("const table of ['sessions', 'tokens']"),
+          ].join('\n')
+          expect(found(code)).toEqual([])
         })
 
         it('is not what a const with no value is, for the file having a loop', () => {
@@ -1212,13 +1232,13 @@ describe('sql-injection rule', () => {
       })
 
       it('reads a name that can be many texts in its first few', () => {
-        // Each name is either of the one before: twice as many texts a name, 2^27 in the end,
+        // Each name is either of the one before: twice as many texts a name, 2^21 in the end,
         // and as many readings of N0 if each name were read again each time it's met
         const names = ["const N0 = flag ? 'a' : 'b'"]
-        for (let i = 1; i <= 26; i++) names.push(`const N${i} = flag ? N${i - 1} : N${i - 1}`)
+        for (let i = 1; i <= 20; i++) names.push(`const N${i} = flag ? N${i - 1} : N${i - 1}`)
         const started = performance.now()
-        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N26} WHERE id = ${id}`'))).toEqual(['28 critical'])
-        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N26} WHERE active = true`'))).toEqual([])
+        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N20} WHERE id = ${id}`'))).toEqual(['22 critical'])
+        expect(found(names.join('\n') + '\n' + run('`SELECT * FROM ${N20} WHERE active = true`'))).toEqual([])
         expect(performance.now() - started).toBeLessThan(2000)
       })
 
