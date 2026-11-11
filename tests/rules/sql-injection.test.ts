@@ -303,19 +303,22 @@ describe('sql-injection rule', () => {
         expect(check(code, prismaProject).map(f => `${f.line} ${f.severity}`)).toEqual(['1 warning'])
       })
 
-      it('flags $queryRaw() called with a plain template', () => {
-        const findings = check('const rows = await prisma.$queryRaw(`SELECT * FROM users WHERE id = ${id}`)', prismaProject)
+      // Prisma 3 and later throw on a string, Prisma 2 ran it: wrong either way, an injection on neither now
+      it('flags $queryRaw() called with a plain template, as a warning', () => {
+        const findings = check('const rows = await prisma.$queryRaw(`SELECT * FROM users WHERE id = ${id}`)')
         expect(findings).toHaveLength(1)
-        expect(findings[0]).toMatchObject({ line: 1, severity: 'critical' })
-        expect(findings[0].message).toBe('$queryRaw() called with a string built with template literal interpolation — only its tagged template sends values as parameters')
+        expect(findings[0]).toMatchObject({ line: 1, severity: 'warning' })
+        expect(findings[0].message).toBe('$queryRaw() called with a string built with template literal interpolation — it takes a tagged template: Prisma 3 and later throw on a string, Prisma 2 runs it as written')
         expect(findings[0].fix).toContain('prisma.$queryRaw`')
+        expect(found('const rows = await prisma.$queryRaw(`SELECT * FROM users WHERE id = ${id}`)')).toEqual(['1 warning'])
       })
 
-      it('flags $executeRaw() called with a concatenation', () => {
-        const findings = check("await prisma.$executeRaw('DELETE FROM users WHERE id = ' + id)", prismaProject)
+      it('flags $executeRaw() called with a concatenation, as a warning', () => {
+        const findings = check("await prisma.$executeRaw('DELETE FROM users WHERE id = ' + id)")
         expect(findings).toHaveLength(1)
-        expect(findings[0].severity).toBe('critical')
+        expect(findings[0].severity).toBe('warning')
         expect(findings[0].message).toContain('$executeRaw() called with a string built with string concatenation')
+        expect(found("await prisma.$executeRaw('DELETE FROM users WHERE id = ' + id)")).toEqual(['1 warning'])
       })
 
       it('flags Prisma.raw() given a built string, in a tagged template too', () => {

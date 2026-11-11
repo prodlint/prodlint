@@ -21,9 +21,12 @@ const TAGGED_TEMPLATE_PREFIX = /\b(?:sql|Prisma\.sql|db\.sql|db\.query)\s*`/
 const PARAMETERIZED_QUERY = /\.(?:query|execute)\s*\([^,]+,\s*\[/
 
 // Prisma's raw queries, on any receiver (prisma, tx, db, ctx.prisma). As a tag, $queryRaw`...` and
-// $executeRaw`...` send what the template interpolates as parameters. Called with a string, all
-// four run it as written
+// $executeRaw`...` send what the template interpolates as parameters. Called with a string, the
+// Unsafe pair runs it as written
 const PRISMA_RAW_CALL = /^\$(?:queryRaw|executeRaw)(?:Unsafe)?$/
+// The tags called with a string: Prisma 3 and later throw ("is a tag function"), Prisma 2 ran it
+// as written. Wrong either way, and not an injection on a current Prisma, so never critical
+const TAG_CALLED = /^\$(?:queryRaw|executeRaw)$/
 
 // The statements values go into, where a parameter can carry them. What goes into a TRUNCATE, a
 // SET or a SAVEPOINT is a table, a setting or a name
@@ -57,7 +60,8 @@ interface BuiltQuery {
   how: How
   /**
    * A statement that takes values, with none passed after it: they can only be in its text.
-   * One that passes them interpolates a name or a piece of SQL, and stays a warning
+   * One that passes them interpolates a name or a piece of SQL, and stays a warning, as does a
+   * tag called with a string
    */
   critical: boolean
 }
@@ -142,7 +146,7 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
       if (isConstantString(query) && query.loc) addLines(queries.safe, query.loc.start.line, query.loc.end.line)
       for (const built of builtStrings(query)) {
         if (!built.node.loc) continue
-        const critical = takesValues(startOf(built.node)) && node.arguments.length === 1
+        const critical = !TAG_CALLED.test(method) && takesValues(startOf(built.node)) && node.arguments.length === 1
         addBuilt(queries, built.node.loc.start.line, built.node.loc.end.line, { method, how: built.how, critical })
       }
     }
@@ -316,7 +320,7 @@ function readText(file: FileContext): Queries {
       const built = builtText(text, at)
       if (!built) continue
       const start = /['"`]/.test(text[at]) ? text.slice(at + 1, built.end) : ''
-      const critical = takesValues(start) && !passesMore(text, at)
+      const critical = !TAG_CALLED.test(method) && takesValues(start) && !passesMore(text, at)
       addBuilt(queries, lineOf(at), lineOf(built.end), { method, how: built.how, critical })
     }
   }
@@ -335,7 +339,7 @@ function report(query: BuiltQuery): { message: string; fix: string } {
   const tag = query.method.replace('Unsafe', '')
   if (query.method === tag) {
     return {
-      message: `${tag}() called with a string built with ${how} — only its tagged template sends values as parameters`,
+      message: `${tag}() called with a string built with ${how} — it takes a tagged template: Prisma 3 and later throw on a string, Prisma 2 runs it as written`,
       fix: `Call it as a tagged template, without the parentheses: prisma.${tag}\`... WHERE id = \${id}\``,
     }
   }

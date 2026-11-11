@@ -30,8 +30,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     name or a piece of SQL; any other statement (`TRUNCATE`, `SET`, `SAVEPOINT`, `DROP`); and a
     string that starts with a value. Whether a `package.json` lists Prisma changes neither: the
     call is Prisma's.
-  - **`$queryRaw()` and `$executeRaw()` called as a function with a built string** are read
-    the same way. Only the tagged template parameterizes.
+  - **`$queryRaw()` and `$executeRaw()` called as a function with a built string** are
+    reported too, as warnings: Prisma 3 and later throw on a string ("`$queryRaw` is a tag
+    function"), and Prisma 2 ran it as written. Only the tagged template parameterizes.
   - **`Prisma.raw()` given a built string is reported wherever it is**, a tagged template
     included, whose lines are otherwise skipped. It's a warning unless it holds a whole
     statement. `Prisma.raw()` given a name or a call isn't reported, in a tagged template or
@@ -46,7 +47,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     the tagged templates. More: built strings the patterns missed, most of them warnings. In a
     project that lists Prisma, a string built for `$queryRawUnsafe()` that was a warning can be
     critical now, so a scan that exited 0 can exit 1. In one that doesn't, a built string that
-    passes its values, or isn't a statement that takes them, goes from critical to a warning. A
+    passes its values, isn't a statement that takes them, or is handed to `$queryRaw()`, goes
+    from critical to a warning. A
     `--baseline` saved before this sees a query that spans lines as new where its finding moved
     to the line the string starts on.
 
