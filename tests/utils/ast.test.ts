@@ -155,4 +155,33 @@ describe('isTaggedTemplateSql', () => {
     })
     expect(found).toBe(false)
   })
+
+  /** Whether the one tagged template in `code` has a safe SQL tag */
+  const tagged = (code: string): boolean => {
+    const found: boolean[] = []
+    walkAST(parseFile(code, 'test.ts')!.program, (node) => {
+      if (node.type === 'TaggedTemplateExpression') found.push(isTaggedTemplateSql(node))
+    })
+    expect(found).toHaveLength(1)
+    return found[0]
+  }
+
+  it.each([
+    'prisma.$queryRaw`SELECT 1`',
+    'tx.$executeRaw`DELETE FROM sessions`',
+    'ctx.prisma.$queryRaw`SELECT 1`',
+    'this.prisma.$queryRaw<User[]>`SELECT 1`',
+    'prisma.$queryRaw<\n  Array<{ id: string }>\n>`SELECT 1`',
+    '$queryRaw`SELECT 1`',
+  ])("detects Prisma's raw query tags on any receiver: %s", (code) => {
+    expect(tagged(code)).toBe(true)
+  })
+
+  it.each([
+    'prisma.$queryRawUnsafe`SELECT 1`',
+    'prisma.$queryRawTyped`SELECT 1`',
+    'prisma.queryRaw`SELECT 1`',
+  ])('rejects what only looks like one: %s', (code) => {
+    expect(tagged(code)).toBe(false)
+  })
 })
