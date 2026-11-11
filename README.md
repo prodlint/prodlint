@@ -142,7 +142,7 @@ Each rule has a page with an example and a fix at `https://prodlint.com/rules/<r
 | `input-validation` | Request body used without validation in an API route |
 | `cors-config` | `Access-Control-Allow-Origin: *`, `cors()` with no config, `origin: true`; critical when the wildcard comes with credentials |
 | `unsafe-html` | `dangerouslySetInnerHTML`, direct `innerHTML` assignment |
-| `sql-injection` | SQL built with template literals or string concatenation (ORM-aware) |
+| `sql-injection` | SQL built with template literals or string concatenation (ORM-aware; knows Prisma's `$queryRaw` tag from a string built for `$queryRawUnsafe()`) |
 | `open-redirect` | User input passed directly to `redirect()` |
 | `rate-limiting` | API routes with no rate limiter |
 | `phantom-dependency` | Dependencies with commonly hallucinated or suspicious package names (slopsquatting) |

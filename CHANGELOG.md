@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **`sql-injection` couldn't tell Prisma's safe raw query from its unsafe one.**
+  `` prisma.$queryRaw`... WHERE id = ${id}` `` is a tagged template, and Prisma sends what it
+  interpolates as parameters. `prisma.$queryRawUnsafe()` runs the string it's given. The rule
+  reported both with one message, and in a project that lists Prisma it lowered both to
+  warnings. It now reads Prisma's raw queries for what they are.
+  - **`$queryRaw` and `$executeRaw` as a tag aren't reported**: on any receiver (`prisma`,
+    `tx`, `ctx.prisma`), with or without a type argument, on one line or spread over several
+    (`prisma.$queryRaw<Row[]>` with the template below it), and on every line of the template,
+    where `SET views = views + 1` used to read as a concatenation. `Prisma.sql`, `Prisma.join()`
+    and `Prisma.empty` inside one keep it parameterized.
+  - **A string built for `$queryRawUnsafe()` or `$executeRawUnsafe()` is read from the call**:
+    a template that interpolates or a `+` that isn't all literals, whatever its SQL says and
+    however many lines it spans. The line patterns needed a SQL keyword in capitals on the line
+    of the `${}` or the `+`, and on a sample of public code they reported 452 of 956 such
+    strings. A query is reported once, on the line its string starts on, with a message that
+    names the call and says what to use instead.
+  - **What the call is given decides the severity, not the ORM downgrade.** Critical: a
+    statement that takes values (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH`, `MERGE`,
+    `REPLACE`, `CALL`, `EXEC`) with none passed after it, so they can only be in its text. A
+    warning: one that passes its values as parameters, where what's interpolated is a table
+    name or a piece of SQL; any other statement (`TRUNCATE`, `SET`, `SAVEPOINT`, `DROP`); and a
+    string that starts with a value. Whether a `package.json` lists Prisma changes neither: the
+    call is Prisma's.
+  - **`$queryRaw()` and `$executeRaw()` called as a function with a built string** are read
+    the same way. Only the tagged template parameterizes.
+  - **`Prisma.raw()` given a built string is reported wherever it is**, a tagged template
+    included, whose lines are otherwise skipped. It's a warning unless it holds a whole
+    statement. `Prisma.raw()` given a name or a call isn't reported, in a tagged template or
+    out: the rule doesn't follow a name to where it's set, as with any query passed by name.
+  - A constant handed to one of these calls is no longer reported for a `+` in its SQL.
+  - **Unchanged:** a query built into a variable and passed by name is still reported where
+    the string is built, by the line patterns, and still lowered in a project with an ORM. So
+    is everything that isn't Prisma's: `db.query()`, `knex.raw()`, `sequelize.query()`. A file
+    Babel can't parse is read from its text instead, which leaves an argument that's a `?:` or
+    a constant, or that holds a regex literal with a quote in it, to the line patterns.
+  - **Scan results may change for a project that uses Prisma's raw queries.** Fewer findings:
+    the tagged templates. More: built strings the patterns missed, most of them warnings. In a
+    project that lists Prisma, a string built for `$queryRawUnsafe()` that was a warning can be
+    critical now, so a scan that exited 0 can exit 1. In one that doesn't, a built string that
+    passes its values, or isn't a statement that takes them, goes from critical to a warning. A
+    `--baseline` saved before this sees a query that spans lines as new where its finding moved
+    to the line the string starts on.
+
 ## [0.10.8] - 2026-11-10
 
 ### Changed
