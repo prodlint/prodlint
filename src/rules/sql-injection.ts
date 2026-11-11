@@ -60,8 +60,8 @@ interface BuiltQuery {
   how: How
   /**
    * A statement that takes values, with none passed after it: they can only be in its text.
-   * One that passes them interpolates a name or a piece of SQL, and stays a warning, as does a
-   * tag called with a string
+   * One that passes them interpolates a name or a piece of SQL, and stays a warning, as do a
+   * tag called with a string and a query that takes in nothing but quoted names
    */
   critical: boolean
 }
@@ -121,6 +121,60 @@ function startOf(node: Node): string {
   return ''
 }
 
+// What a query takes in, in the text sqlOf() gives of it
+const TAKEN_IN = '\0'
+const QUOTED_NAME = /^[\w$\0]+$/
+// Where a table's name goes
+const TABLE_KEYWORD = /\b(?:FROM|JOIN|INTO|UPDATE)\s*$/i
+// A FROM that a value follows: EXTRACT(YEAR FROM x), TRIM(BOTH y FROM x), a IS DISTINCT FROM x
+const VALUE_FROM = /\b(?:EXTRACT|TRIM)\s*\([^)]*\bFROM\s*$|\bDISTINCT\s+FROM\s*$/i
+
+/** The SQL a built string shows, with a NUL for each thing it takes in */
+function sqlOf(node: Node): string {
+  node = unwrapExpression(node)
+  if (node.type === 'BinaryExpression' && node.operator === '+') return sqlOf(node.left) + sqlOf(node.right)
+  if (node.type === 'StringLiteral') return node.value
+  if (node.type === 'TemplateLiteral') return node.quasis.map(quasi => quasi.value.cooked ?? quasi.value.raw).join(TAKEN_IN)
+  return TAKEN_IN
+}
+
+/**
+ * Whether a double-quoted name is where only a name can be: after a keyword that takes a table,
+ * or in a dotted name ("public"."users", u."email"). Anywhere else MySQL and SQLite can read
+ * double quotes as a string, and what's between them is then a value: VALUES ("${name}")
+ */
+function isTableName(sql: string, open: number, close: number): boolean {
+  // The keyword is right before the quote, so a short look back does, however long the query
+  const before = sql.slice(Math.max(0, open - 100), open)
+  return /\.\s*$/.test(before) || /^\s*\./.test(sql.slice(close + 1, close + 20)) ||
+    (TABLE_KEYWORD.test(before) && !VALUE_FROM.test(before))
+}
+
+/**
+ * Whether all a built query takes in is quoted names, which no parameter can carry: between
+ * backticks, MySQL's quote for a name, or between double quotes where a table's name goes. A
+ * value between single quotes, a bare one, and a name the query doesn't quote all say no
+ */
+function takesNamesOnly(sql: string): boolean {
+  for (let i = 0; i < sql.length; i++) {
+    const quote = sql[i]
+    if (quote === TAKEN_IN) return false
+    if (quote !== "'" && quote !== '"' && quote !== '`') continue
+    // To the next quote like it. A doubled one inside ('it''s') reads as two strings side by
+    // side, which leaves what follows as much outside a string as it was
+    const close = sql.indexOf(quote, i + 1)
+    // One that never closes holds the rest
+    if (close === -1) return !sql.includes(TAKEN_IN, i)
+    const inside = sql.slice(i + 1, close)
+    if (inside.includes(TAKEN_IN)) {
+      if (quote === "'" || !QUOTED_NAME.test(inside)) return false
+      if (quote === '"' && !isTableName(sql, i, close)) return false
+    }
+    i = close
+  }
+  return true
+}
+
 /** Which of Prisma's raw calls a callee is: one of the four methods, by its name, or Prisma.raw */
 function rawCall(callee: Node): string | null {
   if (callee.type === 'Identifier') return PRISMA_RAW_CALL.test(callee.name) ? callee.name : null
@@ -146,7 +200,8 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
       if (isConstantString(query) && query.loc) addLines(queries.safe, query.loc.start.line, query.loc.end.line)
       for (const built of builtStrings(query)) {
         if (!built.node.loc) continue
-        const critical = !TAG_CALLED.test(method) && takesValues(startOf(built.node)) && node.arguments.length === 1
+        const critical = !TAG_CALLED.test(method) && takesValues(startOf(built.node)) && node.arguments.length === 1 &&
+          !takesNamesOnly(sqlOf(built.node))
         addBuilt(queries, built.node.loc.start.line, built.node.loc.end.line, { method, how: built.how, critical })
       }
     }
@@ -157,8 +212,8 @@ function readTree(ast: NonNullable<FileContext['ast']>): Queries {
 // Without a syntax tree, Prisma's raw queries as the text has them: the method, a type argument
 // if it has one, then a template or a call. A regex literal with a quote in it, as in
 // .replace(/'/g, "''"), isn't understood, and a query with one is left to the patterns above, as
-// is an argument that's a `?:` or a constant. The other tags stay with TAGGED_TEMPLATE_PREFIX, a
-// line at a time
+// is an argument that's a `?:` or a constant. A quoted name isn't told from a value here. The
+// other tags stay with TAGGED_TEMPLATE_PREFIX, a line at a time
 const TEXT_RAW = /(\$(?:queryRaw|executeRaw)(?:Unsafe)?|\bPrisma\.(?:raw|sql))\b/g
 const TEXT_TAG = /^(?:\$(?:queryRaw|executeRaw)|Prisma\.sql)$/
 const TEXT_NAME = /[\w$.]+/y

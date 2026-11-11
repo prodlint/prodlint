@@ -408,6 +408,62 @@ describe('sql-injection rule', () => {
         // sql` in a string isn't a tag: only the fallback goes by a line's text
         expect(found('const hint = "sql`"; const text = `SELECT * FROM users WHERE id = ${id}`')).toEqual(['1 warning'])
       })
+
+      // A table's or a column's name can't be a parameter. One the query quotes is told from a
+      // value: between backticks anywhere, between double quotes where a table's name goes
+      it.each([
+        'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}"`)',
+        'await prisma.$executeRawUnsafe(`DELETE FROM "${modelName}"`)',
+        'await prisma.$executeRawUnsafe(`INSERT INTO "${table}" (id) VALUES (1)`)',
+        'await prisma.$executeRawUnsafe(`UPDATE "${table}" SET seen = true`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT u.id FROM users u\n  LEFT JOIN\n    "${table}" t ON t.id = u.id`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT count(*) FROM "public"."${table}"`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT count(*) FROM main."${table}"`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT count(*) FROM users, "${schema}".events`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT t."${column}" FROM "${table}" t`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "tenant_${id}_events"`)',
+        'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM \\`${table}\\` WHERE \\`${column}\\` IS NULL`)',
+        "const rows = await prisma.$queryRawUnsafe('SELECT * FROM \"' + table + '\"')",
+        "const rows = await prisma.$queryRawUnsafe(`SELECT * FROM \"${table}\" WHERE note <> 'it''s'`)",
+        "const rows = await prisma.$queryRawUnsafe(`SELECT * FROM \"${table}\" -- don't count the rest`)",
+        'const rows = await prisma.$queryRawUnsafe(`select * from "${table}" t join "${other}" o on o.id = t.id`)',
+        'const query = Prisma.raw(`SELECT * FROM "${table}"`)',
+      ])('flags a query that takes in only quoted names as a warning: %s', (code) => {
+        expect(found(code)).toEqual(['1 warning'])
+        expect(sqlInjectionRule.check(makeFile(code), project).map(f => f.severity)).toEqual(['warning'])
+      })
+
+      it.each([
+        // In MySQL and SQLite these double quotes make a string, whatever the table is quoted with
+        ['a value in double quotes', 'await prisma.$executeRawUnsafe(`INSERT INTO devices VALUES ("${id}")`)'],
+        ['a value in double quotes', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE email = "${email}"`)'],
+        ['a value in double quotes', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "users" WHERE email = "${email}"`)'],
+        ['a column a string could be', 'const rows = await prisma.$queryRawUnsafe(`SELECT "${column}" FROM users`)'],
+        ['a word that only ends like FROM', 'const rows = await prisma.$queryRawUnsafe(`SELECT valid_from "${alias}" FROM prices`)'],
+        ['a value next to a name', "const rows = await prisma.$queryRawUnsafe(`SELECT * FROM \"${table}\" WHERE id = '${id}'`)"],
+        ['a value next to a name', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}" LIMIT ${limit}`)'],
+        ['a value next to a name', "const rows = await prisma.$queryRawUnsafe('SELECT * FROM \"' + table + '\" WHERE id = ' + id)"],
+        ['a name nothing quotes', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM ${table}`)'],
+        ['double quotes inside a string', "await prisma.$executeRawUnsafe(`UPDATE docs SET meta = '{\"owner\": \"${owner}\"}' WHERE id = 1`)"],
+        ['a pattern, not a name', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE name LIKE "%${term}%"`)'],
+        ['more than a name', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table} t"`)'],
+        ['a FROM that a value follows', 'const rows = await prisma.$queryRawUnsafe(`SELECT EXTRACT(YEAR FROM "${date}") AS y`)'],
+        ['a FROM that a value follows', 'const rows = await prisma.$queryRawUnsafe(`SELECT TRIM(BOTH "x" FROM "${text}") AS t`)'],
+        ['a FROM that a value follows', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE name IS DISTINCT FROM "${name}"`)'],
+        ['an array of values', 'await prisma.$executeRawUnsafe(`DELETE FROM results WHERE id = ANY(ARRAY[${ids}])`)'],
+        ['a quote that never closes', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}`)'],
+        ['a quote that never closes', 'const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}" WHERE note = \'${note}`)'],
+      ])('keeps a query critical for %s: %s', (_why, code) => {
+        expect(found(code)).toEqual(['1 critical'])
+      })
+
+      it('looks only right before each name, however many the query has', () => {
+        const joins = ' JOIN "${other}" ON true'.repeat(20000)
+        const started = performance.now()
+        expect(found('const rows = await prisma.$queryRawUnsafe(`SELECT 1 FROM "${table}"' + joins + '`)')).toEqual(['1 warning'])
+        expect(found('const rows = await prisma.$queryRawUnsafe(`SELECT 1 FROM "${table}"' + joins + ' WHERE id = ${id}`)')).toEqual(['1 critical'])
+        expect(performance.now() - started).toBeLessThan(2000)
+      })
     })
 
     describe('what the regex fallback has to get right', () => {
@@ -503,6 +559,10 @@ describe('sql-injection rule', () => {
         expect(text("const rows = await prisma.$queryRawUnsafe('SELECT id, name FROM users WHERE id = ' + id)")).toEqual(['1 critical'])
         // Nor does one after the call's `)`
         expect(text('const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE id = ${id}`)\nlog(rows, id)')).toEqual(['1 critical'])
+      })
+
+      it('does not tell a quoted name from a value: a statement that takes values stays critical', () => {
+        expect(text('const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}"`)')).toEqual(['1 critical'])
       })
 
       it('leaves a query it cannot read to the patterns', () => {

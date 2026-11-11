@@ -27,9 +27,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     statement that takes values (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH`, `MERGE`,
     `REPLACE`, `CALL`, `EXEC`) with none passed after it, so they can only be in its text. A
     warning: one that passes its values as parameters, where what's interpolated is a table
-    name or a piece of SQL; any other statement (`TRUNCATE`, `SET`, `SAVEPOINT`, `DROP`); and a
-    string that starts with a value. Whether a `package.json` lists Prisma changes neither: the
-    call is Prisma's.
+    name or a piece of SQL; any other statement (`TRUNCATE`, `SET`, `SAVEPOINT`, `DROP`); a
+    string that starts with a value; and a query that takes in nothing but quoted names, which
+    no parameter can carry (`` SELECT * FROM "${table}" ``). Whether a `package.json` lists
+    Prisma changes none of it: the call is Prisma's.
+  - **A quoted name is told from a value by where it is.** Between backticks it's a name
+    anywhere. Between double quotes it's one where a table's name goes: after `FROM`, `JOIN`,
+    `INTO` or `UPDATE`, or in a dotted name (`"public"."${table}"`). Anywhere else MySQL and
+    SQLite can read double quotes as a string, so `VALUES ("${id}")` and
+    `WHERE email = "${email}"` stay critical, and so does a column's name between double
+    quotes (`SELECT "${column}"`). The warning still says to check the name against a fixed
+    list.
   - **`$queryRaw()` and `$executeRaw()` called as a function with a built string** are
     reported too, as warnings: Prisma 3 and later throw on a string ("`$queryRaw` is a tag
     function"), and Prisma 2 ran it as written. Only the tagged template parameterizes.
@@ -42,7 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
     the string is built, by the line patterns, and still lowered in a project with an ORM. So
     is everything that isn't Prisma's: `db.query()`, `knex.raw()`, `sequelize.query()`. A file
     Babel can't parse is read from its text instead, which leaves an argument that's a `?:` or
-    a constant, or that holds a regex literal with a quote in it, to the line patterns.
+    a constant, or that holds a regex literal with a quote in it, to the line patterns, and
+    doesn't tell a quoted name from a value.
   - **Scan results may change for a project that uses Prisma's raw queries.** Fewer findings:
     the tagged templates. More: built strings the patterns missed, most of them warnings. In a
     project that lists Prisma, a string built for `$queryRawUnsafe()` that was a warning can be
